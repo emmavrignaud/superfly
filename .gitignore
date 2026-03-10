@@ -1,0 +1,9 @@
+__pycache__/
+.ipynb_checkpoints/
+*.log
+
+# large / generated content
+data/annotations/*
+data/tracked_videos/*
+media/plotly/*
+media/html/*
