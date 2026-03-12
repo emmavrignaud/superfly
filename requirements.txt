@@ -1,0 +1,22 @@
+# Core computer vision / tracking
+opencv-python>=4.8
+numpy>=1.24
+supervision>=0.18
+inference>=0.9
+boxmot>=10.0
+
+# Data / ML
+pandas>=2.0
+scipy>=1.11
+scikit-learn>=1.3
+
+# Visualisation
+plotly>=5.18
+kaleido>=0.2          # plotly static image export
+
+# Config
+pyyaml>=6.0
+
+# Notebook support (optional, only needed for .ipynb)
+ipython>=8.0
+jupyter>=1.0

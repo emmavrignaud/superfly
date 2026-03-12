@@ -1,0 +1,27 @@
+# Default pipeline parameters — override on the CLI or in notebook cells.
+# See scripts/run_tracking.py --help and scripts/run_classification.py --help.
+
+tracker:
+  confidence: 0.10
+  track_activation_threshold: 0.10
+  lost_track_buffer: 90          # max frames a track can be lost before being dropped
+  minimum_matching_threshold: 0.01
+  minimum_consecutive_frames: 10
+  min_area: 40                   # px^2; detections smaller than this are ignored
+
+stitching:
+  gap_penalty: 0.05
+  max_gap_frames: 90             # usually set equal to lost_track_buffer
+  max_cost_quantile: 0.995       # prune the top (1-q) most expensive candidate links
+
+preprocessing:
+  bg_gain: 1.2
+  bg_white_level: 245
+  bg_deadzone: 0.0
+  bg_sample_stride: 1            # use every N-th frame for background estimation
+  codec: mp4v
+
+visualization:
+  fps_out: 30
+  radius: 5
+  show_ids: true
