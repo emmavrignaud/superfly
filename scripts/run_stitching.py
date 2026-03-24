@@ -38,6 +38,7 @@ def load_config(config_path: str) -> dict:
 
 def build_parser(cfg: dict) -> argparse.ArgumentParser:
     s = cfg.get("stitching", {})
+    t = cfg.get("tracker", {})
     v = cfg.get("visualization", {})
 
     p = argparse.ArgumentParser(
@@ -53,6 +54,9 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
 
     p.add_argument("--max-gap-frames", type=int, default=s.get("max_gap_frames", 90))
     p.add_argument("--n-flies-per-vial", type=int, default=s.get("n_flies_per_vial", 15))
+    p.add_argument("--min-consecutive-frames", type=int,
+                   default=t.get("minimum_consecutive_frames", 10),
+                   help="Tracklets shorter than this are excluded from feature scale computation")
 
     p.add_argument("--fps-out", type=int, default=v.get("fps_out", 30))
     p.add_argument("--overlay-radius", type=int, default=v.get("radius", 5))
@@ -93,11 +97,12 @@ def main():
     print(f"  Built {len(tracklets)} tracklets from {long_df['orig_id'].nunique()} original IDs")
 
     stitched_df = stitch_per_vial(
-        long_df          = long_df,
-        vial_rois        = vial_rois,
-        n_flies_per_vial = args.n_flies_per_vial,
-        max_gap          = args.max_gap_frames,
-        tracklets        = tracklets,
+        long_df              = long_df,
+        vial_rois            = vial_rois,
+        n_flies_per_vial     = args.n_flies_per_vial,
+        max_gap              = args.max_gap_frames,
+        tracklets            = tracklets,
+        min_points_for_scale = args.min_consecutive_frames,
     )
     stitched_df.to_csv(stitched_csv, index=False)
     print(f"  Stitched IDs: {stitched_df['stitched_id'].nunique()} "

@@ -268,31 +268,39 @@ def _find_vial(
 # Scoring
 # ---------------------------------------------------------------------------
 
-def _compute_feature_scales(tracklets: List["Tracklet"]) -> Dict[str, float]:
+def _compute_feature_scales(
+    tracklets:      List["Tracklet"],
+    min_points:     int = 10,
+) -> Dict[str, float]:
     """
     Compute the population standard deviation of each behavioural dissimilarity
-    feature across all tracklets.
+    feature across tracklets.
 
-    These scales are used in link_score to normalise dissimilarity terms so
-    that every feature contributes on a comparable, dimensionless scale —
-    without any manual weight tuning.
+    Only tracklets with n_points >= min_points are used to compute the scales.
+    Short fragments have unreliable kinematics and would distort the std used
+    to normalise dissimilarity scores for all pairs. If no tracklets pass the
+    filter, all tracklets are used as a fallback.
 
     Non-finite values (e.g. tortuosity for near-stationary tracklets) are
     excluded before computing std. The result is floored at 1e-6 to avoid
     division by zero.
     """
+    reliable = [t for t in tracklets if t.n_points >= min_points]
+    if not reliable:
+        reliable = tracklets  # fallback: use all if none qualify
+
     def _std(vals: List[float]) -> float:
         finite = [v for v in vals if np.isfinite(v)]
         return max(float(np.std(finite)) if len(finite) > 1 else 1.0, 1e-6)
 
     return {
-        "median_velocity":       _std([t.median_velocity             for t in tracklets]),
-        "pause_fraction":        _std([t.pause_fraction              for t in tracklets]),
-        "tortuosity":            _std([t.tortuosity                  for t in tracklets]),
-        "mean_turning_angle":    _std([t.mean_turning_angle          for t in tracklets]),
-        "mean_angular_velocity": _std([t.mean_angular_velocity       for t in tracklets]),
-        "mean_acceleration":     _std([t.mean_acceleration           for t in tracklets]),
-        "n_large_displacements": _std([float(t.n_large_displacements) for t in tracklets]),
+        "median_velocity":       _std([t.median_velocity             for t in reliable]),
+        "pause_fraction":        _std([t.pause_fraction              for t in reliable]),
+        "tortuosity":            _std([t.tortuosity                  for t in reliable]),
+        "mean_turning_angle":    _std([t.mean_turning_angle          for t in reliable]),
+        "mean_angular_velocity": _std([t.mean_angular_velocity       for t in reliable]),
+        "mean_acceleration":     _std([t.mean_acceleration           for t in reliable]),
+        "n_large_displacements": _std([float(t.n_large_displacements) for t in reliable]),
     }
 
 
@@ -413,12 +421,13 @@ def link_score(
  
  
 def build_cost_matrix(
-    tracklets:         List[Tracklet],
-    vial_rois:         Dict[str, Tuple[int, int, int, int]],
-    max_gap:           int,
-    max_score:         float = 2.0,
-    edge_fraction:     float = 0.10,
-    fallback_velocity: float = 10.0,
+    tracklets:          List[Tracklet],
+    vial_rois:          Dict[str, Tuple[int, int, int, int]],
+    max_gap:            int,
+    max_score:          float = 2.0,
+    edge_fraction:      float = 0.10,
+    fallback_velocity:  float = 10.0,
+    min_points_for_scale: int = 10,
 ) -> np.ndarray:
     """
     Build an N×N cost matrix over a list of tracklets.
@@ -426,13 +435,13 @@ def build_cost_matrix(
     Impossible cells (wrong temporal order, gap too large, score above cap)
     are filled with BIG (1e9).  Pass max_score=1e9 to disable the cap.
 
-    Feature scales are computed once from the full tracklet population and
-    shared across all link_score calls so that normalisation is consistent.
+    Feature scales are computed from tracklets with n_points >= min_points_for_scale
+    to avoid short noisy fragments contaminating the normalisation.
     """
     BIG            = 1e9
     n              = len(tracklets)
     C              = np.full((n, n), BIG, dtype=float)
-    feature_scales = _compute_feature_scales(tracklets)
+    feature_scales = _compute_feature_scales(tracklets, min_points=min_points_for_scale)
 
     for i, A in enumerate(tracklets):
         for j, B in enumerate(tracklets):
@@ -542,13 +551,14 @@ def _count_ids(tracklets: List[Tracklet], mapping: Dict[str, str]) -> int:
  
  
 def _stitch_pass(
-    tracklets:         List[Tracklet],
-    frozen_mapping:    Dict[str, str],
-    vial_rois:         Dict[str, Tuple[int, int, int, int]],
-    max_gap:           int,
-    edge_fraction:     float,
-    fallback_velocity: float,
-    max_score:         Optional[float],
+    tracklets:            List[Tracklet],
+    frozen_mapping:       Dict[str, str],
+    vial_rois:            Dict[str, Tuple[int, int, int, int]],
+    max_gap:              int,
+    edge_fraction:        float,
+    fallback_velocity:    float,
+    max_score:            Optional[float],
+    min_points_for_scale: int = 10,
 ) -> Dict[str, str]:
     """
     One Hungarian assignment pass over currently-unmerged tracklets.
@@ -564,7 +574,8 @@ def _stitch_pass(
 
     _cap    = max_score if max_score is not None else 1e9
     C       = build_cost_matrix(roots, vial_rois, max_gap, _cap,
-                                edge_fraction, fallback_velocity)
+                                edge_fraction, fallback_velocity,
+                                min_points_for_scale)
     matches = solve_assignment(C)
 
     if not matches:
@@ -585,14 +596,15 @@ def _stitch_pass(
  
  
 def stitch_per_vial(
-    long_df:           pd.DataFrame,
-    vial_rois:         Dict[str, Tuple[int, int, int, int]],
-    n_flies_per_vial:  int,
-    max_gap:           int,
-    tracklets:         List[Tracklet],
-    edge_fraction:     float = 0.10,
-    fallback_velocity: float = 10.0,
-    max_score:         float = 2.0,
+    long_df:              pd.DataFrame,
+    vial_rois:            Dict[str, Tuple[int, int, int, int]],
+    n_flies_per_vial:     int,
+    max_gap:              int,
+    tracklets:            List[Tracklet],
+    edge_fraction:        float = 0.10,
+    fallback_velocity:    float = 10.0,
+    max_score:            float = 2.0,
+    min_points_for_scale: int   = 10,
 ) -> pd.DataFrame:
     """
     Stitch tracklets per vial using iterative Hungarian assignment.
@@ -611,9 +623,11 @@ def stitch_per_vial(
     n_flies_per_vial  : target number of distinct fly identities per vial
     max_gap           : starting maximum allowed frame gap between tracklets
     tracklets         : Tracklet objects from build_tracklets()
-    edge_fraction     : fraction of vial dimension defining the wall zone
-    fallback_velocity : velocity used when a tracklet has no reliable estimate
-    max_score         : score cap; pairs above this cost are never linked
+    edge_fraction        : fraction of vial dimension defining the wall zone
+    fallback_velocity    : velocity used when a tracklet has no reliable estimate
+    max_score            : score cap; pairs above this cost are never linked
+    min_points_for_scale : tracklets shorter than this are excluded from feature
+                           scale computation (they have unreliable kinematics)
 
     Returns
     -------
@@ -644,13 +658,14 @@ def stitch_per_vial(
             n_before = _count_ids(vt, mapping)
 
             mapping = _stitch_pass(
-                tracklets         = vt,
-                frozen_mapping    = mapping,
-                vial_rois         = vial_rois,
-                max_gap           = current_gap,
-                edge_fraction     = edge_fraction,
-                fallback_velocity = fallback_velocity,
-                max_score         = max_score,
+                tracklets            = vt,
+                frozen_mapping       = mapping,
+                vial_rois            = vial_rois,
+                max_gap              = current_gap,
+                edge_fraction        = edge_fraction,
+                fallback_velocity    = fallback_velocity,
+                max_score            = max_score,
+                min_points_for_scale = min_points_for_scale,
             )
 
             n_after = _count_ids(vt, mapping)

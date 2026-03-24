@@ -33,6 +33,7 @@ def export_tracks_xy_tuple_csv_one_config(
     bottom_confidence: float = 0.10,
     bottom_start_frac: float = 0.75,
     min_area: float | None = 40,
+    asso_func: str = "hmiou",
 ) -> pd.DataFrame:
     """
     Run RF-DETR + OC-SORT for one configuration and write a wide CSV where:
@@ -58,7 +59,7 @@ def export_tracks_xy_tuple_csv_one_config(
         min_hits=minimum_consecutive_frames,
         iou_threshold=minimum_matching_threshold,
         delta_t=3,
-        asso_func="iou",
+        asso_func=asso_func,
         inertia=0.2,
         use_byte=False,
     )

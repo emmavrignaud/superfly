@@ -61,6 +61,8 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
                    default=t.get("minimum_consecutive_frames", 10))
     p.add_argument("--max-frames", type=int, default=None,
                    help="Limit number of frames to process (None = all)")
+    p.add_argument("--asso-func", type=str, default=t.get("asso_func", "hmiou"),
+                   help="OC-SORT association function: hmiou (recommended) or iou")
 
     return p
 
@@ -111,6 +113,7 @@ def main():
         minimum_matching_threshold=args.min_matching_threshold,
         minimum_consecutive_frames=args.min_consecutive_frames,
         max_frames=args.max_frames,
+        asso_func=args.asso_func,
     )
     print(f"  shape: {df.shape}")
     print("\nDone. Run scripts/run_stitching.py to continue.")
