@@ -1,25 +1,28 @@
-
 """
 stitching.py
- 
+
 Full tracklet stitching pipeline for fly tracking.
- 
+
 Pipeline:
   wide CSV
-    -> long format (NaN rows kept for gap analysis)
-    -> Tracklet summaries (with velocity, direction, n_large_displacements)
-    -> per-vial cost matrix (distance + direction + wall reflection)
-    -> iterative 1-to-1 assignment per vial until target fly count reached
+    -> long format
+    -> Tracklet summaries (kinematics + behavioural profile via features.py)
+    -> per-vial cost matrix (extrapolated position + 3-way direction +
+       behavioural dissimilarity, all data-normalised)
+    -> iterative 1-to-1 Hungarian assignment per vial until target fly
+       count reached or no further merges are possible
     -> stitched long CSV with compact_id (vial1->1..n, vial2->n+1..2n, ...)
 """
- 
+
 import ast
 import math
-import json
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
+from scipy.spatial import ConvexHull
+
+from features import add_kinematics, add_area_covered, add_path_tortuosity
  
  
 # ---------------------------------------------------------------------------
@@ -91,69 +94,118 @@ class Tracklet:
     end_xy:                Tuple[float, float]
     n_points:              int
     frames:                List[dict]
-    velocities:            List[Optional[float]]   # displacement per frame step
-    directions:            List[Optional[float]]   # angle in degrees per frame step
-    n_large_displacements: int                     # steps > 2x median velocity
+
+    # per-step profiles (used by link_score)
+    velocities:            List[Optional[float]]   # true velocity (displacement / dt)
+    directions:            List[Optional[float]]   # heading in degrees
+
+    # motion summaries
+    n_large_displacements: int
+    distance_traveled:     float
+    mean_velocity:         float
+    median_velocity:       float
+    mean_acceleration:     float
+    mean_turning_angle:    float
+    mean_angular_velocity: float
+
+    # shape of the journey
+    tortuosity:            float                    # distance_traveled / net_displacement; inf if net == 0
+    area_covered:          float                    # convex hull area
+    pause_fraction:        float                    # fraction of steps below velocity threshold
+
+    # direction
+    overall_direction:     float                    # atan2(end_y - start_y, end_x - start_x), degrees
+    final_direction:       Optional[float]          # last valid heading, degrees
  
  
-def compute_displacement(p1, p2) -> Optional[float]:
-    if p1 is None or p2 is None:
-        return None
-    if any(v is None for v in [p1[0], p1[1], p2[0], p2[1]]):
-        return None
-    return float(np.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2))
- 
- 
-def compute_direction(p1, p2) -> Optional[float]:
-    """Angle in degrees. 0 = right, 90 = up, counter-clockwise."""
-    if p1 is None or p2 is None:
-        return None
-    if any(v is None for v in [p1[0], p1[1], p2[0], p2[1]]):
-        return None
-    return float(np.degrees(np.arctan2(p2[1] - p1[1], p2[0] - p1[0])))
- 
- 
-def build_tracklets(long_df: pd.DataFrame) -> List[Tracklet]:
+def build_tracklets(
+    long_df: pd.DataFrame,
+    fps: float,
+    pause_threshold: float = 1.0,
+) -> List[Tracklet]:
     """
-    Collapse each orig_id into a Tracklet summary with full velocity
-    and direction profiles. All positions are valid (NaN rows are dropped
-    in wide_to_long so every row here has a real x, y).
+    Collapse each orig_id into a Tracklet summary using kinematics
+    from features.py. Requires fps to compute proper dt-based velocity.
     """
+    # Run feature extraction on the long dataframe
+    df = long_df.copy()
+    df["fps"] = fps
+    df = add_kinematics(df, group_col="orig_id")
+    df = add_area_covered(df, group_col="orig_id")
+    df = add_path_tortuosity(df, group_col="orig_id")
+
     tracklets = []
-    for oid, g in long_df.groupby("orig_id", sort=False):
+    for oid, g in df.groupby("orig_id", sort=False):
         g2 = g.sort_values("frame")
- 
+
         frames_data = [
             {"frame": int(row["frame"]), "x": float(row["x"]), "y": float(row["y"])}
             for _, row in g2.iterrows()
         ]
- 
-        points     = [(f["x"], f["y"]) for f in frames_data]
-        pairs      = list(zip(points[:-1], points[1:]))
-        velocities = [compute_displacement(p1, p2) for p1, p2 in pairs]
-        directions = [compute_direction(p1, p2)    for p1, p2 in pairs]
- 
-        valid_v = [v for v in velocities if v is not None]
+
+        # Per-step profiles (skip first row: it's the diff baseline with fillna(0))
+        vel_series = g2["velocity"].iloc[1:]
+        velocities = vel_series.tolist()
+        directions = np.degrees(g2["heading"].iloc[1:]).tolist()
+
+        # n_large_displacements
+        valid_v = [v for v in velocities if v is not None and np.isfinite(v)]
         if valid_v:
             median_v = float(np.median(valid_v))
-            n_large  = sum(1 for v in valid_v if v > 2 * median_v)
+            n_large = sum(1 for v in valid_v if v > 2 * median_v)
         else:
             median_v = 0.0
-            n_large  = 0
- 
+            n_large = 0
+
+        # Distance traveled: last cumsum value
+        dist_traveled = float(g2["distance_traveled"].iloc[-1])
+
+        # Net displacement for tortuosity
+        start_xy = (float(g2.iloc[0]["x"]), float(g2.iloc[0]["y"]))
+        end_xy = (float(g2.iloc[-1]["x"]), float(g2.iloc[-1]["y"]))
+        net_disp = math.sqrt(
+            (end_xy[0] - start_xy[0]) ** 2 + (end_xy[1] - start_xy[1]) ** 2
+        )
+        tortuosity = dist_traveled / net_disp if net_disp > 0 else np.nan
+
+        # Area covered
+        area = float(g2["area_covered"].iloc[0])
+
+        # Pause fraction
+        pause_frac = float((vel_series < pause_threshold).mean()) if len(vel_series) > 0 else 0.0
+
+        # Overall direction: start -> end angle
+        overall_dir = math.degrees(math.atan2(
+            end_xy[1] - start_xy[1], end_xy[0] - start_xy[0]
+        ))
+
+        # Final direction: last valid heading in degrees
+        final_dir = directions[-1] if directions else None
+
         tracklets.append(Tracklet(
             orig_id               = str(oid),
             start_frame           = int(g2.iloc[0]["frame"]),
             end_frame             = int(g2.iloc[-1]["frame"]),
-            start_xy              = (float(g2.iloc[0]["x"]),  float(g2.iloc[0]["y"])),
-            end_xy                = (float(g2.iloc[-1]["x"]), float(g2.iloc[-1]["y"])),
+            start_xy              = start_xy,
+            end_xy                = end_xy,
             n_points              = int(len(g2)),
             frames                = frames_data,
             velocities            = velocities,
             directions            = directions,
             n_large_displacements = n_large,
+            distance_traveled     = dist_traveled,
+            mean_velocity         = float(np.mean(valid_v)) if valid_v else 0.0,
+            median_velocity       = median_v,
+            mean_acceleration     = float(g2["acceleration"].iloc[1:].mean()) if len(g2) > 1 else 0.0,
+            mean_turning_angle    = float(g2["turning_angle"].iloc[1:].abs().mean()) if len(g2) > 1 else 0.0,
+            mean_angular_velocity = float(g2["angular_velocity"].iloc[1:].abs().mean()) if len(g2) > 1 else 0.0,
+            tortuosity            = tortuosity,
+            area_covered          = area,
+            pause_fraction        = pause_frac,
+            overall_direction     = overall_dir,
+            final_direction       = final_dir,
         ))
- 
+
     tracklets.sort(key=lambda t: t.orig_id)
     return tracklets
  
@@ -215,57 +267,149 @@ def _find_vial(
 # ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
- 
+
+def _compute_feature_scales(tracklets: List["Tracklet"]) -> Dict[str, float]:
+    """
+    Compute the population standard deviation of each behavioural dissimilarity
+    feature across all tracklets.
+
+    These scales are used in link_score to normalise dissimilarity terms so
+    that every feature contributes on a comparable, dimensionless scale —
+    without any manual weight tuning.
+
+    Non-finite values (e.g. tortuosity for near-stationary tracklets) are
+    excluded before computing std. The result is floored at 1e-6 to avoid
+    division by zero.
+    """
+    def _std(vals: List[float]) -> float:
+        finite = [v for v in vals if np.isfinite(v)]
+        return max(float(np.std(finite)) if len(finite) > 1 else 1.0, 1e-6)
+
+    return {
+        "median_velocity":       _std([t.median_velocity             for t in tracklets]),
+        "pause_fraction":        _std([t.pause_fraction              for t in tracklets]),
+        "tortuosity":            _std([t.tortuosity                  for t in tracklets]),
+        "mean_turning_angle":    _std([t.mean_turning_angle          for t in tracklets]),
+        "mean_angular_velocity": _std([t.mean_angular_velocity       for t in tracklets]),
+        "mean_acceleration":     _std([t.mean_acceleration           for t in tracklets]),
+        "n_large_displacements": _std([float(t.n_large_displacements) for t in tracklets]),
+    }
+
+
 def link_score(
-    A:                 Tracklet,
-    B:                 Tracklet,
+    A:                 "Tracklet",
+    B:                 "Tracklet",
     gap:               int,
     vial_rois:         Dict[str, Tuple[int, int, int, int]],
-    w_dist:            float = 0.5,
-    w_dir:             float = 0.5,
+    feature_scales:    Dict[str, float],
     edge_fraction:     float = 0.10,
     fallback_velocity: float = 10.0,
 ) -> float:
     """
-    Score the plausibility of linking tracklet A -> tracklet B.
- 
-    Two components:
-      distance term = dist(A.end, B.start) / (A.median_velocity * gap)
-                      how far did the fly travel relative to its own typical speed?
-      direction term = angular difference between A's last direction and the gap
-                       vector, normalised to [0, 1]. Near a wall the expected
-                       direction is mirrored (horizontal reflection).
- 
-    score = w_dist * distance_term + w_dir * direction_term
-    Lower score = more plausible link.
+    Cost of linking tracklet A -> tracklet B.  Lower = more plausible.
+
+    Two groups of terms are averaged and then summed:
+
+    Continuity terms — does A's end state predict B's start?
+      1. Extrapolated position error: project A forward using its final heading
+         and median velocity for `gap` frames; normalise by expected travel
+         distance so the result is dimensionless.
+      2. Direction (average of two components):
+           a. A's final heading (wall-reflected when near a vial edge) vs.
+              the actual gap vector.
+           b. A's overall direction vs. B's overall direction — do both
+              fragments share the same dominant movement tendency?
+
+    Dissimilarity terms — same fly should show a consistent behavioural profile:
+      |A.feature - B.feature| / population_std  for each of:
+        median_velocity, pause_fraction, tortuosity (*),
+        mean_turning_angle, mean_angular_velocity, mean_acceleration,
+        n_large_displacements.
+      (*) Skipped when either tracklet has non-finite tortuosity (e.g. fly
+          barely moved, net displacement ≈ 0).
+
+    Dissimilarity terms are normalised by the population std computed over
+    all tracklets passed to build_cost_matrix, making all terms dimensionless
+    and comparable without any manual weight selection.
+
+    Parameters
+    ----------
+    A, B             : tracklets to link (A precedes B in time)
+    gap              : B.start_frame - A.end_frame  (frames)
+    vial_rois        : {vial_id: (x0, y0, x1, y1)} for wall detection
+    feature_scales   : per-feature population std from _compute_feature_scales()
+    edge_fraction    : fraction of vial dimension defining the wall zone
+    fallback_velocity: used when A has no reliable velocity estimate
     """
-    # Distance term
-    dx   = B.start_xy[0] - A.end_xy[0]
-    dy   = B.start_xy[1] - A.end_xy[1]
-    dist = math.sqrt(dx**2 + dy**2)
- 
-    valid_v  = [v for v in A.velocities if v is not None]
-    median_v = float(np.median(valid_v)) if valid_v else fallback_velocity
-    median_v = max(median_v, 1e-6)
- 
-    distance_term = dist / (median_v * max(gap, 1))
- 
-    # Direction term
-    gap_direction = math.degrees(math.atan2(dy, dx))
-    last_dir      = next((d for d in reversed(A.directions) if d is not None), None)
- 
-    if last_dir is None:
-        direction_term = 0.0
+    mv = A.median_velocity if A.median_velocity > 1e-6 else fallback_velocity
+
+    # ------------------------------------------------------------------
+    # Continuity term 1: extrapolated position error
+    # ------------------------------------------------------------------
+    if A.final_direction is not None:
+        rad = math.radians(A.final_direction)
+        ex  = A.end_xy[0] + math.cos(rad) * mv * gap
+        ey  = A.end_xy[1] + math.sin(rad) * mv * gap
     else:
+        # No heading available — fall back to A's last known position.
+        ex, ey = A.end_xy
+
+    extrap_error = math.sqrt((B.start_xy[0] - ex) ** 2 + (B.start_xy[1] - ey) ** 2)
+    extrap_term  = extrap_error / (mv * max(gap, 1))
+
+    # ------------------------------------------------------------------
+    # Continuity term 2: direction (3-way)
+    # ------------------------------------------------------------------
+    dx            = B.start_xy[0] - A.end_xy[0]
+    dy            = B.start_xy[1] - A.end_xy[1]
+    gap_direction = math.degrees(math.atan2(dy, dx))
+
+    dir_components: List[float] = []
+
+    # a. A's final heading (wall-reflected if near vial edge) vs. gap vector.
+    if A.final_direction is not None:
         vial_roi = _find_vial(A.end_xy, vial_rois)
         if vial_roi is not None:
             near_h, near_v = _near_wall(A.end_xy, vial_roi, edge_fraction)
-            expected_dir   = _mirror_angle(last_dir, near_h, near_v) if (near_h or near_v) else last_dir
+            expected_dir   = (
+                _mirror_angle(A.final_direction, near_h, near_v)
+                if (near_h or near_v)
+                else A.final_direction
+            )
         else:
-            expected_dir = last_dir
-        direction_term = _angle_diff(gap_direction, expected_dir) / 180.0
- 
-    return w_dist * distance_term + w_dir * direction_term
+            expected_dir = A.final_direction
+        dir_components.append(_angle_diff(gap_direction, expected_dir) / 180.0)
+
+    # b. A's overall trajectory direction vs. B's overall trajectory direction.
+    dir_components.append(_angle_diff(A.overall_direction, B.overall_direction) / 180.0)
+
+    direction_term = float(np.mean(dir_components))
+
+    continuity_score = (extrap_term + direction_term) / 2.0
+
+    # ------------------------------------------------------------------
+    # Dissimilarity terms: behavioural profile matching
+    # ------------------------------------------------------------------
+    def _dissim(a_val: float, b_val: float, key: str) -> float:
+        return abs(a_val - b_val) / feature_scales.get(key, 1.0)
+
+    dissim_components: List[float] = [
+        _dissim(A.median_velocity,                B.median_velocity,                "median_velocity"),
+        _dissim(A.pause_fraction,                 B.pause_fraction,                 "pause_fraction"),
+        _dissim(A.mean_turning_angle,             B.mean_turning_angle,             "mean_turning_angle"),
+        _dissim(A.mean_angular_velocity,          B.mean_angular_velocity,          "mean_angular_velocity"),
+        _dissim(A.mean_acceleration,              B.mean_acceleration,              "mean_acceleration"),
+        _dissim(float(A.n_large_displacements),   float(B.n_large_displacements),   "n_large_displacements"),
+    ]
+
+    # Tortuosity is undefined (nan/inf) for near-stationary tracklets; skip
+    # those pairs rather than propagating nan into the score.
+    if np.isfinite(A.tortuosity) and np.isfinite(B.tortuosity):
+        dissim_components.append(_dissim(A.tortuosity, B.tortuosity, "tortuosity"))
+
+    dissim_score = float(np.mean(dissim_components))
+
+    return continuity_score + dissim_score
  
  
 def build_cost_matrix(
@@ -273,20 +417,23 @@ def build_cost_matrix(
     vial_rois:         Dict[str, Tuple[int, int, int, int]],
     max_gap:           int,
     max_score:         float = 2.0,
-    w_dist:            float = 0.5,
-    w_dir:             float = 0.5,
     edge_fraction:     float = 0.10,
     fallback_velocity: float = 10.0,
 ) -> np.ndarray:
     """
-    Build cost matrix over a list of tracklets.
-    Impossible cells (wrong time order, gap too large, score too high) = BIG.
-    Pass max_score=1e9 to remove the score cap entirely.
+    Build an N×N cost matrix over a list of tracklets.
+
+    Impossible cells (wrong temporal order, gap too large, score above cap)
+    are filled with BIG (1e9).  Pass max_score=1e9 to disable the cap.
+
+    Feature scales are computed once from the full tracklet population and
+    shared across all link_score calls so that normalisation is consistent.
     """
-    BIG = 1e9
-    n   = len(tracklets)
-    C   = np.full((n, n), BIG, dtype=float)
- 
+    BIG            = 1e9
+    n              = len(tracklets)
+    C              = np.full((n, n), BIG, dtype=float)
+    feature_scales = _compute_feature_scales(tracklets)
+
     for i, A in enumerate(tracklets):
         for j, B in enumerate(tracklets):
             if i == j or A.end_frame >= B.start_frame:
@@ -294,11 +441,13 @@ def build_cost_matrix(
             gap = B.start_frame - A.end_frame
             if gap < 1 or gap > max_gap:
                 continue
-            score = link_score(A, B, gap, vial_rois, w_dist, w_dir,
-                               edge_fraction, fallback_velocity)
+            score = link_score(
+                A, B, gap, vial_rois, feature_scales,
+                edge_fraction, fallback_velocity,
+            )
             if score <= max_score:
                 C[i, j] = score
- 
+
     return C
  
  
@@ -396,35 +545,33 @@ def _stitch_pass(
     frozen_mapping:    Dict[str, str],
     vial_rois:         Dict[str, Tuple[int, int, int, int]],
     max_gap:           int,
-    w_dist:            float,
-    w_dir:             float,
     edge_fraction:     float,
     fallback_velocity: float,
     max_score:         Optional[float],
 ) -> Dict[str, str]:
     """
-    One assignment pass over currently-unmerged tracklets (chain roots only).
-    Frozen (already-merged) tracklets are left untouched.
+    One Hungarian assignment pass over currently-unmerged tracklets.
+
+    Only chain roots (tracklets not yet merged into another) are considered.
+    Frozen merges from previous rounds are preserved unchanged.
     """
-    # Only operate on current chain roots
     roots = [t for t in tracklets
              if frozen_mapping.get(t.orig_id, t.orig_id) == t.orig_id]
- 
+
     if len(roots) <= 1:
         return frozen_mapping
- 
-    _cap = max_score if max_score is not None else 1e9
- 
+
+    _cap    = max_score if max_score is not None else 1e9
     C       = build_cost_matrix(roots, vial_rois, max_gap, _cap,
-                                w_dist, w_dir, edge_fraction, fallback_velocity)
+                                edge_fraction, fallback_velocity)
     matches = solve_assignment(C)
- 
+
     if not matches:
         return frozen_mapping
- 
+
     new_mapping = build_orig_to_stitched(roots, matches)
- 
-    # Merge new_mapping into frozen_mapping
+
+    # Propagate new merges into the frozen mapping.
     updated = dict(frozen_mapping)
     for orig_id, frozen_root in frozen_mapping.items():
         if frozen_root in new_mapping:
@@ -432,7 +579,7 @@ def _stitch_pass(
     for orig_id, new_root in new_mapping.items():
         if orig_id not in updated:
             updated[orig_id] = new_root
- 
+
     return updated
  
  
@@ -442,50 +589,43 @@ def stitch_per_vial(
     n_flies_per_vial:  int,
     max_gap:           int,
     tracklets:         List[Tracklet],
-    w_dist:            float = 0.5,
-    w_dir:             float = 0.5,
     edge_fraction:     float = 0.10,
     fallback_velocity: float = 10.0,
     max_score:         float = 2.0,
 ) -> pd.DataFrame:
     """
-    Stitch tracklets per vial, iterating until n_flies_per_vial IDs remain
-    or no further merges are possible.
- 
-    Round 1: max_gap,     max_score cap
-    Round 2: max_gap * 2, max_score cap
-    Round 3+: max_gap * 4, no cap (BIG removed)
- 
-    Each round only touches unmerged tracklets — frozen merges are kept.
-    Stops early if nothing merges and we are still over target.
- 
+    Stitch tracklets per vial using iterative Hungarian assignment.
+
+    Each round operates only on unmerged tracklet roots; frozen merges are
+    kept.  max_gap doubles each round to progressively allow longer gaps.
+    Stops when the target fly count is reached or no further merges occur.
+
     Final compact_id numbering:
-      vial1 -> 1..n, vial2 -> n+1..2n, etc. (left to right within each vial)
- 
+      vial1 -> 1..n, vial2 -> n+1..2n, ... (left to right within each vial)
+
     Parameters
     ----------
-    long_df            : long-format dataframe (frame, orig_id, x, y)
-    vial_rois          : {vial_id: (x0, y0, x1, y1)}
-    n_flies_per_vial   : target number of flies per vial
-    max_gap            : starting max frame gap
-    tracklets          : list of Tracklet objects from build_tracklets()
-    w_dist, w_dir      : score weights (should sum to 1)
-    edge_fraction      : fraction of vial width/height defining the wall zone
-    fallback_velocity  : step size used when a tracklet has no valid velocity
-    max_score          : base score cap (removed after round 2)
- 
+    long_df           : long-format dataframe (frame, orig_id, x, y)
+    vial_rois         : {vial_id: (x0, y0, x1, y1)}
+    n_flies_per_vial  : target number of distinct fly identities per vial
+    max_gap           : starting maximum allowed frame gap between tracklets
+    tracklets         : Tracklet objects from build_tracklets()
+    edge_fraction     : fraction of vial dimension defining the wall zone
+    fallback_velocity : velocity used when a tracklet has no reliable estimate
+    max_score         : score cap; pairs above this cost are never linked
+
     Returns
     -------
     long_df with added columns: stitched_id, compact_id
     """
- 
+
     # 1. Assign tracklets to vials by start_xy
     vial_tracklets: Dict[str, List[Tracklet]] = {v: [] for v in vial_rois}
     for t in tracklets:
         vial = _assign_to_vial(t.start_xy, vial_rois)
         if vial is not None:
             vial_tracklets[vial].append(t)
- 
+
     # 2. Per-vial iterative stitching
     global_mapping: Dict[str, str] = {}
 
@@ -506,8 +646,6 @@ def stitch_per_vial(
                 frozen_mapping    = mapping,
                 vial_rois         = vial_rois,
                 max_gap           = current_gap,
-                w_dist            = w_dist,
-                w_dir             = w_dir,
                 edge_fraction     = edge_fraction,
                 fallback_velocity = fallback_velocity,
                 max_score         = max_score,
