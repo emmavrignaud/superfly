@@ -22,14 +22,11 @@ from src.stitching import (
     wide_to_long,
     Tracklet,
     build_tracklets,
-    estimate_step_scale,
-    link_cost,
     build_cost_matrix,
     solve_assignment,
     build_orig_to_stitched,
-    stitch_wide_csv_to_long,
+    stitch_per_vial,
 )
-
 from src.roi import (
     draw_and_save_vial_rois,
     assign_compact_ids_left_to_right,
