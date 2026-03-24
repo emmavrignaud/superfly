@@ -13,6 +13,7 @@ stitching:
   gap_penalty: 0.05
   max_gap_frames: 90             # usually set equal to lost_track_buffer
   max_cost_quantile: 0.995       # prune the top (1-q) most expensive candidate links
+  n_flies_per_vial: 15           # lenient upper bound; iterative stitching stops at this target
 
 preprocessing:
   bg_gain: 1.2

@@ -170,7 +170,8 @@ def assign_vials_and_compact_ids(
     Parameters
     ----------
     stitched_csv : str
-        Long-format stitched CSV from stitch_wide_csv_to_long().
+        Long-format stitched CSV from stitch_per_vial().
+        Must have columns: frame, orig_id, x, y, stitched_id.
     roi_json : str
         JSON file produced by draw_and_save_vial_rois().
     out_csv : str

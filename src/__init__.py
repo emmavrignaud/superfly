@@ -3,14 +3,14 @@ src/__init__.py
 
 Re-exports all public functions so users can do:
     from src import export_tracks_xy_tuple_csv_one_config
-    from src import stitch_wide_csv_to_long, assign_vials_and_compact_ids
+    from src import stitch_per_vial, assign_vials_and_compact_ids, build_tracklets
     from src import extract_behavioral_features, run_classifier
 """
 
 from src.preprocessing import (
     _bgr_to_gray_float32,
     gui_pick_roi_and_range,
-    preprocess_bgsub_gui_cv2_avg_background,
+    preprocess_bgsub_gui_cv2_median_background,
 )
 
 from src.tracking import (
@@ -63,7 +63,7 @@ __all__ = [
     # preprocessing
     "_bgr_to_gray_float32",
     "gui_pick_roi_and_range",
-    "preprocess_bgsub_gui_cv2_avg_background",
+    "preprocess_bgsub_gui_cv2_median_background",
     # tracking
     "export_tracks_xy_tuple_csv_one_config",
     # stitching
@@ -71,12 +71,10 @@ __all__ = [
     "wide_to_long",
     "Tracklet",
     "build_tracklets",
-    "estimate_step_scale",
-    "link_cost",
     "build_cost_matrix",
     "solve_assignment",
     "build_orig_to_stitched",
-    "stitch_wide_csv_to_long",
+    "stitch_per_vial",
     # roi
     "draw_and_save_vial_rois",
     "assign_compact_ids_left_to_right",

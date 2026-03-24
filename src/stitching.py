@@ -3,26 +3,26 @@ stitching.py
 
 Full tracklet stitching pipeline for fly tracking.
 
-Pipeline:
-  wide CSV
-    -> long format
-    -> Tracklet summaries (kinematics + behavioural profile via features.py)
-    -> per-vial cost matrix (extrapolated position + 3-way direction +
-       behavioural dissimilarity, all data-normalised)
-    -> iterative 1-to-1 Hungarian assignment per vial until target fly
-       count reached or no further merges are possible
-    -> stitched long CSV with compact_id (vial1->1..n, vial2->n+1..2n, ...)
+Two stitching modes are available:
+
+stitch_per_vial()  — preferred, vial-aware iterative stitcher
+  wide CSV -> long format -> Tracklet summaries -> per-vial cost matrix
+  (extrapolated position + 3-way direction + behavioural dissimilarity,
+  all data-normalised) -> iterative 1-to-1 Hungarian assignment per vial
+  until target fly count reached or no further merges are possible
+  -> stitched long CSV with columns: frame, orig_id, x, y, stitched_id
 """
 
 import ast
 import math
+import os
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from scipy.spatial import ConvexHull
 
-from features import add_kinematics, add_area_covered, add_path_tortuosity
+from src.features import add_kinematics, add_area_covered, add_path_tortuosity
  
  
 # ---------------------------------------------------------------------------
@@ -518,8 +518,9 @@ def build_orig_to_stitched(
             stitched_root[idx] = tracklets[idx].orig_id
  
     return {tracklets[i].orig_id: stitched_root[i] for i in range(len(tracklets))}
- 
- 
+
+
+
 # ---------------------------------------------------------------------------
 # Per-vial iterative stitching
 # ---------------------------------------------------------------------------
@@ -616,7 +617,8 @@ def stitch_per_vial(
 
     Returns
     -------
-    long_df with added columns: stitched_id, compact_id
+    long_df with added column: stitched_id.
+    compact_id and vial_id are assigned by assign_vials_and_compact_ids() in roi.py.
     """
 
     # 1. Assign tracklets to vials by start_xy
@@ -670,23 +672,5 @@ def stitch_per_vial(
     # 3. Apply stitched_id
     out = long_df.copy()
     out["stitched_id"] = out["orig_id"].map(global_mapping).fillna(out["orig_id"])
- 
-    # 4. Compact ID: left-to-right within each vial
-    # vial1 -> 1..n, vial2 -> n+1..2n, etc.
-    out["compact_id"] = -1
-    offset = 0
- 
-    for vial_id in sorted(vial_rois.keys()):
-        vt = vial_tracklets[vial_id]
-        if not vt:
-            continue
- 
-        vial_rows = out[out["orig_id"].isin([t.orig_id for t in vt])]
-        x_rep     = vial_rows.groupby("stitched_id")["x"].median().sort_values()
- 
-        for rank, sid in enumerate(x_rep.index, start=1):
-            out.loc[out["stitched_id"] == sid, "compact_id"] = offset + rank
- 
-        offset += len(x_rep)
- 
+
     return out

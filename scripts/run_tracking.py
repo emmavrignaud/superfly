@@ -70,7 +70,7 @@ def main():
     cfg = load_config(str(config_path))
     args = build_parser(cfg).parse_args()
 
-    from src.preprocessing import preprocess_bgsub_gui_cv2_avg_background
+    from src.preprocessing import preprocess_bgsub_gui_cv2_median_background
     from src.tracking import export_tracks_xy_tuple_csv_one_config
     from src.roi import draw_and_save_vial_rois
 
@@ -83,7 +83,7 @@ def main():
     # ------------------------------------------------------------------
     if args.preprocess:
         print("\n=== Stage 1: Background subtraction ===")
-        video_path = preprocess_bgsub_gui_cv2_avg_background(
+        video_path = preprocess_bgsub_gui_cv2_median_background(
             video_path=video_path,
             out_mp4=None,
         )

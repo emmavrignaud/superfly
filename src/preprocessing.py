@@ -8,6 +8,13 @@ GUI controls:
   - Drag mouse to draw ROI
   - Trackbars for start/end frame and current preview frame
   - ENTER to accept, ESC to cancel
+
+Background method: temporal median (FreeClimber-style).
+  - Collects sampled ROI frames into an array, then np.median(axis=0).
+  - Resistant to transient objects (fly must occupy a pixel >50% of sampled
+    frames to influence the background estimate).
+  - Uses signed subtraction (no one-sided clamp) so both polarities survive
+    into the output.
 """
 
 import os
@@ -21,7 +28,6 @@ from pathlib import Path
 # -------------------------------------------------------------------------
 BG_GAIN = 1.2          # higher = flies darker / more contrast
 BG_WHITE_LEVEL = 245   # higher = brighter background
-BG_DEADZONE = 0.0      # >0 suppresses tiny static mismatches
 BG_CODEC = "mp4v"
 
 
@@ -167,18 +173,31 @@ def gui_pick_roi_and_range(video_path: str, default_end: int = 700):
             return x, y, w, h, start, end
 
 
-def preprocess_bgsub_gui_cv2_avg_background(
+def preprocess_bgsub_gui_cv2_median_background(
     video_path: str,
     out_mp4: str | None = None,
     default_end: int = 700,
     gain: float = BG_GAIN,
     white_level: float = BG_WHITE_LEVEL,
-    deadzone: float = BG_DEADZONE,
     codec: str = BG_CODEC,
     bg_sample_stride: int = 1,
 ) -> str:
     """
-    GUI-driven ROI/range selection + average-background subtraction.
+    GUI-driven ROI/range selection + temporal-median background subtraction.
+
+    Background is computed as the pixel-wise median over sampled frames in
+    [start, end_excl).  The median is outlier-resistant: a fly must occupy a
+    given pixel for more than half of the sampled frames before it contaminates
+    the background estimate.
+
+    Subtraction is signed (bg - gray), so both darker-than-background and
+    brighter-than-background signal is preserved.  The output pixel formula is:
+
+        vis = white_level - (bg - gray) * gain
+
+    clipped to [0, 255].  On a backlit rig (dark flies, bright background)
+    bg > gray where flies are, giving vis < white_level (dark flies on a pale
+    background).
 
     Output path behaviour:
       - If out_mp4 is None:  "<same folder>/<stem>_pp.<ext>"
@@ -204,29 +223,26 @@ def preprocess_bgsub_gui_cv2_avg_background(
     if n_frames > 0:
         end_excl = min(end_excl, n_frames)
 
-    # 1) Compute average background
+    # 1) Collect sampled frames then compute median background in one shot
     cap.set(cv2.CAP_PROP_POS_FRAMES, start)
-    acc = np.zeros((h, w), dtype=np.float64)
-    count = 0
-
+    bg_frames = []
     for f in range(start, end_excl):
         ok, frame_bgr = cap.read()
         if not ok:
             break
-        if bg_sample_stride > 1 and ((f - start) % bg_sample_stride != 0):
+        if (f - start) % bg_sample_stride != 0:
             continue
         roi_bgr = frame_bgr[y:y + h, x:x + w]
         if roi_bgr.shape[0] != h or roi_bgr.shape[1] != w:
             cap.release()
             raise ValueError("ROI out of bounds during background computation.")
-        acc += _bgr_to_gray_float32(roi_bgr).astype(np.float64)
-        count += 1
+        bg_frames.append(_bgr_to_gray_float32(roi_bgr))
 
-    if count == 0:
+    if not bg_frames:
         cap.release()
-        raise RuntimeError("No frames available to compute the average background.")
+        raise RuntimeError("No frames available to compute the median background.")
 
-    bg_gray = (acc / float(count)).astype(np.float32)
+    bg_gray = np.median(np.stack(bg_frames, axis=0), axis=0).astype(np.float32)
 
     # 2) Write background-subtracted video
     os.makedirs(os.path.dirname(out_mp4) or ".", exist_ok=True)
@@ -248,15 +264,13 @@ def preprocess_bgsub_gui_cv2_avg_background(
             raise ValueError("ROI out of bounds for this video/frame.")
 
         gray = _bgr_to_gray_float32(roi_bgr)
-        motion = np.maximum(bg_gray - gray, 0.0)
-        if deadzone and deadzone > 0:
-            motion = np.maximum(motion - float(deadzone), 0.0)
-        vis = float(white_level) - motion * float(gain)
+        diff = bg_gray - gray  # signed: positive where fly is darker than bg
+        vis = float(white_level) - diff * float(gain)
         vis_u8 = np.clip(vis, 0, 255).astype(np.uint8)
         writer.write(cv2.cvtColor(vis_u8, cv2.COLOR_GRAY2BGR))
 
     cap.release()
     writer.release()
     print("Saved bgsub video:", out_mp4)
-    print(f"Background computed from {count} frames (stride={bg_sample_stride}).")
+    print(f"Median background from {len(bg_frames)} frames (stride={bg_sample_stride}).")
     return out_mp4

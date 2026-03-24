@@ -16,12 +16,13 @@ Usage
 -----
 python scripts/run_stitching.py \
     --video      data/my_experiment.mp4 \
-    --output-dir outputs/my_run
+    --output-dir outputs/run_1
 
 All parameters have defaults from config.yaml.  Use --help for full list.
 """
 
 import argparse
+import json
 import os
 import sys
 import yaml
@@ -50,8 +51,8 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
 
     p.add_argument("--no-overlay", action="store_true", help="Skip overlay video rendering")
 
-    p.add_argument("--gap-penalty", type=float, default=s.get("gap_penalty", 0.05))
     p.add_argument("--max-gap-frames", type=int, default=s.get("max_gap_frames", 90))
+    p.add_argument("--n-flies-per-vial", type=int, default=s.get("n_flies_per_vial", 15))
 
     p.add_argument("--fps-out", type=int, default=v.get("fps_out", 30))
     p.add_argument("--overlay-radius", type=int, default=v.get("radius", 5))
@@ -65,7 +66,8 @@ def main():
     args = build_parser(cfg).parse_args()
 
     import cv2
-    from src.stitching import stitch_wide_csv_to_long
+    import pandas as pd
+    from src.stitching import wide_to_long, build_tracklets, stitch_per_vial
     from src.roi import assign_vials_and_compact_ids
     from src.visualization import render_vial_overlay_video
 
@@ -78,22 +80,33 @@ def main():
     # Stage 4: stitch
     # ------------------------------------------------------------------
     print("\n=== Stage 4: Hungarian stitching ===")
-    stats = stitch_wide_csv_to_long(
-        input_csv=wide_csv,
-        output_stitched_long=stitched_csv,
-        max_gap=args.max_gap_frames,
-        gap_penalty=args.gap_penalty,
+
+    with open(roi_json) as f:
+        vial_rois = {k: tuple(v) for k, v in json.load(f).items()}
+
+    cap = cv2.VideoCapture(args.video)
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+    cap.release()
+
+    long_df   = wide_to_long(pd.read_csv(wide_csv))
+    tracklets = build_tracklets(long_df, fps=fps)
+    print(f"  Built {len(tracklets)} tracklets from {long_df['orig_id'].nunique()} original IDs")
+
+    stitched_df = stitch_per_vial(
+        long_df          = long_df,
+        vial_rois        = vial_rois,
+        n_flies_per_vial = args.n_flies_per_vial,
+        max_gap          = args.max_gap_frames,
+        tracklets        = tracklets,
     )
-    print(f"  tracklets: {stats['n_orig_tracklets']}  links: {stats['n_links']}  "
-          f"sigma_step: {stats['sigma_step']:.2f}")
+    stitched_df.to_csv(stitched_csv, index=False)
+    print(f"  Stitched IDs: {stitched_df['stitched_id'].nunique()} "
+          f"(from {stitched_df['orig_id'].nunique()} original)")
 
     # ------------------------------------------------------------------
     # Stage 5: vial assignment + compact IDs
     # ------------------------------------------------------------------
     print("\n=== Stage 5: Vial assignment + compact IDs ===")
-    cap = cv2.VideoCapture(args.video)
-    fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
-    cap.release()
 
     df = assign_vials_and_compact_ids(
         stitched_csv=stitched_csv,
