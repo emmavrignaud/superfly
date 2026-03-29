@@ -10,7 +10,7 @@ Re-exports all public functions so users can do:
 from src.preprocessing import (
     _bgr_to_gray_float32,
     gui_pick_roi_and_range,
-    preprocess_bgsub_gui_cv2_median_background,
+    preprocess_bgsub_gui,
 )
 
 from src.tracking import (
@@ -63,7 +63,7 @@ __all__ = [
     # preprocessing
     "_bgr_to_gray_float32",
     "gui_pick_roi_and_range",
-    "preprocess_bgsub_gui_cv2_median_background",
+    "preprocess_bgsub_gui",
     # tracking
     "export_tracks_xy_tuple_csv_one_config",
     # stitching

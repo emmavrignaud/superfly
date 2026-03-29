@@ -15,15 +15,22 @@ stitching:
   max_gap_frames: 90             # usually set equal to lost_track_buffer
   max_cost_quantile: 0.995       # prune the top (1-q) most expensive candidate links
   n_flies_per_vial: 15           # lenient upper bound; iterative stitching stops at this target
+  fps: 60
+  pause_threshold: 1.0
+  fallback_velocity: 10.0
+  edge_fraction: 0.10
+  max_score: 2.0
+  min_points_for_scale: 10
 
 preprocessing:
   bg_gain: 1.2
   bg_white_level: 245
-  bg_deadzone: 0.0
+  bg_percentile: 85.0            # percentile used for background estimation (85-90 recommended)
   bg_sample_stride: 1            # use every N-th frame for background estimation
+  default_end: 700               # default upper frame bound shown in the GUI slider
   codec: mp4v
 
 visualization:
-  fps_out: 30
+  fps_out: 60
   radius: 5
   show_ids: true

@@ -5,9 +5,9 @@ Background subtraction + interactive ROI/range GUI.
 
 Optional first step: makes flies pop against the background before tracking.
 GUI controls:
-  - Drag mouse to draw ROI
-  - Trackbars for start/end frame and current preview frame
-  - ENTER to accept, ESC to cancel
+  - Drag mouse on the video to draw a ROI
+  - Sliders for start / end frame and preview frame
+  - Accept button (or Enter) to confirm, Cancel (or Esc) to abort
 
 Background method: temporal median (FreeClimber-style).
   - Collects sampled ROI frames into an array, then np.median(axis=0).
@@ -18,18 +18,42 @@ Background method: temporal median (FreeClimber-style).
 """
 
 import os
+import sys
+import yaml
 import cv2
 import numpy as np
 from pathlib import Path
 
+from PyQt5.QtWidgets import (
+    QApplication, QDialog, QFrame, QHBoxLayout, QLabel,
+    QPushButton, QSizePolicy, QSlider, QVBoxLayout, QWidget,
+)
+from PyQt5.QtCore import Qt, QPoint, QRect, pyqtSignal
+from PyQt5.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 
-# -------------------------------------------------------------------------
-# Default tuning constants (override via config.yaml or function kwargs)
-# -------------------------------------------------------------------------
-BG_GAIN = 1.2          # higher = flies darker / more contrast
-BG_WHITE_LEVEL = 245   # higher = brighter background
-BG_CODEC = "mp4v"
 
+# ─── Config loader ────────────────────────────────────────────────────────
+
+def _preprocessing_cfg() -> dict:
+    p = Path(__file__).parent.parent / "config.yaml"
+    if not p.exists():
+        return {}
+    with open(p) as f:
+        return yaml.safe_load(f).get("preprocessing", {})
+
+
+# ─── Stylesheet ───────────────────────────────────────────────────────────
+_QSS = (Path(__file__).parent / "preprocessing_style.qss").read_text()
+
+_STYLE_ROI_NONE = (
+    "color:#f38ba8; background:#313244; border-radius:4px; padding:5px 12px;"
+)
+_STYLE_ROI_SET = (
+    "color:#a6e3a1; background:#313244; border-radius:4px; padding:5px 12px;"
+)
+
+
+# ─── Helpers ──────────────────────────────────────────────────────────────
 
 def _bgr_to_gray_float32(bgr: np.ndarray) -> np.ndarray:
     """BGR uint8 -> grayscale float32 (OpenCV ordering)."""
@@ -39,148 +63,372 @@ def _bgr_to_gray_float32(bgr: np.ndarray) -> np.ndarray:
     return 0.1140 * b + 0.5870 * g + 0.2989 * r
 
 
-def gui_pick_roi_and_range(video_path: str, default_end: int = 700):
+def _frame_to_pixmap(frame_bgr: np.ndarray) -> QPixmap:
+    h, w = frame_bgr.shape[:2]
+    rgb  = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    # .copy() makes QImage own the buffer so numpy array can be GC'd safely
+    qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+    return QPixmap.fromImage(qimg)
+
+
+# ─── Video canvas with drag-to-draw ROI ───────────────────────────────────
+
+class _VideoCanvas(QLabel):
+    """QLabel that renders a video frame and lets the user drag a ROI."""
+
+    roi_changed = pyqtSignal(object)  # emits (x, y, w, h) in video coords
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(640, 360)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setAlignment(Qt.AlignCenter)
+        self.setCursor(Qt.CrossCursor)
+        self.setMouseTracking(True)
+        self.setStyleSheet("background: #11111b; border-radius: 6px;")
+
+        self._raw     = None   # QPixmap of current frame
+        self._vw      = 1
+        self._vh      = 1
+        self._roi     = None   # confirmed (x, y, w, h) in video coords
+        self._drawing = False
+        self._p0      = None   # drag start in label coords (QPoint)
+        self._p1      = None   # drag current in label coords (QPoint)
+
+    # ── public ────────────────────────────────────────────────────────────
+
+    def set_frame(self, frame_bgr: np.ndarray) -> None:
+        self._vh, self._vw = frame_bgr.shape[:2]
+        self._raw = _frame_to_pixmap(frame_bgr)
+        self._repaint()
+
+    def get_roi(self):
+        return self._roi
+
+    # ── coordinate helpers ────────────────────────────────────────────────
+
+    def _tfm(self):
+        """(scale, ox, oy): label_pos = video_pos * scale + offset."""
+        if self._raw is None:
+            return 1.0, 0.0, 0.0
+        s  = min(self.width() / self._vw, self.height() / self._vh)
+        ox = (self.width()  - self._vw * s) / 2
+        oy = (self.height() - self._vh * s) / 2
+        return s, ox, oy
+
+    def _to_vid(self, pt: QPoint) -> QPoint:
+        s, ox, oy = self._tfm()
+        return QPoint(
+            max(0, min(int((pt.x() - ox) / s), self._vw - 1)),
+            max(0, min(int((pt.y() - oy) / s), self._vh - 1)),
+        )
+
+    def _to_lbl(self, vx: int, vy: int) -> QPoint:
+        s, ox, oy = self._tfm()
+        return QPoint(int(vx * s + ox), int(vy * s + oy))
+
+    # ── painting ──────────────────────────────────────────────────────────
+
+    def _repaint(self) -> None:
+        if self._raw is None:
+            return
+        s, ox, oy = self._tfm()
+        scaled = self._raw.scaled(
+            int(self._vw * s), int(self._vh * s),
+            Qt.KeepAspectRatio, Qt.SmoothTransformation,
+        )
+        canvas = QPixmap(self.width(), self.height())
+        canvas.fill(QColor("#11111b"))
+
+        p = QPainter(canvas)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.drawPixmap(int(ox), int(oy), scaled)
+
+        # confirmed ROI — solid green
+        if self._roi is not None:
+            x, y, w, h = self._roi
+            a = self._to_lbl(x, y)
+            b = self._to_lbl(x + w, y + h)
+            p.setPen(QPen(QColor("#a6e3a1"), 2))
+            p.drawRect(QRect(a, b).normalized())
+
+        # in-progress ROI — dashed blue
+        if self._drawing and self._p0 and self._p1:
+            p.setPen(QPen(QColor("#89b4fa"), 2, Qt.DashLine))
+            p.drawRect(QRect(self._p0, self._p1).normalized())
+
+        p.end()
+        self.setPixmap(canvas)
+
+    # ── events ────────────────────────────────────────────────────────────
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._repaint()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._drawing = True
+            self._p0 = self._p1 = e.pos()
+
+    def mouseMoveEvent(self, e):
+        if self._drawing:
+            self._p1 = e.pos()
+            self._repaint()
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton and self._drawing:
+            self._drawing = False
+            v0 = self._to_vid(self._p0)
+            v1 = self._to_vid(self._p1)
+            x0, x1 = sorted([v0.x(), v1.x()])
+            y0, y1 = sorted([v0.y(), v1.y()])
+            x0 = max(0, min(x0, self._vw - 1))
+            y0 = max(0, min(y0, self._vh - 1))
+            w  = max(1, min(x1 - x0, self._vw - x0))
+            h  = max(1, min(y1 - y0, self._vh - y0))
+            self._roi = (x0, y0, w, h)
+            self._p0 = self._p1 = None
+            self.roi_changed.emit(self._roi)
+            self._repaint()
+
+
+# ─── Labeled slider row ───────────────────────────────────────────────────
+
+class _SliderRow(QWidget):
+    value_changed = pyqtSignal(int)
+
+    def __init__(self, label: str, lo: int, hi: int, init: int, parent=None):
+        super().__init__(parent)
+        lbl = QLabel(label)
+        lbl.setObjectName("sliderLabel")
+
+        self._val = QLabel(str(init))
+        self._val.setObjectName("sliderValue")
+        self._val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._val.setFixedWidth(55)
+
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setRange(lo, hi)
+        self.slider.setValue(init)
+        self.slider.valueChanged.connect(self._emit)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 2, 0, 2)
+        row.addWidget(lbl)
+        row.addWidget(self.slider, 1)
+        row.addWidget(self._val)
+
+    def _emit(self, v: int) -> None:
+        self._val.setText(str(v))
+        self.value_changed.emit(v)
+
+    def set_value(self, v: int) -> None:
+        self.slider.blockSignals(True)
+        self.slider.setValue(v)
+        self._val.setText(str(v))
+        self.slider.blockSignals(False)
+
+    def value(self) -> int:
+        return self.slider.value()
+
+
+# ─── Main dialog ──────────────────────────────────────────────────────────
+
+class _ROIPickerDialog(QDialog):
+    def __init__(self, cap, n_frames: int, w_vid: int, h_vid: int,
+                 default_end: int, parent=None):
+        super().__init__(parent)
+        self.cap      = cap
+        self.n_frames = n_frames
+        self.w_vid    = w_vid
+        self.h_vid    = h_vid
+        self.start    = 0
+        self.end      = min(default_end, n_frames) if n_frames > 0 else default_end
+        self.cur      = 0
+
+        self._build()
+        self._load_frame()
+
+    # ── layout ────────────────────────────────────────────────────────────
+
+    def _divider(self) -> QFrame:
+        f = QFrame()
+        f.setObjectName("divider")
+        return f
+
+    def _build(self) -> None:
+        self.setWindowTitle("Preprocessing  —  Pick ROI & Frame Range")
+        self.setMinimumSize(960, 720)
+        self.setStyleSheet(_QSS)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 16, 20, 16)
+        root.setSpacing(10)
+
+        hdr = QLabel("PICK ROI & FRAME RANGE")
+        hdr.setObjectName("header")
+        root.addWidget(hdr)
+
+        self.canvas = _VideoCanvas()
+        self.canvas.roi_changed.connect(self._on_roi)
+        root.addWidget(self.canvas, 1)
+
+        self.roi_lbl = QLabel("Draw a ROI by dragging on the video")
+        self.roi_lbl.setStyleSheet(_STYLE_ROI_NONE)
+        root.addWidget(self.roi_lbl)
+
+        root.addWidget(self._divider())
+
+        hi_n = max(self.n_frames - 1, 1)
+        hi_e = max(self.n_frames, 1)
+        self.sl_start = _SliderRow("Start frame", 0,    hi_n, self.start)
+        self.sl_end   = _SliderRow("End frame",   1,    hi_e, self.end)
+        self.sl_cur   = _SliderRow("Preview",     0,    hi_n, self.cur)
+        self.sl_start.value_changed.connect(self._on_start)
+        self.sl_end.value_changed.connect(self._on_end)
+        self.sl_cur.value_changed.connect(self._on_cur)
+        for sl in (self.sl_start, self.sl_end, self.sl_cur):
+            root.addWidget(sl)
+
+        self.stats_lbl = QLabel()
+        self.stats_lbl.setObjectName("stats")
+        self._refresh_stats()
+        root.addWidget(self.stats_lbl)
+
+        root.addWidget(self._divider())
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_accept = QPushButton("Accept  →")
+        self.btn_accept.setObjectName("accept")
+        self.btn_accept.setEnabled(False)
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_accept.clicked.connect(self.accept)
+        btn_row.addWidget(self.btn_cancel)
+        btn_row.addWidget(self.btn_accept)
+        root.addLayout(btn_row)
+
+    # ── slots ─────────────────────────────────────────────────────────────
+
+    def _on_roi(self, roi) -> None:
+        x, y, w, h = roi
+        self.roi_lbl.setText(f"ROI   x={x}   y={y}   w={w}   h={h}")
+        self.roi_lbl.setStyleSheet(_STYLE_ROI_SET)
+        self.btn_accept.setEnabled(True)
+
+    def _on_start(self, v: int) -> None:
+        self.start = v
+        if self.end <= self.start:
+            self.end = self.start + 1
+            self.sl_end.set_value(self.end)
+        if self.cur < self.start:
+            self.cur = self.start
+            self.sl_cur.set_value(self.cur)
+        self._refresh_stats()
+        self._load_frame()
+
+    def _on_end(self, v: int) -> None:
+        self.end = v
+        if self.end <= self.start:
+            self.start = max(0, self.end - 1)
+            self.sl_start.set_value(self.start)
+        if self.cur >= self.end:
+            self.cur = self.end - 1
+            self.sl_cur.set_value(self.cur)
+        self._refresh_stats()
+        self._load_frame()
+
+    def _on_cur(self, v: int) -> None:
+        clamped = max(self.start, min(v, self.end - 1))
+        if clamped != v:
+            self.sl_cur.set_value(clamped)
+        self.cur = clamped
+        self._refresh_stats()
+        self._load_frame()
+
+    def _refresh_stats(self) -> None:
+        self.stats_lbl.setText(
+            f"frame={self.cur}   start={self.start}"
+            f"   end={self.end}   total={self.n_frames}"
+        )
+
+    def _load_frame(self) -> None:
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.cur)
+        ok, frame = self.cap.read()
+        if ok:
+            self.canvas.set_frame(frame)
+
+    def keyPressEvent(self, e) -> None:
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if self.btn_accept.isEnabled():
+                self.accept()
+        elif e.key() == Qt.Key_Escape:
+            self.reject()
+        else:
+            super().keyPressEvent(e)
+
+    # ── result ────────────────────────────────────────────────────────────
+
+    def get_result(self):
+        x, y, w, h = self.canvas.get_roi()
+        return x, y, w, h, self.start, self.end
+
+
+# ─── Public API ───────────────────────────────────────────────────────────
+
+def gui_pick_roi_and_range(video_path: str, default_end: int | None = None):
     """
-    OpenCV GUI to pick ROI + [start, end_excl).
+    PyQt5 GUI to pick ROI + [start, end_excl).
 
     Controls:
-      - Drag mouse to draw ROI
-      - Trackbars: start, end_excl, cur frame
-      - ENTER: accept
-      - ESC: cancel
+      - Drag on the video to draw a ROI
+      - Sliders: start frame, end frame, preview frame
+      - Accept (or Enter) to confirm; Cancel (or Esc) to abort
 
     Returns:
       (x, y, w, h, start, end_excl)
     """
+    cfg = _preprocessing_cfg()
+    if default_end is None:
+        default_end = cfg.get("default_end", 700)
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise FileNotFoundError(video_path)
 
     n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    w_vid = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h_vid = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    w_vid    = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h_vid    = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    start = 0
-    end = min(default_end, n_frames) if n_frames > 0 else default_end
-    cur = 0
+    if QApplication.instance() is None:
+        for attr in ("AA_EnableHighDpiScaling", "AA_UseHighDpiPixmaps"):
+            if hasattr(Qt, attr):
+                QApplication.setAttribute(getattr(Qt, attr), True)
+        app = QApplication(sys.argv)
+    else:
+        app = QApplication.instance()
 
-    roi = None  # (x,y,w,h)
-    drawing = False
-    x0 = y0 = 0
+    dlg      = _ROIPickerDialog(cap, n_frames, w_vid, h_vid, default_end)
+    accepted = dlg.exec_()
+    cap.release()
 
-    WIN = "Pick ROI/range | drag ROI | ENTER=accept | ESC=cancel"
-    cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
+    if not accepted:
+        raise RuntimeError("Cancelled ROI/range selection")
 
-    def clamp():
-        nonlocal start, end, cur
-        if n_frames > 0:
-            start = max(0, min(start, n_frames - 1))
-            end = max(start + 1, min(end, n_frames))
-            cur = max(start, min(cur, end - 1))
-        else:
-            start = max(0, start)
-            end = max(start + 1, end)
-            cur = max(start, min(cur, end - 1))
-
-    def on_start(v):
-        nonlocal start
-        start = int(v)
-        clamp()
-
-    def on_end(v):
-        nonlocal end
-        end = int(v)
-        clamp()
-
-    def on_cur(v):
-        nonlocal cur
-        cur = int(v)
-        clamp()
-
-    cv2.createTrackbar("start", WIN, start, max(n_frames - 1, 1), on_start)
-    cv2.createTrackbar("end_excl", WIN, end, max(n_frames, 1), on_end)
-    cv2.createTrackbar("cur", WIN, cur, max(n_frames - 1, 1), on_cur)
-
-    def redraw():
-        cap.set(cv2.CAP_PROP_POS_FRAMES, cur)
-        ok, frame = cap.read()
-        if not ok:
-            return np.zeros((h_vid, w_vid, 3), dtype=np.uint8)
-
-        img = frame.copy()
-        if roi is not None:
-            x, y, w, h = roi
-            cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-
-        cv2.putText(
-            img,
-            f"frame={cur}  start={start}  end_excl={end}  total={n_frames}",
-            (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2, cv2.LINE_AA,
-        )
-        if roi is None:
-            cv2.putText(
-                img, "Draw ROI with mouse drag",
-                (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2, cv2.LINE_AA,
-            )
-        else:
-            x, y, w, h = roi
-            cv2.putText(
-                img, f"ROI x={x} y={y} w={w} h={h}",
-                (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2, cv2.LINE_AA,
-            )
-        return img
-
-    def mouse_cb(event, x, y, flags, param):
-        nonlocal drawing, x0, y0, roi
-        if event == cv2.EVENT_LBUTTONDOWN:
-            drawing = True
-            x0, y0 = x, y
-        elif event == cv2.EVENT_MOUSEMOVE and drawing:
-            img = redraw()
-            cv2.rectangle(img, (x0, y0), (x, y), (255, 0, 0), 2)
-            cv2.imshow(WIN, img)
-        elif event == cv2.EVENT_LBUTTONUP:
-            drawing = False
-            x1, y1 = x, y
-            x_min, x_max = sorted([x0, x1])
-            y_min, y_max = sorted([y0, y1])
-            w = max(1, x_max - x_min)
-            h = max(1, y_max - y_min)
-            x_min = max(0, min(x_min, w_vid - 1))
-            y_min = max(0, min(y_min, h_vid - 1))
-            w = max(1, min(w, w_vid - x_min))
-            h = max(1, min(h, h_vid - y_min))
-            roi = (x_min, y_min, w, h)
-
-    cv2.setMouseCallback(WIN, mouse_cb)
-
-    while True:
-        cv2.imshow(WIN, redraw())
-        k = cv2.waitKey(20) & 0xFF
-
-        if k == 27:  # ESC
-            cv2.destroyWindow(WIN)
-            cap.release()
-            raise RuntimeError("Cancelled ROI/range selection")
-
-        if k in (13, 10):  # ENTER
-            if roi is None:
-                print("Draw ROI first.")
-                continue
-            cv2.destroyWindow(WIN)
-            cap.release()
-            x, y, w, h = roi
-            return x, y, w, h, start, end
+    return dlg.get_result()
 
 
-def preprocess_bgsub_gui_cv2_median_background(
+def preprocess_bgsub_gui(
     video_path: str,
     out_mp4: str | None = None,
-    default_end: int = 700,
-    gain: float = BG_GAIN,
-    white_level: float = BG_WHITE_LEVEL,
-    codec: str = BG_CODEC,
-    bg_sample_stride: int = 1,
+    default_end: int | None = None,
+    gain: float | None = None,
+    white_level: float | None = None,
+    codec: str | None = None,
+    bg_sample_stride: int | None = None,
+    bg_percentile: float | None = None,
 ) -> str:
     """
     GUI-driven ROI/range selection + temporal-median background subtraction.
@@ -205,6 +453,14 @@ def preprocess_bgsub_gui_cv2_median_background(
 
     Returns the output mp4 path as a string.
     """
+    cfg = _preprocessing_cfg()
+    if default_end    is None: default_end    = cfg.get("default_end",      700)
+    if gain           is None: gain           = cfg.get("bg_gain",          1.2)
+    if white_level    is None: white_level    = cfg.get("bg_white_level",   245)
+    if codec          is None: codec          = cfg.get("codec",          "mp4v")
+    if bg_sample_stride is None: bg_sample_stride = cfg.get("bg_sample_stride", 1)
+    if bg_percentile  is None: bg_percentile  = cfg.get("bg_percentile",  85.0)
+
     video_path = str(video_path)
     x, y, w, h, start, end_excl = gui_pick_roi_and_range(video_path, default_end=default_end)
 
@@ -242,7 +498,7 @@ def preprocess_bgsub_gui_cv2_median_background(
         cap.release()
         raise RuntimeError("No frames available to compute the median background.")
 
-    bg_gray = np.median(np.stack(bg_frames, axis=0), axis=0).astype(np.float32)
+    bg_gray = np.percentile(np.stack(bg_frames, axis=0), bg_percentile, axis=0).astype(np.float32)
 
     # 2) Write background-subtracted video
     os.makedirs(os.path.dirname(out_mp4) or ".", exist_ok=True)
@@ -265,12 +521,18 @@ def preprocess_bgsub_gui_cv2_median_background(
 
         gray = _bgr_to_gray_float32(roi_bgr)
         diff = bg_gray - gray  # signed: positive where fly is darker than bg
-        vis = float(white_level) - diff * float(gain)
+        vis  = float(white_level) - diff * float(gain)
         vis_u8 = np.clip(vis, 0, 255).astype(np.uint8)
         writer.write(cv2.cvtColor(vis_u8, cv2.COLOR_GRAY2BGR))
 
     cap.release()
     writer.release()
     print("Saved bgsub video:", out_mp4)
-    print(f"Median background from {len(bg_frames)} frames (stride={bg_sample_stride}).")
+    print(f"Background ({bg_percentile}th percentile) from {len(bg_frames)} frames (stride={bg_sample_stride}).")
     return out_mp4
+
+
+
+
+
+

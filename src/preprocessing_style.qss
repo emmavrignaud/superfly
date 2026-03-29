@@ -1,0 +1,74 @@
+/* Catppuccin Mocha — preprocessing GUI */
+
+* {
+    font-family: "Segoe UI", sans-serif;
+    font-size: 13px;
+}
+QDialog {
+    background: #1e1e2e;
+}
+QWidget {
+    background: #1e1e2e;
+    color: #cdd6f4;
+}
+QLabel#header {
+    color: #89b4fa;
+    font-size: 14px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    padding-bottom: 2px;
+}
+QLabel#sliderLabel {
+    color: #a6adc8;
+    min-width: 95px;
+}
+QLabel#sliderValue {
+    color: #89b4fa;
+    min-width: 55px;
+}
+QLabel#stats {
+    color: #585b70;
+    font-size: 11px;
+    padding-top: 2px;
+}
+QSlider::groove:horizontal {
+    height: 4px;
+    background: #45475a;
+    border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    background: #89b4fa;
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
+}
+QSlider::sub-page:horizontal {
+    background: #89b4fa;
+    border-radius: 2px;
+}
+QPushButton {
+    background: #313244;
+    color: #cdd6f4;
+    border: 1px solid #45475a;
+    border-radius: 6px;
+    padding: 7px 22px;
+    min-width: 90px;
+}
+QPushButton:hover {
+    background: #45475a;
+    border-color: #585b70;
+}
+QPushButton#accept {
+    background: #a6e3a1;
+    color: #1e1e2e;
+    font-weight: bold;
+    border: none;
+}
+QPushButton#accept:hover    { background: #94e2d5; }
+QPushButton#accept:disabled { background: #45475a; color: #6c7086; }
+QFrame#divider {
+    background: #313244;
+    max-height: 1px;
+    min-height: 1px;
+}
