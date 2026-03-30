@@ -15,10 +15,11 @@ aggregate_per_fly_features()   — collapses to one row per fly
 import numpy as np
 import pandas as pd
 from scipy.spatial import ConvexHull
-import yaml 
+import yaml
+from pathlib import Path
 
-
-with open("config.yaml") as f:
+_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
+with open(_CONFIG_PATH) as f:
     cfg = yaml.safe_load(f)
 
 fps = cfg['stitching']['fps']

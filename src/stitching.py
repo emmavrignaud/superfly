@@ -30,6 +30,7 @@ import pandas as pd
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 import yaml
+from pathlib import Path
 from src.features import add_kinematics, add_area_covered, add_path_tortuosity
 
 
@@ -38,7 +39,8 @@ from src.features import add_kinematics, add_area_covered, add_path_tortuosity
 # Converting wide format to long format
 # ---------------------------------------------------------------------------
 
-with open("config.yaml") as f:
+_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
+with open(_CONFIG_PATH) as f:
     cfg = yaml.safe_load(f)
 
 cfg_stitching = cfg['stitching']
