@@ -18,4 +18,5 @@ dependencies:
     - inference>=0.9
     - boxmot>=10.0
     - plotly>=5.18
+    - PyQt5>=5.15
     - kaleido>=0.2
