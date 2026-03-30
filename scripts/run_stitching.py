@@ -52,8 +52,6 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
 
     p.add_argument("--no-overlay", action="store_true", help="Skip overlay video rendering")
 
-    p.add_argument("--max-gap-frames", type=int, default=s.get("max_gap_frames", 90))
-    p.add_argument("--n-flies-per-vial", type=int, default=s.get("n_flies_per_vial", 15))
     p.add_argument("--min-consecutive-frames", type=int,
                    default=t.get("minimum_consecutive_frames", 10),
                    help="Tracklets shorter than this are excluded from feature scale computation")
@@ -71,7 +69,7 @@ def main():
 
     import cv2
     import pandas as pd
-    from src.stitching import wide_to_long, build_tracklets, stitch_per_vial
+    from src.stitching import wide_to_long, build_tracklets, stitch
     from src.roi import assign_vials_and_compact_ids
     from src.visualization import render_vial_overlay_video
 
@@ -93,16 +91,14 @@ def main():
     cap.release()
 
     long_df   = wide_to_long(pd.read_csv(wide_csv))
-    tracklets = build_tracklets(long_df, fps=fps)
+    tracklets = build_tracklets(long_df)
     print(f"  Built {len(tracklets)} tracklets from {long_df['orig_id'].nunique()} original IDs")
 
-    stitched_df = stitch_per_vial(
-        long_df              = long_df,
-        vial_rois            = vial_rois,
-        n_flies_per_vial     = args.n_flies_per_vial,
-        max_gap              = args.max_gap_frames,
-        tracklets            = tracklets,
-        min_points_for_scale = args.min_consecutive_frames,
+    stitched_df = stitch(
+        long_df    = long_df,
+        vial_rois  = vial_rois,
+        tracklets  = tracklets,
+        output_dir = args.output_dir,
     )
     stitched_df.to_csv(stitched_csv, index=False)
     print(f"  Stitched IDs: {stitched_df['stitched_id'].nunique()} "

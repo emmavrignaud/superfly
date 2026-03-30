@@ -1,14 +1,15 @@
 """
 src/__init__.py
 
-Re-exports all public functions so users can do:
+Re-exports the public API so users can do:
+    from src import preprocess_bgsub_gui
     from src import export_tracks_xy_tuple_csv_one_config
-    from src import stitch_per_vial, assign_vials_and_compact_ids, build_tracklets
+    from src import wide_to_long, build_tracklets, stitch
+    from src import assign_vials_and_compact_ids
     from src import extract_behavioral_features, run_classifier
 """
 
 from src.preprocessing import (
-    _bgr_to_gray_float32,
     gui_pick_roi_and_range,
     preprocess_bgsub_gui,
 )
@@ -18,15 +19,17 @@ from src.tracking import (
 )
 
 from src.stitching import (
-    parse_xy_cell,
     wide_to_long,
     Tracklet,
     build_tracklets,
+    simulate_position,
+    link_score,
     build_cost_matrix,
-    solve_assignment,
-    build_orig_to_stitched,
     stitch_per_vial,
+    stitch_general,
+    stitch,
 )
+
 from src.roi import (
     draw_and_save_vial_rois,
     assign_compact_ids_left_to_right,
@@ -61,20 +64,20 @@ from src.visualization import (
 
 __all__ = [
     # preprocessing
-    "_bgr_to_gray_float32",
     "gui_pick_roi_and_range",
     "preprocess_bgsub_gui",
     # tracking
     "export_tracks_xy_tuple_csv_one_config",
     # stitching
-    "parse_xy_cell",
     "wide_to_long",
     "Tracklet",
     "build_tracklets",
+    "simulate_position",
+    "link_score",
     "build_cost_matrix",
-    "solve_assignment",
-    "build_orig_to_stitched",
     "stitch_per_vial",
+    "stitch_general",
+    "stitch",
     # roi
     "draw_and_save_vial_rois",
     "assign_compact_ids_left_to_right",

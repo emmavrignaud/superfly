@@ -11,16 +11,29 @@ tracker:
   asso_func: hmiou               # association function: hmiou (recommended) or iou
 
 stitching:
-  gap_penalty: 0.05
-  max_gap_frames: 90             # usually set equal to lost_track_buffer
-  max_cost_quantile: 0.995       # prune the top (1-q) most expensive candidate links
-  n_flies_per_vial: 15           # lenient upper bound; iterative stitching stops at this target
+  stitching_mode: per_vial       # per_vial: stitch within each vial independently | general: stitch across all vials (cross-vial links still forbidden)
+  vial_count_cap: 10             # per_vial mode: stop when active IDs per vial ≤ this
+  general_count_cap: 60          # general mode: stop when total active IDs ≤ this
   fps: 60
   pause_threshold: 1.0
   fallback_velocity: 10.0
   edge_fraction: 0.10
-  max_score: 2.0
   min_points_for_scale: 10
+  link_score_weights:
+    extrap: 0.50
+    direction: 0.25
+    behavioral: 0.25
+  direction_weights:
+    heading_vs_gap: 0.50        # weight for: A's final heading vs. gap vector
+    overall_vs_overall: 0.50    # weight for: A's overall direction vs. B's overall direction
+  behavioral_weights:           # per-feature weights for weighted Euclidean dissimilarity
+    median_velocity: 1.0
+    pause_fraction: 1.0
+    mean_turning_angle: 1.0
+    mean_angular_velocity: 1.0
+    mean_acceleration: 1.0
+    n_large_displacements: 1.0
+    tortuosity: 1.0
 
 preprocessing:
   bg_gain: 1.2
