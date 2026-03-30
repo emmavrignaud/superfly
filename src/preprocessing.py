@@ -257,9 +257,15 @@ class _ROIPickerDialog(QDialog):
         f.setObjectName("divider")
         return f
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.raise_()
+        self.activateWindow()
+
     def _build(self) -> None:
         self.setWindowTitle("Preprocessing  —  Pick ROI & Frame Range")
-        self.setMinimumSize(960, 720)
+        self.setMinimumSize(1100, 820)
+        self.resize(1380, 940)
         self.setStyleSheet(_QSS)
 
         root = QVBoxLayout(self)
