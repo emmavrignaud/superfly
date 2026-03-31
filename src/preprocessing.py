@@ -259,6 +259,8 @@ class _ROIPickerDialog(QDialog):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        self.show()
         self.raise_()
         self.activateWindow()
 
