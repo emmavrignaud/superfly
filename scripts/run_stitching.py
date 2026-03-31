@@ -71,7 +71,7 @@ def main():
     import pandas as pd
     from src.stitching import wide_to_long, build_tracklets, stitch
     from src.roi import assign_vials_and_compact_ids
-    from src.visualization import render_vial_overlay_video
+    from src.visualization import render_vial_overlay_video, render_raw_overlay_video
 
     wide_csv     = os.path.join(args.output_dir, "tracks_wide_format.csv")
     roi_json     = os.path.join(args.output_dir, "vial_rois.json")
@@ -90,7 +90,8 @@ def main():
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
     cap.release()
 
-    long_df   = wide_to_long(pd.read_csv(wide_csv))
+    long_csv  = os.path.join(args.output_dir, "tracks_long_format.csv")
+    long_df   = wide_to_long(pd.read_csv(wide_csv), out_csv=long_csv)
     tracklets = build_tracklets(long_df)
     print(f"  Built {len(tracklets)} tracklets from {long_df['orig_id'].nunique()} original IDs")
 
@@ -118,11 +119,24 @@ def main():
     print(f"  compact_tracks saved: {compact_csv}  shape: {df.shape}")
 
     # ------------------------------------------------------------------
-    # Stage 6 (optional): overlay video
+    # Stage 6 (optional): overlay videos
     # ------------------------------------------------------------------
     if not args.no_overlay:
+        print("\n=== Stage 6: Overlay videos ===")
+
+        # 6a — raw OC-SORT overlay (before stitching)
+        raw_overlay_mp4 = os.path.join(args.output_dir, "overlay_raw_ocsort.mp4")
+        render_raw_overlay_video(
+            video_path=args.video,
+            csv_path=long_csv,
+            out_mp4=raw_overlay_mp4,
+            fps_out=args.fps_out,
+            radius=args.overlay_radius,
+        )
+        print(f"  Raw OC-SORT overlay: {raw_overlay_mp4}")
+
+        # 6b — stitched overlay
         overlay_mp4 = os.path.join(args.output_dir, "overlay_vials_shaded.mp4")
-        print("\n=== Stage 6: Overlay video ===")
         render_vial_overlay_video(
             video_path=args.video,
             csv_path=compact_csv,
@@ -130,6 +144,7 @@ def main():
             fps_out=args.fps_out,
             radius=args.overlay_radius,
         )
+        print(f"  Stitched overlay:    {overlay_mp4}")
 
     print("\nDone.")
 

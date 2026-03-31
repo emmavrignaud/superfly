@@ -8,21 +8,20 @@ tracker:
   minimum_matching_threshold: 0.01
   minimum_consecutive_frames: 10
   min_area: 40                   # px^2; detections smaller than this are ignored
-  asso_func: hmiou               # association function: hmiou (recommended) or iou
+  asso_func: diou               # association function: hmiou (recommended) or iou
 
 stitching:
   stitching_mode: per_vial       # per_vial: stitch within each vial independently | general: stitch across all vials (cross-vial links still forbidden)
   vial_count_cap: 10             # per_vial mode: stop when active IDs per vial ≤ this
-  general_count_cap: 60          # general mode: stop when total active IDs ≤ this
+  general_count_cap: 100          # general mode: stop when total active IDs ≤ this
   fps: 60
   pause_threshold: 1.0
-  fallback_velocity: 10.0
   edge_fraction: 0.10
   min_points_for_scale: 10
   link_score_weights:
-    extrap: 0.50
-    direction: 0.25
-    behavioral: 0.25
+    extrap: 0.33
+    direction: 0.33
+    behavioral: 0.33
   direction_weights:
     heading_vs_gap: 0.50        # weight for: A's final heading vs. gap vector
     overall_vs_overall: 0.50    # weight for: A's overall direction vs. B's overall direction

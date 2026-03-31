@@ -540,7 +540,7 @@ def link_score(
     tracklets  : full population of tracklets for this vial; used to compute
                  per-feature population stds for z-scoring the behavioral term
 
-    All tuning parameters (fallback_velocity, edge_fraction, min_points_for_scale,
+    All tuning parameters (edge_fraction, min_points_for_scale,
     link_score_weights, direction_weights, behavioral_weights) are read from config.yaml.
     """
     gap            = B.start_frame - A.end_frame   # frames between the end of A and start of B
@@ -549,9 +549,9 @@ def link_score(
     feature_scales = _compute_feature_scales(tracklets)
 
     # Use A's median velocity as the expected speed.
-    # If A was essentially stationary (velocity ≈ 0), fall back to the config
-    # default so we don't divide by zero or produce degenerate scores.
-    mv  = A.median_velocity if A.median_velocity > 1e-6 else cfg_stitching['fallback_velocity']
+    # If A was stationary or has no velocity estimate, mv=0 and simulate_position
+    # stays at A.end_xy, so extrap_term_error degrades to raw Euclidean distance.
+    mv  = A.median_velocity
     fps = cfg_stitching['fps']
 
     dx = B.start_xy[0] - A.end_xy[0]   # horizontal gap between endpoints

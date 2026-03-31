@@ -85,9 +85,10 @@ def main():
     # ------------------------------------------------------------------
     if args.preprocess:
         print("\n=== Stage 1: Background subtraction ===")
+        pp_out = os.path.join(args.output_dir, Path(args.video).stem + "_pp.mp4")
         video_path = preprocess_bgsub_gui(
             video_path=video_path,
-            out_mp4=None,
+            out_mp4=pp_out,
         )
         print(f"Preprocessed video: {video_path}")
 
