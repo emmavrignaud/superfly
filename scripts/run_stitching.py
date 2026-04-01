@@ -30,6 +30,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from utils import save_run_params
+
 
 def load_config(config_path: str) -> dict:
     with open(config_path) as f:
@@ -104,6 +106,11 @@ def main():
     stitched_df.to_csv(stitched_csv, index=False)
     print(f"  Stitched IDs: {stitched_df['stitched_id'].nunique()} "
           f"(from {stitched_df['orig_id'].nunique()} original)")
+    save_run_params(args.output_dir, "stitching_output", {
+        "stitched_csv": stitched_csv,
+        "stitched_ids": int(stitched_df["stitched_id"].nunique()),
+        "original_ids": int(stitched_df["orig_id"].nunique()),
+    })
 
     # ------------------------------------------------------------------
     # Stage 5: vial assignment + compact IDs
@@ -117,6 +124,10 @@ def main():
         fps=fps,
     )
     print(f"  compact_tracks saved: {compact_csv}  shape: {df.shape}")
+    save_run_params(args.output_dir, "compact", {
+        "csv": compact_csv,
+        "rows": int(df.shape[0]),
+    })
 
     # ------------------------------------------------------------------
     # Stage 6 (optional): overlay videos
@@ -145,6 +156,10 @@ def main():
             radius=args.overlay_radius,
         )
         print(f"  Stitched overlay:    {overlay_mp4}")
+        save_run_params(args.output_dir, "outputs", {
+            "raw_overlay": raw_overlay_mp4,
+            "overlay": overlay_mp4,
+        })
 
     print("\nDone.")
 

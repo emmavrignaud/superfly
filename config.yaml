@@ -14,14 +14,14 @@ stitching:
   stitching_mode: per_vial       # per_vial: stitch within each vial independently | general: stitch across all vials (cross-vial links still forbidden)
   vial_count_cap: 10             # per_vial mode: stop when active IDs per vial ≤ this
   general_count_cap: 100          # general mode: stop when total active IDs ≤ this
-  fps: 60
+  fps: 30
   pause_threshold: 1.0
   edge_fraction: 0.10
   min_points_for_scale: 10
   link_score_weights:
-    extrap: 0.33
-    direction: 0.33
-    behavioral: 0.33
+    extrap: 0.45
+    direction: 0.40
+    behavioral: 0.15            # for later: add a gap penalty term :) 
   direction_weights:
     heading_vs_gap: 0.50        # weight for: A's final heading vs. gap vector
     overall_vs_overall: 0.50    # weight for: A's overall direction vs. B's overall direction
@@ -43,6 +43,10 @@ preprocessing:
   codec: mp4v
 
 visualization:
-  fps_out: 60
+  fps_out: 30
   radius: 5
   show_ids: true
+
+roi:
+  snap_threshold_pct: 0.02   # snap zone as a fraction of the last drawn box height
+  snap_enabled: true          # default on; press S in the GUI to toggle per-vial

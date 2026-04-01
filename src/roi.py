@@ -12,11 +12,13 @@ Workflow
 import json
 import os
 import sys
-from typing import Dict, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 import pandas as pd
+import yaml
 
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QHBoxLayout, QLabel,
@@ -24,6 +26,16 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QPoint, QRect, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
+
+
+# ─── Config loader ────────────────────────────────────────────────────────────
+
+def _roi_cfg() -> dict:
+    p = Path(__file__).parent.parent / "config.yaml"
+    if not p.exists():
+        return {}
+    with open(p) as f:
+        return yaml.safe_load(f).get("roi", {})
 
 
 # ─── Stylesheet (Catppuccin Mocha) ────────────────────────────────────────────
@@ -71,15 +83,30 @@ _VIAL_COLOURS = ["#a6e3a1", "#89b4fa", "#f9e2af", "#f38ba8", "#cba6f7", "#94e2d5
 
 # ─── Multi-ROI canvas ─────────────────────────────────────────────────────────
 
+_COLOUR_GUIDE = "#89dceb"   # sky — both guide types; solid=horizontal, dashed=vertical
+
+
 class _MultiROICanvas(QLabel):
     """
     QLabel that renders a video frame and lets the user drag multiple ROIs.
     Each confirmed ROI is drawn in a distinct colour and labelled with its index.
+
+    Snap guides
+    -----------
+    Horizontal: derived from the last confirmed vial's top-y / bottom-y.
+      When the in-progress rect's top or bottom edge comes within
+      snap_threshold px of a guide, that edge locks to the guide y.
+    Vertical gap: once ≥2 vials exist, the inferred inter-vial gap is used
+      to project a left-edge snap column for the next vial.
+    Press S (handled by the parent dialog) to toggle snap on/off; this only
+    affects the vial currently being drawn.
     """
 
     rois_changed = pyqtSignal(list)   # emits current list of (x0, y0, x1, y1)
+    snap_toggled = pyqtSignal(bool)   # emits new snap_enabled state
 
-    def __init__(self, parent=None):
+    def __init__(self, snap_threshold_pct: float, snap_enabled: bool,
+                 parent=None):
         super().__init__(parent)
         self.setMinimumSize(640, 360)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -91,10 +118,18 @@ class _MultiROICanvas(QLabel):
         self._raw      = None
         self._vw       = 1
         self._vh       = 1
-        self._rois     = []    # confirmed (x0, y0, x1, y1) in video coords
+        self._rois: List[Tuple[int,int,int,int]] = []
         self._drawing  = False
-        self._p0       = None  # drag start in label coords
-        self._p1       = None  # drag current in label coords
+        self._p0       = None        # drag anchor in label coords — NEVER modified after press
+        self._p0_vid   = None        # drag anchor in video coords — NEVER modified after press
+        self._p1       = None        # current drag corner in label coords (snapped)
+
+        # snap state
+        self._snap_threshold_pct = snap_threshold_pct
+        self.snap_enabled        = snap_enabled
+        self._active_h_guides: List[int] = []   # h-guide y values active this frame
+        self._active_v_guide: Optional[int] = None  # v-guide x snapped at press time
+        self._cursor_vid: Optional[QPoint] = None   # current mouse in video coords
 
     # ── public ────────────────────────────────────────────────────────────────
 
@@ -109,6 +144,14 @@ class _MultiROICanvas(QLabel):
     def get_rois(self):
         return list(self._rois)
 
+    def toggle_snap(self) -> bool:
+        self.snap_enabled = not self.snap_enabled
+        self._active_h_guides = []
+        self._active_v_guide  = None
+        self.snap_toggled.emit(self.snap_enabled)
+        self._repaint()
+        return self.snap_enabled
+
     def undo(self) -> None:
         if self._rois:
             self._rois.pop()
@@ -119,6 +162,92 @@ class _MultiROICanvas(QLabel):
         self._rois.clear()
         self.rois_changed.emit(self._rois)
         self._repaint()
+
+    # ── snap helpers ──────────────────────────────────────────────────────────
+
+    def _snap_threshold(self) -> int:
+        """Threshold in video pixels, proportional to last drawn box height."""
+        if not self._rois:
+            return 0
+        x0, y0, x1, y1 = self._rois[-1]
+        return max(1, round(abs(y1 - y0) * self._snap_threshold_pct))
+
+    def _avg_width(self) -> Optional[int]:
+        """Mean width of all confirmed vials. None if none drawn yet."""
+        if not self._rois:
+            return None
+        return round(sum(abs(r[2] - r[0]) for r in self._rois) / len(self._rois))
+
+    def _h_guide_ys(self) -> Tuple[Optional[int], Optional[int]]:
+        """Top-y and bottom-y of the last confirmed vial (video coords)."""
+        if not self._rois:
+            return None, None
+        x0, y0, x1, y1 = self._rois[-1]
+        return min(y0, y1), max(y0, y1)
+
+    def _v_guide_x(self) -> Optional[int]:
+        """
+        Projected left-edge x for the next vial based on inferred gap.
+        Requires ≥2 confirmed vials.
+        """
+        if len(self._rois) < 2:
+            return None
+        prev = self._rois[-2]
+        last = self._rois[-1]
+        # left/right edges of each box
+        prev_x1 = max(prev[0], prev[2])
+        last_x0 = min(last[0], last[2])
+        last_x1 = max(last[0], last[2])
+        gap = last_x0 - prev_x1
+        return last_x1 + gap
+
+    def _snap_on_press(self, v0: QPoint):
+        """
+        Snap the drag anchor's x to the vertical gap guide at press time.
+        Returns (snapped_v0, active_v_guide).
+        The anchor is fixed for the entire drag — this is the only place x is snapped.
+        """
+        if not self.snap_enabled:
+            return v0, None
+        v_guide = self._v_guide_x()
+        if v_guide is None:
+            return v0, None
+        thresh = self._snap_threshold()
+        if abs(v0.x() - v_guide) <= thresh:
+            return QPoint(v_guide, v0.y()), v_guide
+        return v0, None
+
+    def _snap_on_move(self, v1: QPoint):
+        """
+        Snap the moving corner's y to the nearest horizontal height guide,
+        and its x to the width suggestion line (p0_vid.x ± avg_width).
+        Returns (snapped_v1, active_h_guides).
+        Only v1 is touched — the anchor (_p0_vid) is never modified.
+        """
+        if not self.snap_enabled:
+            return v1, []
+        thresh = self._snap_threshold()
+
+        # ── snap y to h-guides ────────────────────────────────────────────
+        top_guide, bot_guide = self._h_guide_ys()
+        y = v1.y()
+        active_h: List[int] = []
+        for guide in (g for g in (top_guide, bot_guide) if g is not None):
+            if abs(y - guide) <= thresh:
+                y = guide
+                active_h.append(guide)
+                break   # snap to at most one guide per frame
+
+        # ── snap x to width suggestion ────────────────────────────────────
+        x = v1.x()
+        avg_w = self._avg_width()
+        if avg_w is not None and self._p0_vid is not None:
+            for candidate in (self._p0_vid.x() + avg_w, self._p0_vid.x() - avg_w):
+                if abs(x - candidate) <= thresh:
+                    x = candidate
+                    break
+
+        return QPoint(x, y), active_h
 
     # ── coordinate helpers ────────────────────────────────────────────────────
 
@@ -159,7 +288,51 @@ class _MultiROICanvas(QLabel):
         p.setRenderHint(QPainter.Antialiasing)
         p.drawPixmap(int(ox), int(oy), scaled)
 
-        # Confirmed ROIs — each in its own colour
+        # ── snap guide lines ──────────────────────────────────────────────
+        # Always drawn when snap is enabled (passive) so the user can see
+        # where to position the cursor before pressing.
+        # Active guides (cursor near, or snapping during drag) render at 2px;
+        # passive guides render at 1px.
+        if self.snap_enabled:
+            thresh = self._snap_threshold()
+            cur    = self._cursor_vid  # may be None
+
+            # horizontal height guides — solid
+            top_guide, bot_guide = self._h_guide_ys()
+            for gy in (g for g in (top_guide, bot_guide) if g is not None):
+                lp = self._to_lbl(0, gy)
+                active = (gy in self._active_h_guides) or (
+                    not self._drawing and cur is not None
+                    and abs(cur.y() - gy) <= thresh
+                )
+                p.setPen(QPen(QColor(_COLOUR_GUIDE), 2 if active else 1, Qt.SolidLine))
+                p.drawLine(0, lp.y(), self.width(), lp.y())
+
+            # vertical gap guide — dashed
+            v_guide = self._v_guide_x()
+            if v_guide is not None:
+                lp = self._to_lbl(v_guide, 0)
+                active = (self._active_v_guide == v_guide) or (
+                    not self._drawing and cur is not None
+                    and abs(cur.x() - v_guide) <= thresh
+                )
+                p.setPen(QPen(QColor(_COLOUR_GUIDE), 2 if active else 1, Qt.DashLine))
+                p.drawLine(lp.x(), 0, lp.x(), self.height())
+
+            # width suggestion guides — dashed, only during drag
+            if self._drawing and self._p0_vid is not None:
+                avg_w = self._avg_width()
+                if avg_w is not None:
+                    cur_x = self._to_vid(self._p1).x() if self._p1 else None
+                    for wx in (self._p0_vid.x() + avg_w, self._p0_vid.x() - avg_w):
+                        if not (0 <= wx <= self._vw):
+                            continue
+                        lp = self._to_lbl(wx, 0)
+                        active = cur_x is not None and abs(cur_x - wx) <= thresh
+                        p.setPen(QPen(QColor(_COLOUR_GUIDE), 2 if active else 1, Qt.DashLine))
+                        p.drawLine(lp.x(), 0, lp.x(), self.height())
+
+        # ── confirmed ROIs ────────────────────────────────────────────────
         for idx, (x0, y0, x1, y1) in enumerate(self._rois):
             colour = _VIAL_COLOURS[idx % len(_VIAL_COLOURS)]
             a = self._to_lbl(x0, y0)
@@ -172,7 +345,7 @@ class _MultiROICanvas(QLabel):
             p.setPen(QColor(colour))
             p.drawText(a.x() + 6, a.y() + 20, str(idx + 1))
 
-        # In-progress drag — dashed peach
+        # ── in-progress drag — dashed peach ──────────────────────────────
         if self._drawing and self._p0 and self._p1:
             p.setPen(QPen(QColor("#fab387"), 2, Qt.DashLine))
             p.drawRect(QRect(self._p0, self._p1).normalized())
@@ -189,33 +362,53 @@ class _MultiROICanvas(QLabel):
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
             self._drawing = True
-            self._p0 = self._p1 = e.pos()
+            v0 = self._to_vid(e.pos())
+            # snap anchor x to gap guide once at press time — never again
+            v0, self._active_v_guide = self._snap_on_press(v0)
+            self._p0_vid = v0
+            self._p0     = self._to_lbl(v0.x(), v0.y())
+            self._p1     = self._p0
+            self._active_h_guides = []
 
     def mouseMoveEvent(self, e):
+        self._cursor_vid = self._to_vid(e.pos())
         if self._drawing:
-            self._p1 = e.pos()
-            self._repaint()
+            v1 = self._cursor_vid
+            v1, self._active_h_guides = self._snap_on_move(v1)
+            self._p1 = self._to_lbl(v1.x(), v1.y())
+            # _p0 / _p0_vid are never touched here
+        self._repaint()
+
+    def leaveEvent(self, e):
+        self._cursor_vid = None
+        self._repaint()
 
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.LeftButton and self._drawing:
             self._drawing = False
-            v0 = self._to_vid(self._p0)
-            v1 = self._to_vid(self._p1)
-            x0, x1 = sorted([v0.x(), v1.x()])
-            y0, y1 = sorted([v0.y(), v1.y()])
-            if x1 - x0 > 5 and y1 - y0 > 5:   # ignore accidental single clicks
+            v1 = self._to_vid(e.pos())
+            v1, _ = self._snap_on_move(v1)
+            x0, x1 = sorted([self._p0_vid.x(), v1.x()])
+            y0, y1 = sorted([self._p0_vid.y(), v1.y()])
+            if x1 - x0 > 5 and y1 - y0 > 5:
                 self._rois.append((x0, y0, x1, y1))
                 self.rois_changed.emit(self._rois)
-            self._p0 = self._p1 = None
+            self._active_h_guides = []
+            self._active_v_guide  = None
+            self._p0 = self._p1 = self._p0_vid = None
             self._repaint()
 
 
 # ─── Dialog ───────────────────────────────────────────────────────────────────
 
 class _VialROIDialog(QDialog):
-    def __init__(self, frame_bgr: np.ndarray, n_vials: int, parent=None):
+    def __init__(self, frame_bgr: np.ndarray, n_vials: int,
+                 snap_threshold_pct: float, snap_enabled: bool,
+                 parent=None):
         super().__init__(parent)
         self.n_vials = n_vials
+        self._snap_threshold_pct = snap_threshold_pct
+        self._snap_enabled       = snap_enabled
         self._build()
         self.canvas.set_frame(frame_bgr)
 
@@ -238,14 +431,15 @@ class _VialROIDialog(QDialog):
         hdr.setObjectName("header")
         root.addWidget(hdr)
 
-        self.canvas = _MultiROICanvas()
+        self.canvas = _MultiROICanvas(self._snap_threshold_pct,
+                                      self._snap_enabled)
         self.canvas.rois_changed.connect(self._on_rois_changed)
+        self.canvas.snap_toggled.connect(self._on_snap_toggled)
         root.addWidget(self.canvas, 1)
 
-        self.status_lbl = QLabel(
-            f"0 / {self.n_vials} ROIs drawn  —  drag to add"
-        )
+        self.status_lbl = QLabel()
         self.status_lbl.setObjectName("status")
+        self._refresh_status(0)
         root.addWidget(self.status_lbl)
 
         btn_row = QHBoxLayout()
@@ -264,12 +458,27 @@ class _VialROIDialog(QDialog):
         btn_row.addWidget(self.btn_done)
         root.addLayout(btn_row)
 
+    def _snap_badge(self) -> str:
+        return "[snap ON]" if self.canvas.snap_enabled else "[snap OFF]"
+
+    def _refresh_status(self, n: int) -> None:
+        if n == self.n_vials:
+            action = "ready"
+        else:
+            action = "drag to add"
+        self.status_lbl.setText(
+            f"{n} / {self.n_vials} ROIs drawn  —  {action}"
+            f"    {self._snap_badge()}  (S to toggle)"
+        )
+
     def _on_rois_changed(self, rois: list) -> None:
         n = len(rois)
-        suffix = "  —  ready" if n == self.n_vials else "  —  drag to add"
-        self.status_lbl.setText(f"{n} / {self.n_vials} ROIs drawn{suffix}")
+        self._refresh_status(n)
         self.btn_done.setEnabled(n == self.n_vials)
         self.btn_undo.setEnabled(n > 0)
+
+    def _on_snap_toggled(self, enabled: bool) -> None:
+        self._refresh_status(len(self.canvas.get_rois()))
 
     def keyPressEvent(self, e) -> None:
         if e.key() in (Qt.Key_Return, Qt.Key_Enter):
@@ -281,6 +490,8 @@ class _VialROIDialog(QDialog):
             self.canvas.undo()
         elif e.key() == Qt.Key_R:
             self.canvas.reset()
+        elif e.key() == Qt.Key_S:
+            self.canvas.toggle_snap()
         else:
             super().keyPressEvent(e)
 
@@ -328,7 +539,11 @@ def draw_and_save_vial_rois(
 
     app = QApplication.instance() or QApplication(sys.argv)
 
-    dlg      = _VialROIDialog(frame, n_vials)
+    cfg               = _roi_cfg()
+    snap_threshold_pct = cfg.get("snap_threshold_pct", 0.02)
+    snap_enabled       = cfg.get("snap_enabled", True)
+
+    dlg      = _VialROIDialog(frame, n_vials, snap_threshold_pct, snap_enabled)
     accepted = dlg.exec_()
 
     if not accepted:

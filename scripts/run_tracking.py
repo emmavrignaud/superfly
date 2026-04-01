@@ -31,6 +31,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from utils import save_run_params
+
 
 def load_config(config_path: str) -> dict:
     with open(config_path) as f:
@@ -72,6 +74,8 @@ def main():
     cfg = load_config(str(config_path))
     args = build_parser(cfg).parse_args()
 
+    import cv2
+    import json
     from src.preprocessing import preprocess_bgsub_gui
     from src.tracking import export_tracks_xy_tuple_csv_one_config
     from src.roi import draw_and_save_vial_rois
@@ -79,6 +83,24 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     video_path = args.video
+
+    # persist config + video metadata on first call (writes timestamp + git)
+    cap = cv2.VideoCapture(video_path)
+    save_run_params(args.output_dir, "config", {
+        "video": video_path,
+        "video_fps": cap.get(cv2.CAP_PROP_FPS),
+        "video_width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+        "video_height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+        "video_frames": int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
+        "tracker": {
+            "confidence": args.confidence,
+            "lost_track_buffer": args.lost_track_buffer,
+            "min_matching_threshold": args.min_matching_threshold,
+            "min_consecutive_frames": args.min_consecutive_frames,
+            "asso_func": args.asso_func,
+        },
+    })
+    cap.release()
 
     # ------------------------------------------------------------------
     # Stage 1 (optional): background subtraction
@@ -91,13 +113,15 @@ def main():
             out_mp4=pp_out,
         )
         print(f"Preprocessed video: {video_path}")
+    save_run_params(args.output_dir, "preprocessing", {"video_pp": video_path})
 
     # ------------------------------------------------------------------
     # Stage 2: draw vial ROIs
     # ------------------------------------------------------------------
     roi_json = os.path.join(args.output_dir, "vial_rois.json")
     print("\n=== Stage 2: Draw vial ROIs ===")
-    draw_and_save_vial_rois(video_path=video_path, roi_json_path=roi_json)
+    vials = draw_and_save_vial_rois(video_path=video_path, roi_json_path=roi_json)
+    save_run_params(args.output_dir, "roi", {k: list(v) for k, v in vials.items()})
 
     # ------------------------------------------------------------------
     # Stage 3: track
@@ -117,6 +141,11 @@ def main():
         asso_func=args.asso_func,
     )
     print(f"  shape: {df.shape}")
+    save_run_params(args.output_dir, "tracker_output", {
+        "wide_csv": wide_csv,
+        "frames": int(df.shape[0]),
+        "track_count": int(df.shape[1] - 1),
+    })
     print("\nDone. Run scripts/run_stitching.py to continue.")
 
 
