@@ -274,6 +274,20 @@ class OCSort(object):
         self.use_byte = use_byte
         KalmanBoxTracker.count = 0
 
+        # --- Diagnostics ---
+        # detection_log: one entry per frame — (frame_idx, n_detections, n_emitted)
+        #   n_detections = raw boxes above det_thresh passed to the tracker
+        #   n_emitted    = tracks returned to the caller (survived min_hits gate)
+        #   gap between the two = signal suppressed by min_hits or lost in association
+        self.detection_log = []
+
+        # suppressed_tracks: trackers that died (max_age exceeded) before ever reaching min_hits.
+        #   These are real detections the tracker saw but silently discarded —
+        #   short fragments that never made it into the CSV.
+        #   Each entry contains the full (frame, cx, cy) trajectory so they can be
+        #   plotted alongside emitted tracks in diagnostics.
+        self.suppressed_tracks = []
+
     def update(self, output_results, img_info, img_size):
         """
         Params:
@@ -304,6 +318,7 @@ class OCSort(object):
         dets_second = dets[inds_second]  # detections for second matching
         remain_inds = scores > self.det_thresh
         dets = dets[remain_inds]
+        n_dets = len(dets)  # raw detection count this frame, logged at the end
 
         # get predicted locations from existing trackers.
         trks = np.zeros((len(self.trackers), 5))
@@ -404,7 +419,29 @@ class OCSort(object):
             i -= 1
             # remove dead tracklet
             if(trk.time_since_update > self.max_age):
+                # if this tracker never reached min_hits it was never emitted —
+                # save it to the graveyard so diagnostics can see what was lost
+                if trk.hits < self.min_hits:
+                    frame_born = self.frame_count - trk.age
+                    # compute (frame, cx, cy) for each observation in order
+                    # history_observations is a list of raw bboxes [x1,y1,x2,y2,score]
+                    # we pair them with frame numbers using the known birth frame
+                    xy = []
+                    for obs_i, bbox in enumerate(trk.history_observations):
+                        cx = (bbox[0] + bbox[2]) / 2.0
+                        cy = (bbox[1] + bbox[3]) / 2.0
+                        xy.append((frame_born + obs_i, cx, cy))
+                    self.suppressed_tracks.append({ #adding the detections that were too short to be a track
+                        "id":         trk.id,
+                        "hits":       trk.hits,
+                        "frame_born": frame_born,
+                        "frame_died": self.frame_count,
+                        "xy":         xy,   # [(frame, cx, cy), ...]
+                    })
                 self.trackers.pop(i)
+
+        self.detection_log.append((self.frame_count, n_dets, len(ret))) #now we are adding the number of detections
+
         if(len(ret) > 0):
             return np.concatenate(ret)
         return np.empty((0, 5))

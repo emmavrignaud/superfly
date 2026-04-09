@@ -7,3 +7,5 @@ data/annotations/*
 data/tracked_videos/*
 media/plotly/*
 media/html/*
+venv/
+outputs/
