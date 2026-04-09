@@ -10,8 +10,16 @@ import cv2
 import numpy as np
 import pandas as pd
 import supervision as sv
-from inference import get_model
-from boxmot import OcSort
+
+# We now import OCSort locally instead of from boxmot.
+# The three files that make up the tracker were downloaded from the OC-SORT repo:
+#   - src/kalmanfilter.py  — Kalman filter (replaces the filterpy dependency)
+#   - src/association.py   — IoU variants + linear assignment
+#   - src/ocsort.py        — the tracker class itself
+# hmiou was not in the original OC-SORT; we copied it from boxmot and added it to association.py.
+#
+# inference and OCSort are imported inside the function to avoid loading PyTorch
+# at import time — torch pulls in heavy DLLs that can fail in some environments.
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 
@@ -43,7 +51,14 @@ def export_tracks_xy_tuple_csv_one_config(
 
     Returns the DataFrame that was saved.
     """
-    model = get_model(model_id=model_id, api_key=api_key)
+    # inference_sdk calls the Roboflow API over HTTP — no local torch/GPU needed.
+    from inference_sdk import InferenceHTTPClient
+    from .ocsort import OCSort
+
+    client = InferenceHTTPClient(
+        api_url="https://detect.roboflow.com",
+        api_key=api_key,
+    )
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -53,7 +68,7 @@ def export_tracks_xy_tuple_csv_one_config(
     if fps_assumed is None:
         fps_assumed = float(fps) if fps and fps > 0 else 30.0
 
-    tracker = OcSort(
+    tracker = OCSort(
         det_thresh=confidence,
         max_age=lost_track_buffer,
         min_hits=minimum_consecutive_frames,
@@ -76,8 +91,8 @@ def export_tracks_xy_tuple_csv_one_config(
         if not ok:
             break
 
-        results = model.infer(frame, confidence=confidence)[0]
-        dets = sv.Detections.from_inference(results)
+        result = client.infer(frame, model_id=model_id)
+        dets = sv.Detections.from_inference(result)
 
         frame_row = {"frame": frame_idx}
 
@@ -85,10 +100,10 @@ def export_tracks_xy_tuple_csv_one_config(
             det_array = np.hstack([
                 dets.xyxy,
                 dets.confidence[:, None],
-                dets.class_id[:, None],
             ])
 
-            tracks = tracker.update(det_array, frame)
+            img_h, img_w = frame.shape[:2]
+            tracks = tracker.update(det_array, [img_h, img_w], [img_h, img_w])
 
             if tracks is not None and len(tracks) > 0:
                 if tracks.ndim == 1:
