@@ -9,3 +9,4 @@ media/plotly/*
 media/html/*
 venv/
 outputs/
+creds_config.yaml

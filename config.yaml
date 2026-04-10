@@ -2,18 +2,18 @@
 # See scripts/run_tracking.py --help and scripts/run_classification.py --help.
 
 tracker:
-  confidence: 0.10
+  confidence: 0.03
   track_activation_threshold: 0.10
-  lost_track_buffer: 90          # max frames a track can be lost before being dropped
-  minimum_matching_threshold: 0.01
-  minimum_consecutive_frames: 10
+  lost_track_buffer: 180         # max frames a track can be lost before being dropped
+  minimum_matching_threshold: 0.2
+  minimum_consecutive_frames: 3
   min_area: 40                   # px^2; detections smaller than this are ignored
   asso_func: diou               # association function: hmiou (recommended) or iou
 
 stitching:
   stitching_mode: per_vial       # per_vial: stitch within each vial independently | general: stitch across all vials (cross-vial links still forbidden)
-  vial_count_cap: 10             # per_vial mode: stop when active IDs per vial ≤ this
-  general_count_cap: 100          # general mode: stop when total active IDs ≤ this
+  vial_count_cap: 7             # per_vial mode: stop when active IDs per vial ≤ this
+  general_count_cap: 56          # general mode: stop when total active IDs ≤ this
   fps: 30
   pause_threshold: 1.0
   edge_fraction: 0.10

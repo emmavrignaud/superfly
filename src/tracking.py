@@ -42,14 +42,17 @@ def export_tracks_xy_tuple_csv_one_config(
     bottom_start_frac: float = 0.75,
     min_area: float | None = 40,
     asso_func: str = "hmiou",
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, object]:
     """
     Run RF-DETR + OC-SORT for one configuration and write a wide CSV where:
       - rows    = frame index
       - columns = track IDs  (id{N})
       - cells   = "(x, y)" centre of bbox, or empty if not present
 
-    Returns the DataFrame that was saved.
+    Returns (df, tracker):
+      df      — the wide-format DataFrame that was saved to CSV
+      tracker — the OCSort object, which carries tracker.detection_log and
+                tracker.suppressed_tracks for diagnostics (see src/metrics.py)
     """
     # inference_sdk calls the Roboflow API over HTTP — no local torch/GPU needed.
     from inference_sdk import InferenceHTTPClient
@@ -128,4 +131,4 @@ def export_tracks_xy_tuple_csv_one_config(
     df = df.reindex(columns=["frame"] + id_cols)
     df.to_csv(output_csv, index=False, na_rep="")
     print(f"Saved: {output_csv}  (frames={len(df)}, tracks={len(id_cols)})")
-    return df
+    return df, tracker
