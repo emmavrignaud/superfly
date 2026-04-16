@@ -10,3 +10,4 @@ media/html/*
 venv/
 outputs/
 creds_config.yaml
+ignore_mds/
