@@ -48,5 +48,5 @@ visualization:
   show_ids: true
 
 roi:
-  snap_threshold_pct: 0.02   # snap zone as a fraction of the last drawn box height
+  snap_threshold_pct: 0.01   # snap zone as a fraction of the last drawn box height
   snap_enabled: true          # default on; press S in the GUI to toggle per-vial
