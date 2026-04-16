@@ -146,10 +146,14 @@ class KalmanBoxTracker(object):
     _H = np.array([[1, 0, 0, 0, 0, 0, 0], [0, 1, 0, 0, 0, 0, 0],
                         [0, 0, 1, 0, 0, 0, 0], [0, 0, 0, 1, 0, 0, 0]], dtype=np.float64)
 
-    def __init__(self, bbox, delta_t=3, orig=False):
+    def __init__(self, bbox, delta_t=3, orig=False, brownian_pos_noise=1.0):
         """
         Initialises a tracker using initial bounding box.
 
+        brownian_pos_noise : scale factor applied to Q[cx] and Q[cy].
+            1.0 = original behaviour.
+            Higher values let the filter tolerate larger positional deviations
+            per frame (e.g. saccades), reducing spurious ID switches.
         """
         # define constant velocity model
         if not orig:
@@ -163,8 +167,34 @@ class KalmanBoxTracker(object):
         self.kf.R[2:, 2:] *= 10.
         self.kf.P[4:, 4:] *= 1000.  # give high uncertainty to the unobservable initial velocities
         self.kf.P *= 10.
+
+        # Q is the process noise covariance matrix — it describes how much each
+        # state variable [cx, cy, s, r, vx, vy, vs] is expected to deviate from
+        # the model's prediction in a single frame due to unpredictable motion.
+        # Each diagonal entry Q[i,i] is the variance for one variable:
+        #   Q[0,0] = uncertainty in cx (x position)
+        #   Q[1,1] = uncertainty in cy (y position)
+        #   Q[2,2] = uncertainty in s  (scale/area)
+        #   Q[3,3] = uncertainty in r  (aspect ratio)
+        #   Q[4,4] = uncertainty in vx, Q[5,5] = vy, Q[6,6] = vs (velocities)
+        # Off-diagonal entries would capture correlated noise between variables;
+        # we leave them at zero (independent noise per dimension).
+        #
+        # Velocities are set very low (0.01) — the filter trusts its velocity
+        # estimate and assumes the fly mostly maintains constant speed/direction.
         self.kf.Q[-1, -1] *= 0.01
         self.kf.Q[4:, 4:] *= 0.01
+
+        # brownian_pos_noise scales the x and y position uncertainty.
+        # At 1.0 the filter expects ~1px of unexplained deviation per frame.
+        # Higher values (e.g. 5.0) widen the tolerance for sudden direction
+        # changes (saccades): the prediction uncertainty grows faster, so a
+        # detection further from the prediction can still be matched to the
+        # same track instead of spawning a new ID.
+        # Only cx and cy are scaled — association happens in pixel space and
+        # saccades are positional failures, not size or velocity failures.
+        self.kf.Q[0, 0] *= brownian_pos_noise  # cx
+        self.kf.Q[1, 1] *= brownian_pos_noise  # cy
 
         self.kf.x[:4] = convert_bbox_to_z(bbox)
         self.time_since_update = 0
@@ -257,8 +287,9 @@ ASSO_FUNCS = {  "iou": iou_batch,
 
 
 class OCSort(object):
-    def __init__(self, det_thresh, max_age=30, min_hits=3, 
-        iou_threshold=0.3, delta_t=3, asso_func="iou", inertia=0.2, use_byte=False):
+    def __init__(self, det_thresh, max_age=30, min_hits=3,
+        iou_threshold=0.3, delta_t=3, asso_func="iou", inertia=0.2, use_byte=False,
+        brownian_pos_noise=1.0):
         """
         Sets key parameters for SORT
         """
@@ -272,6 +303,7 @@ class OCSort(object):
         self.asso_func = ASSO_FUNCS[asso_func]
         self.inertia = inertia
         self.use_byte = use_byte
+        self.brownian_pos_noise = brownian_pos_noise
         KalmanBoxTracker.count = 0
 
         # --- Diagnostics ---
@@ -401,7 +433,8 @@ class OCSort(object):
 
         # create and initialise new trackers for unmatched detections
         for i in unmatched_dets:
-            trk = KalmanBoxTracker(dets[i, :], delta_t=self.delta_t)
+            trk = KalmanBoxTracker(dets[i, :], delta_t=self.delta_t,
+                                   brownian_pos_noise=self.brownian_pos_noise)
             self.trackers.append(trk)
         i = len(self.trackers)
         for trk in reversed(self.trackers):

@@ -437,7 +437,8 @@ def preprocess_bgsub_gui(
     codec: str | None = None,
     bg_sample_stride: int | None = None,
     bg_percentile: float | None = None,
-) -> str:
+    crop_params: dict | None = None,
+) -> tuple[str, dict]:
     """
     GUI-driven ROI/range selection + temporal-median background subtraction.
 
@@ -459,7 +460,17 @@ def preprocess_bgsub_gui(
       - If out_mp4 is None:  "<same folder>/<stem>_pp.<ext>"
       - Otherwise writes to the given path (parent dir created if needed).
 
-    Returns the output mp4 path as a string.
+    Parameters
+    ----------
+    crop_params : optional dict with keys x, y, w, h, start, end.
+        If provided, skips the GUI and uses these values directly.
+        Use this when re-running a video whose crop region is already known
+        (e.g. loaded from the ROI library).
+
+    Returns
+    -------
+    (out_mp4_path, crop_params) where crop_params is a dict:
+        {"x": int, "y": int, "w": int, "h": int, "start": int, "end": int}
     """
     cfg = _preprocessing_cfg()
     if default_end    is None: default_end    = cfg.get("default_end",      700)
@@ -470,7 +481,12 @@ def preprocess_bgsub_gui(
     if bg_percentile  is None: bg_percentile  = cfg.get("bg_percentile",  85.0)
 
     video_path = str(video_path)
-    x, y, w, h, start, end_excl = gui_pick_roi_and_range(video_path, default_end=default_end)
+    if crop_params is not None:
+        x, y, w, h = crop_params["x"], crop_params["y"], crop_params["w"], crop_params["h"]
+        start, end_excl = crop_params["start"], crop_params["end"]
+        print(f"Using stored crop params: x={x}, y={y}, w={w}, h={h}, frames={start}–{end_excl}")
+    else:
+        x, y, w, h, start, end_excl = gui_pick_roi_and_range(video_path, default_end=default_end)
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -537,7 +553,7 @@ def preprocess_bgsub_gui(
     writer.release()
     print("Saved bgsub video:", out_mp4)
     print(f"Background ({bg_percentile}th percentile) from {len(bg_frames)} frames (stride={bg_sample_stride}).")
-    return out_mp4
+    return out_mp4, {"x": x, "y": y, "w": w, "h": h, "start": start, "end": end_excl}
 
 
 
