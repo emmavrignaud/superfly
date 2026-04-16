@@ -437,6 +437,62 @@ def plot_coverage_comparison(df_wide, df_stitched, ax=None):
 
 
 # ---------------------------------------------------------------------------
+# Stage 3 — Stitching duplicate check
+# ---------------------------------------------------------------------------
+
+def compute_stitch_duplicate_stats(df_stitched, vial_rois=None):
+    """
+    Check the stitched output for (frame, stitched_id) duplicates.
+
+    A duplicate means two rows share the same frame and stitched_id —
+    i.e. one stitched fly has two recorded positions in one frame.
+    Expected to be 0 after the chain_end_frames fix in stitching.py.
+
+    Parameters
+    ----------
+    df_stitched : stitched long-format DataFrame with columns (frame, stitched_id, x, y)
+    vial_rois   : optional dict {vial_id: (x0, y0, x1, y1)} — used to label
+                  which vial each duplicated stitched_id belongs to
+
+    Returns
+    -------
+    dict with keys:
+      n_duplicate_ids    : number of stitched_ids that appear twice in the same frame
+      n_duplicate_frames : total (frame, stitched_id) pairs that have >1 row
+      details            : list of {stitched_id, vial_id, n_frames} sorted by n_frames desc
+    """
+    dupes = df_stitched[df_stitched.duplicated(subset=["frame", "stitched_id"], keep=False)]
+    if dupes.empty:
+        return {"n_duplicate_ids": 0, "n_duplicate_frames": 0, "details": []}
+
+    def _vial_for(x, y):
+        if not vial_rois:
+            return "?"
+        for vial_id, (x0, y0, x1, y1) in vial_rois.items():
+            if x0 <= x <= x1 and y0 <= y <= y1:
+                return vial_id
+        return "?"
+
+    id_vial = {
+        sid: _vial_for(grp["x"].iloc[0], grp["y"].iloc[0])
+        for sid, grp in df_stitched.groupby("stitched_id")
+    }
+
+    summary      = dupes.groupby("stitched_id")["frame"].nunique()
+    total_frames = int(dupes.drop_duplicates(subset=["frame", "stitched_id"]).shape[0])
+    details      = [
+        {"stitched_id": str(sid), "vial_id": id_vial.get(sid, "?"), "n_frames": int(n)}
+        for sid, n in summary.sort_values(ascending=False).items()
+    ]
+
+    return {
+        "n_duplicate_ids":    len(details),
+        "n_duplicate_frames": total_frames,
+        "details":            details,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -473,6 +529,8 @@ def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
     stats = compute_tracker_stats(tracker, df_wide)
     summary_text = print_tracker_summary(stats, tracker, n_expected)
 
+    dup_stats = compute_stitch_duplicate_stats(df_stitched, vial_rois) if df_stitched is not None else None
+
     # --- XY trajectory plots: raw tracker IDs vs compact IDs side by side ---
     if df_compact is not None:
         fig_xy, (ax_raw, ax_compact) = plt.subplots(1, 2, figsize=(20, 8))
@@ -500,12 +558,12 @@ def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
 
     # --- save report if output_dir given ---
     if output_dir is not None:
-        _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline)
+        _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline, dup_stats)
 
     plt.show()
 
 
-def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline):
+def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline, dup_stats=None):
     """
     Save the two diagnostic figures as PNGs and write a metrics_report.md
     that embeds them alongside the text summary and config.
@@ -537,6 +595,22 @@ def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline):
     md.append("```")
     md.append(summary_text)
     md.append("```\n")
+
+    md.append("## Stitching Duplicate Check\n")
+    if dup_stats is not None:
+        n_ids    = dup_stats["n_duplicate_ids"]
+        n_frames = dup_stats["n_duplicate_frames"]
+        if n_ids == 0:
+            md.append("**0 duplicate (frame, stitched_id) pairs — clean.**\n")
+        else:
+            md.append(f"**{n_ids} stitched_id(s) had duplicates across {n_frames} frame(s).**\n")
+            md.append("| stitched_id | vial | affected frames |")
+            md.append("|---|---|---|")
+            for d in dup_stats["details"]:
+                md.append(f"| {d['stitched_id']} | {d['vial_id']} | {d['n_frames']} |")
+            md.append("")
+    else:
+        md.append("_Stitched output not provided — duplicate check skipped._\n")
 
     md.append("## XY Trajectories\n")
     md.append("![XY Trajectories](metrics_xy_trajectories.png)\n")

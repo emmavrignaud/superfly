@@ -686,9 +686,10 @@ def link_score(
  
  
 def build_cost_matrix(
-    tracklets:  List[Tracklet],
-    vial_rois:  Dict[str, Tuple[int, int, int, int]],
-    debug_path: Optional[str] = None,
+    tracklets:        List[Tracklet],
+    vial_rois:        Dict[str, Tuple[int, int, int, int]],
+    chain_end_frames: Optional[Dict[str, int]] = None,
+    debug_path:       Optional[str] = None,
 ) -> np.ndarray:
     """
     Build an N×N cost matrix over a list of tracklets.
@@ -699,6 +700,11 @@ def build_cost_matrix(
     dissimilarity) grow naturally with gap size and mismatch — no
     hard gap or score cap is applied here.
 
+    chain_end_frames : if provided, maps each root orig_id to the maximum
+        end_frame across all tracklets currently in its chain.  Used in
+        round 2+ so the overlap check reflects the full chain, not just
+        the root tracklet's own end_frame.
+
     If debug_path is set, saves the matrix as a CSV (BIG cells → NaN,
     rows/cols labelled by orig_id) for inspection.
     """
@@ -708,7 +714,8 @@ def build_cost_matrix(
 
     for i, A in enumerate(tracklets):
         for j, B in enumerate(tracklets):
-            if i == j or A.end_frame >= B.start_frame:
+            a_chain_end = chain_end_frames.get(A.orig_id, A.end_frame) if chain_end_frames else A.end_frame
+            if i == j or a_chain_end >= B.start_frame:
                 continue
             if _find_vial(A.start_xy, vial_rois) != _find_vial(B.start_xy, vial_rois):
                 continue  # never link tracklets across vials
@@ -862,7 +869,15 @@ def _run_assignment_round(
     if len(roots) <= 1:
         return frozen_mapping
 
-    C = build_cost_matrix(roots, vial_rois, debug_path=debug_path)
+    # Effective end_frame for each root = max end_frame across all chain members.
+    # Prevents round 2+ from linking a root to a tracklet that overlaps with a
+    # non-root tail of the same chain (the root's own end_frame would be stale).
+    chain_end_frames: Dict[str, int] = {}
+    for t in tracklets:
+        root_id = frozen_mapping.get(t.orig_id, t.orig_id)
+        chain_end_frames[root_id] = max(chain_end_frames.get(root_id, 0), t.end_frame)
+
+    C = build_cost_matrix(roots, vial_rois, chain_end_frames=chain_end_frames, debug_path=debug_path)
     matches = _solve_hungarian(C)
 
     if not matches:
@@ -880,8 +895,33 @@ def _run_assignment_round(
             updated[orig_id] = new_root
 
     return updated
- 
- 
+
+
+# ---------------------------------------------------------------------------
+# Duplicate reporting
+# ---------------------------------------------------------------------------
+
+def _report_duplicates(
+    out: pd.DataFrame,
+    stitched_id_to_vial: Optional[Dict[str, str]] = None,
+) -> None:
+    """
+    Print a succinct summary of (frame, stitched_id) duplicates in the output.
+    Expected to be 0 after the chain_end_frames fix.
+    """
+    dupes = out[out.duplicated(subset=["frame", "stitched_id"], keep=False)]
+    if dupes.empty:
+        print("  Duplicate check: 0 duplicate (frame, stitched_id) pairs — clean.")
+        return
+
+    summary = dupes.groupby("stitched_id")["frame"].nunique().sort_values(ascending=False)
+    total_frames = int(dupes.drop_duplicates(subset=["frame", "stitched_id"]).shape[0])
+    print(f"  Duplicate check: {len(summary)} stitched_id(s) had duplicates across {total_frames} frame(s)")
+    for sid, n_frames in summary.items():
+        vial_str = f" ({stitched_id_to_vial[sid]})" if stitched_id_to_vial and sid in stitched_id_to_vial else ""
+        print(f"    {sid}{vial_str}: {n_frames} affected frame(s)")
+
+
 def stitch_per_vial(
     long_df:    pd.DataFrame,
     vial_rois:  Dict[str, Tuple[int, int, int, int]],
@@ -971,6 +1011,14 @@ def stitch_per_vial(
     out = long_df.copy()
     out["stitched_id"] = out["orig_id"].map(global_mapping).fillna(out["orig_id"])
 
+    # Build vial lookup for duplicate report
+    stitched_id_to_vial: Dict[str, str] = {}
+    for vial_id, vt in vial_tracklets.items():
+        for t in vt:
+            root = global_mapping.get(t.orig_id, t.orig_id)
+            stitched_id_to_vial.setdefault(root, vial_id)
+
+    _report_duplicates(out, stitched_id_to_vial)
     return out
 
 
@@ -1035,6 +1083,15 @@ def stitch_general(
 
     out = long_df.copy()
     out["stitched_id"] = out["orig_id"].map(mapping).fillna(out["orig_id"])
+
+    stitched_id_to_vial: Dict[str, str] = {}
+    for t in tracklets:
+        root = mapping.get(t.orig_id, t.orig_id)
+        vial = _assign_to_vial(t.start_xy, vial_rois)
+        if vial:
+            stitched_id_to_vial.setdefault(root, vial)
+
+    _report_duplicates(out, stitched_id_to_vial)
     return out
 
 
