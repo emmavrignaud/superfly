@@ -25,8 +25,12 @@ import argparse
 import json
 import os
 import sys
+import types
 import yaml
 from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")  # headless backend — must precede any pyplot import
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -142,6 +146,32 @@ def main():
     )
     print_stitching_objectives(objectives)
     save_run_params(args.output_dir, "stitching_objectives", {k: float(v) for k, v in objectives.items()})
+
+    # ------------------------------------------------------------------
+    # Metrics report (requires tracker_log.json saved by run_tracking.py)
+    # ------------------------------------------------------------------
+    tracker_log_path = os.path.join(args.output_dir, "tracker_log.json")
+    if os.path.exists(tracker_log_path):
+        from src.metrics import run_diagnostics
+        with open(tracker_log_path) as _f:
+            _tl = json.load(_f)
+        mock_tracker = types.SimpleNamespace(**_tl)
+        df_wide = pd.read_csv(wide_csv)
+        run_diagnostics(
+            tracker=mock_tracker,
+            df_wide=df_wide,
+            df_stitched=stitched_df,
+            df_compact=df,
+            n_expected=s.get("expected_per_vial", 7) * len(vial_rois),
+            fps=fps,
+            vial_rois=vial_rois,
+            config=cfg,
+            output_dir=args.output_dir,
+            stitching_objectives=objectives,
+        )
+        print(f"  Metrics report: {os.path.join(args.output_dir, 'metrics_report.md')}")
+    else:
+        print("  tracker_log.json not found — skipping metrics report (run via run_tracking.py to generate it)")
 
     # ------------------------------------------------------------------
     # Stage 6 (optional): overlay videos

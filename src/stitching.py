@@ -610,7 +610,7 @@ def link_score(
         dir_heading = _angle_diff(gap_direction, expected_dir) / 180.0
         w_hg        = weights['direction_weights']['heading_vs_gap']
         w_oo        = weights['direction_weights']['overall_vs_overall']
-        direction_term = float((w_hg * dir_heading + w_oo * dir_overall) / (w_hg + w_oo))
+        direction_term = float((w_hg * dir_heading + w_oo * dir_overall) / (1+ w_hg + w_oo))
     else:
         direction_term = float(dir_overall)
 

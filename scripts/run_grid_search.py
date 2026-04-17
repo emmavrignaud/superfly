@@ -167,7 +167,10 @@ def plot_results(results_df: pd.DataFrame, short_name: str, out_html: str) -> No
     Plotly line plot: configs on x-axis sorted by vial_count_error (primary objective),
     one line per objective showing raw values.
     """
-    df = results_df.sort_values("vial_count_error").reset_index(drop=True)
+    # Baseline row (pre-stitch) pinned to x=0; configs sorted by vial_count_error after it.
+    baseline = results_df[results_df["extrap"].isna()].copy()
+    configs  = results_df[results_df["extrap"].notna()].sort_values("vial_count_error").reset_index(drop=True)
+    df = pd.concat([baseline, configs], ignore_index=True)
 
     obj_cols = ["vial_count_error", "per_id_coverage_loss", "short_track_count", "per_frame_id_variance"]
     labels = {
@@ -183,25 +186,33 @@ def plot_results(results_df: pd.DataFrame, short_name: str, out_html: str) -> No
         "per_frame_id_variance": "#9b59b6",
     }
 
-    fig = go.Figure()
-
-    for col in obj_cols:
-        hover = [
-            (
-                f"rank={i}<br>"
-                f"link: extrap={row['extrap']}  dir={row['direction']}  beh={row['behavioral']}<br>"
-                f"dir: h_gap={row['dir_heading_vs_gap']}  overall={row['dir_overall_vs_overall']}<br>"
-                f"beh: vel={row['beh_median_velocity']}  pause={row['beh_pause_fraction']}  "
-                f"turn={row['beh_mean_turning_angle']}  ang_vel={row['beh_mean_angular_velocity']}  "
-                f"accel={row['beh_mean_acceleration']}  n_ld={row['beh_n_large_displacements']}  "
-                f"tort={row['beh_tortuosity']}<br>"
+    def _hover(i: int, row: pd.Series) -> str:
+        if pd.isna(row["extrap"]):
+            return (
+                f"<b>PRE-STITCH (no stitching)</b><br>"
                 f"count_err={row['vial_count_error']:.1f}  "
                 f"cov_loss={row['per_id_coverage_loss']:.1f}  "
                 f"short={row['short_track_count']}  "
                 f"id_var={row['per_frame_id_variance']:.3f}"
             )
-            for i, row in df.iterrows()
-        ]
+        return (
+            f"rank={i}<br>"
+            f"link: extrap={row['extrap']}  dir={row['direction']}  beh={row['behavioral']}<br>"
+            f"dir: h_gap={row['dir_heading_vs_gap']}  overall={row['dir_overall_vs_overall']}<br>"
+            f"beh: vel={row['beh_median_velocity']}  pause={row['beh_pause_fraction']}  "
+            f"turn={row['beh_mean_turning_angle']}  ang_vel={row['beh_mean_angular_velocity']}  "
+            f"accel={row['beh_mean_acceleration']}  n_ld={row['beh_n_large_displacements']}  "
+            f"tort={row['beh_tortuosity']}<br>"
+            f"count_err={row['vial_count_error']:.1f}  "
+            f"cov_loss={row['per_id_coverage_loss']:.1f}  "
+            f"short={row['short_track_count']}  "
+            f"id_var={row['per_frame_id_variance']:.3f}"
+        )
+
+    fig = go.Figure()
+
+    for col in obj_cols:
+        hover = [_hover(i, row) for i, row in df.iterrows()]
         fig.add_trace(go.Scatter(
             x=list(range(len(df))),
             y=df[col],
@@ -215,10 +226,10 @@ def plot_results(results_df: pd.DataFrame, short_name: str, out_html: str) -> No
     fig.update_layout(
         title=(
             f"Stitching weight grid search — {short_name}<br>"
-            f"<sup>x-axis sorted by vial_count_error (ascending).  "
+            f"<sup>x=0 is pre-stitch baseline; x>0 sorted by vial_count_error (ascending).  "
             f"y-axis: raw objective values (lower is better)</sup>"
         ),
-        xaxis_title="Config rank (sorted by vial_count_error ascending)",
+        xaxis_title="Config rank (x=0: pre-stitch baseline; x>0: sorted by vial_count_error)",
         yaxis_title="Objective value (lower is better)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         hovermode="closest",
@@ -346,7 +357,6 @@ def main():
         print("  Weights check skipped — no non-overlapping tracklet pair found.")
     print()
 
-
     # --- Build search space ---
     link_combos = _link_score_grid(args.step)
     dir_combos  = _binary_combos(_DIR_KEYS, exclude_all_zero=True)
@@ -369,12 +379,36 @@ def main():
 
     n_before = long_df["orig_id"].nunique()
 
+    # --- Pre-stitch baseline ---
+    # Compute the four objectives on the raw tracklets (no stitching: orig_id = stitched_id).
+    # Written as the first row in the CSV and shown as x=0 in the plot.
+    _pre_df   = long_df.assign(stitched_id=long_df["orig_id"])
+    _pre_objs = compute_stitching_objectives(
+        df_stitched       = _pre_df,
+        vial_rois         = vial_rois,
+        num_frames        = num_frames,
+        expected_per_vial = args.expected_per_vial,
+        short_frac        = args.short_frac,
+    )
+    _nan = float("nan")
+    _baseline_row = {
+        "extrap":    _nan, "direction": _nan, "behavioral": _nan,
+        **{f"dir_{k}": _nan for k in _DIR_KEYS},
+        **{f"beh_{k}": _nan for k in _BEH_KEYS},
+        **_pre_objs,
+    }
+    print(
+        f"Pre-stitch baseline:  vial_count_error={_pre_objs['vial_count_error']:.1f}  "
+        f"cov_loss={_pre_objs['per_id_coverage_loss']:.1f}  "
+        f"short={_pre_objs['short_track_count']}  "
+        f"id_var={_pre_objs['per_frame_id_variance']:.3f}\n"
+    )
+
     # --- Resume: skip configs already in the results CSV ---
     # If the script was interrupted (laptop closed, crash, etc.), re-running it
     # automatically picks up from where it left off. We read all previously
     # completed config keys into a set and skip them in the loop below.
     # We open the file in append mode ("a") so new rows are added after existing ones.
-    # write_header=False because the header was already written in the original run.
     completed: set = set()
     if results_csv.exists():
         existing = pd.read_csv(results_csv)
@@ -384,7 +418,8 @@ def main():
         write_header = False
     else:
         out_f        = open(results_csv, "w", newline="", encoding="utf-8")
-        write_header = True
+        pd.DataFrame([_baseline_row]).to_csv(out_f, header=True, index=False)
+        write_header = False
 
     n_resumed = len(completed)   # configs already on disk from a previous run
     n_done    = 0                # configs evaluated in THIS run

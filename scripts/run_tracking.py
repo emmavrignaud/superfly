@@ -24,7 +24,9 @@ All parameters have defaults from config.yaml.  Use --help for full list.
 """
 
 import argparse
+import json
 import os
+import shutil
 import sys
 import yaml
 from pathlib import Path
@@ -75,12 +77,20 @@ def main():
     args = build_parser(cfg).parse_args()
 
     import cv2
-    import json
     from src.preprocessing import preprocess_bgsub_gui
     from src.tracking import export_tracks_xy_tuple_csv_one_config
     from src.roi import draw_and_save_vial_rois
+    from src.visualization import render_detections_video
 
     os.makedirs(args.output_dir, exist_ok=True)
+
+    # Copy/hardlink original video into the run folder (zero disk cost if same filesystem)
+    dest_video = os.path.join(args.output_dir, Path(args.video).name)
+    if not os.path.exists(dest_video):
+        try:
+            os.link(args.video, dest_video)
+        except OSError:
+            shutil.copy2(args.video, dest_video)
 
     video_path = args.video
 
@@ -105,15 +115,21 @@ def main():
     # ------------------------------------------------------------------
     # Stage 1 (optional): background subtraction
     # ------------------------------------------------------------------
+    crop_params = None
     if args.preprocess:
         print("\n=== Stage 1: Background subtraction ===")
         pp_out = os.path.join(args.output_dir, Path(args.video).stem + "_pp.mp4")
-        video_path = preprocess_bgsub_gui(
+        video_path, crop_params = preprocess_bgsub_gui(
             video_path=video_path,
             out_mp4=pp_out,
         )
         print(f"Preprocessed video: {video_path}")
-    save_run_params(args.output_dir, "preprocessing", {"video_pp": video_path})
+        crop_roi_json = os.path.join(args.output_dir, "crop_roi.json")
+        with open(crop_roi_json, "w") as _f:
+            json.dump(crop_params, _f, indent=2)
+        print(f"Saved crop params: {crop_roi_json}")
+    save_run_params(args.output_dir, "preprocessing",
+                    {"video_pp": video_path, "crop_params": crop_params})
 
     # ------------------------------------------------------------------
     # Stage 2: draw vial ROIs
@@ -126,9 +142,10 @@ def main():
     # ------------------------------------------------------------------
     # Stage 3: track
     # ------------------------------------------------------------------
-    wide_csv = os.path.join(args.output_dir, "tracks_wide_format.csv")
+    wide_csv    = os.path.join(args.output_dir, "tracks_wide_format.csv")
+    det_log_csv = os.path.join(args.output_dir, "detections_raw.csv")
     print("\n=== Stage 3: RF-DETR + OC-SORT tracking ===")
-    df = export_tracks_xy_tuple_csv_one_config(
+    df, tracker = export_tracks_xy_tuple_csv_one_config(
         video_path=video_path,
         output_csv=wide_csv,
         api_key=args.api_key,
@@ -139,6 +156,7 @@ def main():
         minimum_consecutive_frames=args.min_consecutive_frames,
         max_frames=args.max_frames,
         asso_func=args.asso_func,
+        det_log_csv=det_log_csv,
     )
     print(f"  shape: {df.shape}")
     save_run_params(args.output_dir, "tracker_output", {
@@ -146,6 +164,26 @@ def main():
         "frames": int(df.shape[0]),
         "track_count": int(df.shape[1] - 1),
     })
+
+    # Save tracker internals so run_stitching.py can generate metrics_report.md
+    tracker_log_json = os.path.join(args.output_dir, "tracker_log.json")
+    with open(tracker_log_json, "w") as _f:
+        json.dump({
+            "detection_log":     tracker.detection_log,
+            "suppressed_tracks": tracker.suppressed_tracks,
+            "min_hits":          tracker.min_hits,
+            "max_age":           tracker.max_age,
+        }, _f)
+
+    # RF-DETR detection overlay video
+    print("\n=== Stage 3b: RF-DETR detection overlay video ===")
+    render_detections_video(
+        video_path=video_path,
+        det_log_csv=det_log_csv,
+        out_mp4=os.path.join(args.output_dir, "detections_rfdetr.mp4"),
+        fps_out=cfg.get("visualization", {}).get("fps_out", 30),
+    )
+
     print("\nDone. Run scripts/run_stitching.py to continue.")
 
 

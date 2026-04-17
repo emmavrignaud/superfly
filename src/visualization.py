@@ -224,3 +224,62 @@ def render_raw_overlay_video(
     cap.release()
     writer.release()
     print("Saved raw overlay video:", out_mp4)
+
+
+def render_detections_video(
+    video_path: str,
+    det_log_csv: str,
+    out_mp4: str,
+    fps_out: int = 30,
+    color: tuple = (0, 255, 0),
+    thickness: int = 2,
+    font_scale: float = 0.4,
+    show_conf: bool = True,
+) -> None:
+    """
+    Render raw RF-DETR detection bounding boxes on the source video.
+
+    Draws one rectangle per detection per frame, before any tracking or
+    association. Useful for diagnosing missed detections vs. tracking errors.
+
+    Parameters
+    ----------
+    det_log_csv : path to CSV written by tracking.py when det_log_csv is given.
+                  Columns: frame, x1, y1, x2, y2, conf.
+    color       : BGR tuple for the rectangle and confidence text.
+    """
+    det_df = pd.read_csv(det_log_csv)
+    by_frame = {
+        int(f): grp[["x1", "y1", "x2", "y2", "conf"]].values.tolist()
+        for f, grp in det_df.groupby("frame")
+    }
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"Cannot open video: {video_path}")
+
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    os.makedirs(os.path.dirname(out_mp4) or ".", exist_ok=True)
+    writer = cv2.VideoWriter(out_mp4, cv2.VideoWriter_fourcc(*"mp4v"), fps_out, (w, h))
+
+    frame_idx = 0
+    while True:
+        ok, frame_bgr = cap.read()
+        if not ok:
+            break
+
+        for x1, y1, x2, y2, conf in by_frame.get(frame_idx, []):
+            pt1 = (int(round(x1)), int(round(y1)))
+            pt2 = (int(round(x2)), int(round(y2)))
+            cv2.rectangle(frame_bgr, pt1, pt2, color, thickness)
+            if show_conf:
+                cv2.putText(frame_bgr, f"{conf:.2f}", (pt1[0], pt1[1] - 4),
+                            cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, 1, cv2.LINE_AA)
+
+        writer.write(frame_bgr)
+        frame_idx += 1
+
+    cap.release()
+    writer.release()
+    print("Saved detections video:", out_mp4)

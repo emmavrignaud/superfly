@@ -22,9 +22,9 @@ stitching:
   expected_per_vial: 7             # ground-truth fly count per vial; used by stitching objectives
   short_track_frac: 0.10           # tracks shorter than this fraction of num_frames are flagged
   link_score_weights:
-    extrap: 0.45
-    direction: 0.40
-    behavioral: 0.15            # for later: add a gap penalty term :) 
+    extrap: 0
+    direction: 0
+    behavioral: 0            # for later: add a gap penalty term :) 
   direction_weights:
     heading_vs_gap: 0.50        # weight for: A's final heading vs. gap vector
     overall_vs_overall: 0.50    # weight for: A's overall direction vs. B's overall direction

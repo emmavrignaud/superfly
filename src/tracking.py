@@ -43,6 +43,7 @@ def export_tracks_xy_tuple_csv_one_config(
     min_area: float | None = 40,
     asso_func: str = "hmiou",
     brownian_pos_noise: float = 1.0,
+    det_log_csv: str | None = None,
 ) -> tuple[pd.DataFrame, object]:
     """
     Run RF-DETR + OC-SORT for one configuration and write a wide CSV where:
@@ -86,6 +87,7 @@ def export_tracks_xy_tuple_csv_one_config(
 
     rows = []
     all_track_ids = set()
+    det_log_rows = []
     frame_idx = 0
 
     while True:
@@ -98,6 +100,13 @@ def export_tracks_xy_tuple_csv_one_config(
 
         result = client.infer(frame, model_id=model_id)
         dets = sv.Detections.from_inference(result)
+
+        for bbox, conf in zip(dets.xyxy.tolist(), dets.confidence.tolist()):
+            det_log_rows.append({
+                "frame": frame_idx,
+                "x1": bbox[0], "y1": bbox[1], "x2": bbox[2], "y2": bbox[3],
+                "conf": conf,
+            })
 
         frame_row = {"frame": frame_idx}
 
@@ -133,4 +142,9 @@ def export_tracks_xy_tuple_csv_one_config(
     df = df.reindex(columns=["frame"] + id_cols)
     df.to_csv(output_csv, index=False, na_rep="")
     print(f"Saved: {output_csv}  (frames={len(df)}, tracks={len(id_cols)})")
+
+    if det_log_csv is not None:
+        pd.DataFrame(det_log_rows).to_csv(det_log_csv, index=False)
+        print(f"Saved: {det_log_csv}  ({len(det_log_rows)} detections)")
+
     return df, tracker
