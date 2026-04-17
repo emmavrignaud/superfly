@@ -164,7 +164,7 @@ def _config_key(d: dict) -> str:
     Example output: "extrap=0.4|direction=0.4|behavioral=0.2|dir_heading_vs_gap=1|..."
     """
     weight_cols = (
-        ["extrap", "direction", "behavioral"]
+        ["vial_count_cap", "extrap", "direction", "behavioral"]
         + [f"dir_{k}" for k in _DIR_KEYS]
         + [f"beh_{k}" for k in _BEH_KEYS]
     )
@@ -209,7 +209,7 @@ def plot_results(results_df: pd.DataFrame, short_name: str, out_html: str) -> No
                 f"id_var={row['per_frame_id_variance']:.3f}"
             )
         return (
-            f"rank={i}<br>"
+            f"rank={i}  cap={int(row['vial_count_cap'])}<br>"
             f"link: extrap={row['extrap']}  dir={row['direction']}  beh={row['behavioral']}<br>"
             f"dir: h_gap={row['dir_heading_vs_gap']}  overall={row['dir_overall_vs_overall']}<br>"
             f"beh: vel={row['beh_median_velocity']}  pause={row['beh_pause_fraction']}  "
@@ -276,9 +276,9 @@ def _parse_short_name(wide_csv: str) -> str:
             params = json.load(f)
         video = params.get("config", {}).get("video", "")
         stem = Path(video).stem
-        m = re.search(r"_(\d+d)_(\d{3})", stem)
+        m = re.search(r"_(\d+)d_(\d{3})", stem)
         if m:
-            return f"{m.group(1)}_n{m.group(2)}"
+            return f"{m.group(1)}d_n{m.group(2)}"
     return run_dir.name
 
 
@@ -375,17 +375,18 @@ def main():
     link_combos = [(0.0, 0.0, 0.0)] + _link_score_grid(args.step)  # all-zeros first
     dir_combos  = _binary_combos(_DIR_KEYS, exclude_all_zero=True)
     beh_combos  = _binary_combos(_BEH_KEYS, exclude_all_zero=True)
+    cap_values  = list(range(7, 21, 2))   # 7, 9, 11, 13, 15, 17, 19
 
     # When d=0 the direction term is zeroed out, making all dir_combos equivalent.
     # When b=0 the behavioral term is zeroed out, making all beh_combos equivalent.
     # In those cases we only run one representative combo instead of all of them.
-    total = sum(
+    total = len(cap_values) * sum(
         (len(dir_combos) if d > 0 else 1) * (len(beh_combos) if b > 0 else 1)
         for _, d, b in link_combos
     )
 
     print(
-        f"Search space : {len(link_combos)} link × "
+        f"Search space : {len(cap_values)} caps × {len(link_combos)} link × "
         f"{len(dir_combos)} direction × "
         f"{len(beh_combos)} behavioral = {total} effective configs "
         f"(degenerate configs skipped)\n"
@@ -406,6 +407,7 @@ def main():
     )
     _nan = float("nan")
     _baseline_row = {
+        "vial_count_cap": _nan,
         "extrap":    _nan, "direction": _nan, "behavioral": _nan,
         **{f"dir_{k}": _nan for k in _DIR_KEYS},
         **{f"beh_{k}": _nan for k in _BEH_KEYS},
@@ -439,7 +441,7 @@ def main():
     n_done    = 0                # configs evaluated in THIS run
     t0        = time.time()
 
-    try:
+    for cap in cap_values:
         for e, d, b in link_combos:
             # When d=0, direction weights don't contribute — only run first combo.
             # When b=0, behavioral weights don't contribute — only run first combo.
@@ -458,6 +460,7 @@ def main():
                     # We prefix direction keys with "dir_" and behavioral keys with
                     # "beh_" so columns are unambiguous in the results CSV.
                     row_meta = {
+                        "vial_count_cap": cap,
                         "extrap":     e,
                         "direction":  d,
                         "behavioral": b,
@@ -471,14 +474,15 @@ def main():
 
                     with contextlib.redirect_stdout(io.StringIO()):
                         stitched_df = stitch(
-                            long_df    = long_df,
-                            vial_rois  = vial_rois,
-                            tracklets  = tracklets,
-                            output_dir = None,
-                            weights    = weights,
+                            long_df        = long_df,
+                            vial_rois      = vial_rois,
+                            tracklets      = tracklets,
+                            output_dir     = None,
+                            weights        = weights,
+                            vial_count_cap = cap,
                         )
                     n_after = stitched_df["stitched_id"].nunique()
-                    print(f"  [{n_done + n_resumed + 1}/{total}]  {n_before} -> {n_after} IDs")
+                    print(f"  [{n_done + n_resumed + 1}/{total}]  {n_before} -> {n_after} IDs  cap={cap}")
 
                     objs = compute_stitching_objectives(
                         df_stitched       = stitched_df,
@@ -494,32 +498,29 @@ def main():
 
                     # Write this row immediately and flush to disk.
                     # If the script crashes after this line, the row is already saved.
-                    # write_header is True only for the very first row of a fresh run.
                     pd.DataFrame([row]).to_csv(out_f, header=write_header, index=False)
                     out_f.flush()
                     write_header = False
 
                     if n_done % 100 == 0:
-                        elapsed   = time.time() - t0
+                        elapsed    = time.time() - t0
                         total_done = n_done + n_resumed
-                        rate      = n_done / elapsed if elapsed > 0 else 1e-9
-                        eta_h     = (total - total_done) / rate / 3600
+                        rate       = n_done / elapsed if elapsed > 0 else 1e-9
+                        eta_h      = (total - total_done) / rate / 3600
                         print(
                             f"  {total_done}/{total}  |  "
                             f"elapsed {elapsed/60:.1f} min  |  "
                             f"ETA {eta_h:.1f} h"
                         )
 
-    finally:
-        # Always close the file — even if the loop is interrupted by Ctrl+C or an error.
-        out_f.close()
+    out_f.close()
 
     print(f"\nGrid search complete — {n_done} new configs evaluated ({n_resumed} resumed from disk).")
 
     all_results = pd.read_csv(results_csv)
     print(f"\nTop 5 configs by vial_count_error:")
     print(all_results.sort_values("vial_count_error").head(5)[
-        ["extrap", "direction", "behavioral", "vial_count_error", "per_id_coverage_loss", "short_track_count", "per_frame_id_variance"]
+        ["vial_count_cap", "extrap", "direction", "behavioral", "vial_count_error", "per_id_coverage_loss", "short_track_count", "per_frame_id_variance"]
     ].to_string(index=False))
 
     plot_results(all_results, short_name, str(plot_html))
@@ -563,13 +564,15 @@ def main():
             # Stage 2 — best config
             with contextlib.redirect_stdout(io.StringIO()):
                 best_df = stitch(long_df=long_df, vial_rois=vial_rois,
-                                 tracklets=tracklets, weights=_weights_from_row(best_row))
+                                 tracklets=tracklets, weights=_weights_from_row(best_row),
+                                 vial_count_cap=int(best_row['vial_count_cap']))
             _render("best", best_df, "stitched_id", str(out_dir / "overlay_best.mp4"))
 
             # Stage 3 — worst config
             with contextlib.redirect_stdout(io.StringIO()):
                 worst_df = stitch(long_df=long_df, vial_rois=vial_rois,
-                                  tracklets=tracklets, weights=_weights_from_row(worst_row))
+                                  tracklets=tracklets, weights=_weights_from_row(worst_row),
+                                  vial_count_cap=int(worst_row['vial_count_cap']))
             _render("worst", worst_df, "stitched_id", str(out_dir / "overlay_worst.mp4"))
 
             print(f"  overlay_pre_stitch.mp4  (raw tracker IDs)")

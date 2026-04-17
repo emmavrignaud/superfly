@@ -939,11 +939,12 @@ def _report_duplicates(
 
 
 def stitch_per_vial(
-    long_df:    pd.DataFrame,
-    vial_rois:  Dict[str, Tuple[int, int, int, int]],
-    tracklets:  List[Tracklet],
-    weights:    Dict[str, Dict],
-    output_dir: Optional[str] = None,
+    long_df:        pd.DataFrame,
+    vial_rois:      Dict[str, Tuple[int, int, int, int]],
+    tracklets:      List[Tracklet],
+    weights:        Dict[str, Dict],
+    output_dir:     Optional[str] = None,
+    vial_count_cap: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Top-level stitching function. Merges tracklets into fly identities, per vial.
@@ -991,7 +992,7 @@ def stitch_per_vial(
         if not vt:
             continue
 
-        vial_count_cap = cfg_stitching['vial_count_cap']
+        vial_count_cap = vial_count_cap if vial_count_cap is not None else cfg_stitching['vial_count_cap']
         mapping        = {t.orig_id: t.orig_id for t in vt}
         round_num      = 1
 
@@ -1120,11 +1121,12 @@ def stitch_general(
 # ---------------------------------------------------------------------------
 
 def stitch(
-    long_df:    pd.DataFrame,
-    vial_rois:  Dict[str, Tuple[int, int, int, int]],
-    tracklets:  List[Tracklet],
-    output_dir: Optional[str] = None,
-    weights:    Optional[Dict[str, Dict]] = None,
+    long_df:        pd.DataFrame,
+    vial_rois:      Dict[str, Tuple[int, int, int, int]],
+    tracklets:      List[Tracklet],
+    output_dir:     Optional[str] = None,
+    weights:        Optional[Dict[str, Dict]] = None,
+    vial_count_cap: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Dispatch to stitch_per_vial or stitch_general based on
@@ -1147,7 +1149,7 @@ def stitch(
         }
     mode = cfg_stitching['stitching_mode']
     if mode == 'per_vial':
-        return stitch_per_vial(long_df, vial_rois, tracklets, weights, output_dir)
+        return stitch_per_vial(long_df, vial_rois, tracklets, weights, output_dir, vial_count_cap)
     elif mode == 'general':
         return stitch_general(long_df, vial_rois, tracklets, weights, output_dir)
     else:
