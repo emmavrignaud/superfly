@@ -19,6 +19,8 @@ stitching:
   pause_threshold: 1.0
   edge_fraction: 0.10
   min_points_for_scale: 10
+  expected_per_vial: 7             # ground-truth fly count per vial; used by stitching objectives
+  short_track_frac: 0.10           # tracks shorter than this fraction of num_frames are flagged
   link_score_weights:
     extrap: 0.45
     direction: 0.40

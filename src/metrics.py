@@ -493,12 +493,100 @@ def compute_stitch_duplicate_stats(df_stitched, vial_rois=None):
 
 
 # ---------------------------------------------------------------------------
+# Stage 3 — Stitching quality objectives
+# ---------------------------------------------------------------------------
+
+def compute_stitching_objectives(
+    df_stitched:       pd.DataFrame,
+    vial_rois:         dict,
+    num_frames:        int,
+    expected_per_vial: int   = 7,
+    short_frac:        float = 0.10,
+) -> dict:
+    """
+    Compute the four stitching quality objectives for one stitched output.
+    All are lower-is-better.
+
+    Parameters
+    ----------
+    df_stitched       : long-format stitched DataFrame with columns (frame, stitched_id, x, y)
+    vial_rois         : {vial_id: (x0, y0, x1, y1)}
+    num_frames        : total number of frames in the video
+    expected_per_vial : ground-truth fly count per vial (default 7)
+    short_frac        : threshold for short_track_count as fraction of num_frames (default 0.10)
+
+    Returns
+    -------
+    dict with keys: vial_count_error, per_id_coverage_loss, short_track_count, per_frame_id_variance
+    """
+    df = df_stitched.copy()
+
+    # assign each detection to a vial
+    df["_vial"] = None
+    for vial_id, (x0, y0, x1, y1) in vial_rois.items():
+        mask = (df["x"] >= x0) & (df["x"] <= x1) & (df["y"] >= y0) & (df["y"] <= y1)
+        df.loc[mask, "_vial"] = vial_id
+
+    track_lengths = df.groupby("stitched_id")["frame"].nunique()
+
+    vial_count_error = float(sum(
+        abs(df[df["_vial"] == v]["stitched_id"].nunique() - expected_per_vial)
+        for v in vial_rois
+    ))
+    per_id_coverage_loss  = float(num_frames - track_lengths.mean())
+    short_track_count     = int((track_lengths < short_frac * num_frames).sum())
+    per_frame_id_variance = 0.0
+    for v in vial_rois:
+        sub = df[df["_vial"] == v]
+        if sub.empty:
+            continue
+        per_frame = sub.groupby("frame")["stitched_id"].nunique()
+        full = per_frame.reindex(range(num_frames), fill_value=0)
+        per_frame_id_variance += float(full.std())
+
+    return {
+        "vial_count_error":      vial_count_error,
+        "per_id_coverage_loss":  per_id_coverage_loss,
+        "short_track_count":     short_track_count,
+        "per_frame_id_variance": per_frame_id_variance,
+    }
+
+
+def print_stitching_objectives(objectives: dict) -> str:
+    """
+    Print a formatted stitching objectives block and return the text.
+
+    Parameters
+    ----------
+    objectives : dict from compute_stitching_objectives()
+
+    Returns
+    -------
+    str — the same text that was printed
+    """
+    lines = [
+        "=" * 55,
+        "  STITCHING QUALITY OBJECTIVES",
+        "=" * 55,
+        f"  vial_count_error      : {objectives['vial_count_error']:.1f}  (0 = perfect)",
+        f"  per_id_coverage_loss  : {objectives['per_id_coverage_loss']:.1f}  frames/fly",
+        f"  short_track_count     : {objectives['short_track_count']}",
+        f"  per_frame_id_variance : {objectives['per_frame_id_variance']:.3f}",
+        "=" * 55,
+    ]
+    text = "\n".join(lines)
+    print(text)
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
 def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
                     n_expected=None, fps=30, vial_rois=None,
-                    config=None, output_dir=None):
+                    config=None, output_dir=None,
+                    stitching_objectives=None):
     """
     Run all diagnostics, display plots, and optionally save a report.
 
@@ -558,12 +646,12 @@ def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
 
     # --- save report if output_dir given ---
     if output_dir is not None:
-        _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline, dup_stats)
+        _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline, dup_stats, stitching_objectives)
 
     plt.show()
 
 
-def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline, dup_stats=None):
+def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline, dup_stats=None, objectives=None):
     """
     Save the two diagnostic figures as PNGs and write a metrics_report.md
     that embeds them alongside the text summary and config.
@@ -611,6 +699,18 @@ def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline, dup_sta
             md.append("")
     else:
         md.append("_Stitched output not provided — duplicate check skipped._\n")
+
+    md.append("## Stitching Quality Objectives\n")
+    if objectives is not None:
+        md.append("| Objective | Value |")
+        md.append("|---|---|")
+        md.append(f"| vial_count_error | {objectives['vial_count_error']:.1f} |")
+        md.append(f"| per_id_coverage_loss | {objectives['per_id_coverage_loss']:.1f} frames/fly |")
+        md.append(f"| short_track_count | {objectives['short_track_count']} |")
+        md.append(f"| per_frame_id_variance | {objectives['per_frame_id_variance']:.3f} |")
+        md.append("")
+    else:
+        md.append("_Not computed for this run._\n")
 
     md.append("## XY Trajectories\n")
     md.append("![XY Trajectories](metrics_xy_trajectories.png)\n")

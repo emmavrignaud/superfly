@@ -497,6 +497,7 @@ def link_score(
     B:         "Tracklet",
     vial_rois: Dict[str, Tuple[int, int, int, int]],
     tracklets: List["Tracklet"],
+    weights:   Dict[str, Dict],
 ) -> float:
     """
     Compute the cost of linking tracklet A into tracklet B (lower = more plausible).
@@ -607,8 +608,8 @@ def link_score(
         else:
             expected_dir = A.final_direction
         dir_heading = _angle_diff(gap_direction, expected_dir) / 180.0
-        w_hg        = cfg_stitching['direction_weights']['heading_vs_gap']
-        w_oo        = cfg_stitching['direction_weights']['overall_vs_overall']
+        w_hg        = weights['direction_weights']['heading_vs_gap']
+        w_oo        = weights['direction_weights']['overall_vs_overall']
         direction_term = float((w_hg * dir_heading + w_oo * dir_overall) / (w_hg + w_oo))
     else:
         direction_term = float(dir_overall)
@@ -643,7 +644,7 @@ def link_score(
     # We use min(wA, wB): the weaker tracklet limits behavioral confidence
     # for the whole pair.
     # ------------------------------------------------------------------
-    behavioral_weights = cfg_stitching['behavioral_weights']
+    behavioral_weights = weights['behavioral_weights']
 
     def _dissim(a_val: float, b_val: float, key: str) -> float:
         # |difference| normalised by population std → dimensionless z-score
@@ -679,7 +680,7 @@ def link_score(
     #   direction  : angular agreement (final heading + overall direction)
     #   behavioral : kinematic profile similarity
     # ------------------------------------------------------------------
-    link_score_weights = cfg_stitching['link_score_weights']
+    link_score_weights = weights['link_score_weights']
     return (link_score_weights['extrap']     * extrap_term_error
           + link_score_weights['direction']  * direction_term
           + link_score_weights['behavioral'] * behavioral_score)
@@ -688,6 +689,7 @@ def link_score(
 def build_cost_matrix(
     tracklets:        List[Tracklet],
     vial_rois:        Dict[str, Tuple[int, int, int, int]],
+    weights:          Dict[str, Dict],
     chain_end_frames: Optional[Dict[str, int]] = None,
     debug_path:       Optional[str] = None,
 ) -> np.ndarray:
@@ -719,7 +721,7 @@ def build_cost_matrix(
                 continue
             if _find_vial(A.start_xy, vial_rois) != _find_vial(B.start_xy, vial_rois):
                 continue  # never link tracklets across vials
-            C[i, j] = link_score(A, B, vial_rois, tracklets)
+            C[i, j] = link_score(A, B, vial_rois, tracklets, weights)
 
     if debug_path is not None:
         labels   = [t.orig_id for t in tracklets]
@@ -841,6 +843,7 @@ def _run_assignment_round(
     tracklets:      List[Tracklet],
     frozen_mapping: Dict[str, str],
     vial_rois:      Dict[str, Tuple[int, int, int, int]],
+    weights:        Dict[str, Dict],
     debug_path:     Optional[str] = None,
 ) -> Dict[str, str]:
     """
@@ -877,7 +880,7 @@ def _run_assignment_round(
         root_id = frozen_mapping.get(t.orig_id, t.orig_id)
         chain_end_frames[root_id] = max(chain_end_frames.get(root_id, 0), t.end_frame)
 
-    C = build_cost_matrix(roots, vial_rois, chain_end_frames=chain_end_frames, debug_path=debug_path)
+    C = build_cost_matrix(roots, vial_rois, weights, chain_end_frames=chain_end_frames, debug_path=debug_path)
     matches = _solve_hungarian(C)
 
     if not matches:
@@ -926,6 +929,7 @@ def stitch_per_vial(
     long_df:    pd.DataFrame,
     vial_rois:  Dict[str, Tuple[int, int, int, int]],
     tracklets:  List[Tracklet],
+    weights:    Dict[str, Dict],
     output_dir: Optional[str] = None,
 ) -> pd.DataFrame:
     """
@@ -989,6 +993,7 @@ def stitch_per_vial(
                 tracklets      = vt,
                 frozen_mapping = mapping,
                 vial_rois      = vial_rois,
+                weights        = weights,
                 debug_path     = debug_path,
             )
 
@@ -1030,6 +1035,7 @@ def stitch_general(
     long_df:    pd.DataFrame,
     vial_rois:  Dict[str, Tuple[int, int, int, int]],
     tracklets:  List[Tracklet],
+    weights:    Dict[str, Dict],
     output_dir: Optional[str] = None,
 ) -> pd.DataFrame:
     """
@@ -1064,6 +1070,7 @@ def stitch_general(
             tracklets      = tracklets,
             frozen_mapping = mapping,
             vial_rois      = vial_rois,
+            weights        = weights,
             debug_path     = debug_path,
         )
 
@@ -1104,6 +1111,7 @@ def stitch(
     vial_rois:  Dict[str, Tuple[int, int, int, int]],
     tracklets:  List[Tracklet],
     output_dir: Optional[str] = None,
+    weights:    Optional[Dict[str, Dict]] = None,
 ) -> pd.DataFrame:
     """
     Dispatch to stitch_per_vial or stitch_general based on
@@ -1115,12 +1123,20 @@ def stitch(
     vial_rois  : {vial_id: (x0, y0, x1, y1)} bounding boxes from roi.py
     tracklets  : Tracklet objects from build_tracklets()
     output_dir : if set, debug cost matrices are written here
+    weights    : override for link_score_weights, direction_weights, and
+                 behavioral_weights; reads from config.yaml when None
     """
+    if weights is None:
+        weights = {
+            'link_score_weights': cfg_stitching['link_score_weights'],
+            'direction_weights':  cfg_stitching['direction_weights'],
+            'behavioral_weights': cfg_stitching['behavioral_weights'],
+        }
     mode = cfg_stitching['stitching_mode']
     if mode == 'per_vial':
-        return stitch_per_vial(long_df, vial_rois, tracklets, output_dir)
+        return stitch_per_vial(long_df, vial_rois, tracklets, weights, output_dir)
     elif mode == 'general':
-        return stitch_general(long_df, vial_rois, tracklets, output_dir)
+        return stitch_general(long_df, vial_rois, tracklets, weights, output_dir)
     else:
         raise ValueError(
             f"Unknown stitching_mode {mode!r} in config.yaml. "

@@ -14,10 +14,10 @@ Then run scripts/run_stitching.py to continue from the wide CSV.
 
 Usage
 -----
-python scripts/run_tracking.py \
-    --video      data/my_experiment.mp4 \
-    --output-dir outputs/my_run \
-    --api-key    YOUR_ROBOFLOW_KEY \
+python scripts\\run_tracking.py ^
+    --video      data\\my_experiment.mp4 ^
+    --output-dir outputs\\my_run ^
+    --api-key    YOUR_ROBOFLOW_KEY ^
     --model-id   YOUR_MODEL_ID
 
 All parameters have defaults from config.yaml.  Use --help for full list.

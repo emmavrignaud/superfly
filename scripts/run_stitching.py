@@ -14,9 +14,9 @@ Run scripts/run_tracking.py first to produce the wide CSV and vial_rois.json.
 
 Usage
 -----
-python scripts/run_stitching.py \
-    --video      data/my_experiment.mp4 \
-    --output-dir outputs/run_1
+python scripts\\run_stitching.py ^
+    --video      data\\my_experiment.mp4 ^
+    --output-dir outputs\\run_1
 
 All parameters have defaults from config.yaml.  Use --help for full list.
 """
@@ -128,6 +128,20 @@ def main():
         "csv": compact_csv,
         "rows": int(df.shape[0]),
     })
+
+    # --- Stitching quality objectives ---
+    from src.metrics import compute_stitching_objectives, print_stitching_objectives
+    num_frames  = int(long_df["frame"].max()) + 1
+    s = cfg.get("stitching", {})
+    objectives = compute_stitching_objectives(
+        df_stitched       = stitched_df,
+        vial_rois         = vial_rois,
+        num_frames        = num_frames,
+        expected_per_vial = s.get("expected_per_vial", 7),
+        short_frac        = s.get("short_track_frac", 0.10),
+    )
+    print_stitching_objectives(objectives)
+    save_run_params(args.output_dir, "stitching_objectives", {k: float(v) for k, v in objectives.items()})
 
     # ------------------------------------------------------------------
     # Stage 6 (optional): overlay videos

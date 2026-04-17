@@ -14,9 +14,9 @@ Stages
 
 Usage
 -----
-python scripts/run_classification.py \
-    --tracks     outputs/my_run/compact_tracks.csv \
-    --output-dir outputs/my_run/classification
+python scripts\\run_classification.py ^
+    --tracks     outputs\\my_run\\compact_tracks.csv ^
+    --output-dir outputs\\my_run\\classification
 
 Use --help for all options.
 """
