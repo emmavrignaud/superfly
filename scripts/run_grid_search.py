@@ -7,9 +7,11 @@ Tracking is never re-run — only stitching is repeated for each config.
 
 Search space
 ------------
-  link_score_weights  : extrap / direction / behavioral, steps of 0.2, sum-to-1
+  link_score_weights  : (0,0,0) all-zeros baseline, then all (extrap, direction,
+                        behavioral) triples that sum to 1 at steps of 0.2
   direction_weights   : heading_vs_gap / overall_vs_overall, binary {0, 1}, exclude (0,0)
   behavioral_weights  : 7 features, binary {0, 1}, exclude all-zeros
+  When direction=0 only one direction combo is run; same for behavioral=0.
 
 Objectives (all lower-is-better)
 -----------
@@ -20,8 +22,13 @@ Objectives (all lower-is-better)
 
 Outputs (in outputs\\grid_search\\<short_name>\\)
 -------
-  grid_search_results.csv   one row per config; all weights + all objectives
-  grid_search_plot.html     interactive Plotly line plot
+  grid_search_results.csv    one row per config (row 0 = pre-stitch baseline);
+                             all weights + all objectives
+  grid_search_plot.html      interactive Plotly line plot; x=0 is pre-stitch
+                             baseline, x>0 sorted by vial_count_error
+  overlay_pre_stitch.mp4     raw tracker IDs (no stitching)       [--video only]
+  overlay_best.mp4           best config by vial_count_error       [--video only]
+  overlay_worst.mp4          worst config by vial_count_error      [--video only]
 
 Usage
 -----
@@ -29,12 +36,17 @@ Usage
       --wide-csv  outputs\\run_5\\tracks_wide_format.csv ^
       --roi-json  outputs\\run_5\\vial_rois.json
 
+  # also generate three overlay videos:
+  python scripts\\run_grid_search.py ^
+      --wide-csv  outputs\\run_5\\tracks_wide_format.csv ^
+      --roi-json  outputs\\run_5\\vial_rois.json ^
+      --video     outputs\\run_5\\video_pp.mp4
+
   # re-plot from an existing results CSV without re-running the search:
   python scripts\\run_grid_search.py ^
       --wide-csv  outputs\\run_5\\tracks_wide_format.csv ^
       --roi-json  outputs\\run_5\\vial_rois.json ^
       --plot-only
-      
 """
 
 import argparse
@@ -57,6 +69,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.stitching import wide_to_long, build_tracklets, stitch, link_score
 from src.metrics import compute_stitching_objectives
+from src.visualization import render_raw_overlay_video
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +298,7 @@ def main():
     parser.add_argument("--step",              type=float, default=0.2,  help="link_score_weights grid step")
     parser.add_argument("--plot-only",         action="store_true",      help="Skip search, re-plot from existing results CSV")
     parser.add_argument("--output-dir",        default=None,             help="Use this folder directly (skips auto-increment; required for --plot-only on a specific run)")
+    parser.add_argument("--video",             default=None,             help="Path to source video; if provided, generates three overlay MP4s after the search")
     args = parser.parse_args()
 
     short_name = _parse_short_name(args.wide_csv)
@@ -358,7 +372,7 @@ def main():
     print()
 
     # --- Build search space ---
-    link_combos = _link_score_grid(args.step)
+    link_combos = [(0.0, 0.0, 0.0)] + _link_score_grid(args.step)  # all-zeros first
     dir_combos  = _binary_combos(_DIR_KEYS, exclude_all_zero=True)
     beh_combos  = _binary_combos(_BEH_KEYS, exclude_all_zero=True)
 
@@ -511,6 +525,56 @@ def main():
     plot_results(all_results, short_name, str(plot_html))
     print(f"\nResults : {results_csv}")
     print(f"Plot    : {plot_html}")
+
+    # --- Three-stage overlay videos ---
+    # Requires --video.  Uses render_raw_overlay_video for all three stages so
+    # that each unique ID (orig_id / stitched_id) gets a distinct hue — no
+    # vial_id or compact_id needed.
+    if args.video:
+        configs_only = all_results[all_results["extrap"].notna()]
+        if configs_only.empty:
+            print("\nNo weight configs in results — skipping overlays.")
+        else:
+            best_row  = configs_only.sort_values("vial_count_error").iloc[0]
+            worst_row = configs_only.sort_values("vial_count_error").iloc[-1]
+
+            def _weights_from_row(row: pd.Series) -> dict:
+                return {
+                    "link_score_weights": {
+                        "extrap":     float(row["extrap"]),
+                        "direction":  float(row["direction"]),
+                        "behavioral": float(row["behavioral"]),
+                    },
+                    "direction_weights": {k: float(row[f"dir_{k}"]) for k in _DIR_KEYS},
+                    "behavioral_weights": {k: float(row[f"beh_{k}"]) for k in _BEH_KEYS},
+                }
+
+            def _render(label: str, df_ids: pd.DataFrame, id_col: str, out_mp4: str) -> None:
+                tmp_csv = str(out_dir / f"_tmp_{label}.csv")
+                df_ids.rename(columns={id_col: "orig_id"})[["frame", "orig_id", "x", "y"]].to_csv(tmp_csv, index=False)
+                render_raw_overlay_video(video_path=args.video, csv_path=tmp_csv, out_mp4=out_mp4)
+                Path(tmp_csv).unlink()
+
+            print("\nGenerating overlay videos...")
+
+            # Stage 1 — pre-stitch (raw tracker IDs)
+            _render("pre", long_df, "orig_id", str(out_dir / "overlay_pre_stitch.mp4"))
+
+            # Stage 2 — best config
+            with contextlib.redirect_stdout(io.StringIO()):
+                best_df = stitch(long_df=long_df, vial_rois=vial_rois,
+                                 tracklets=tracklets, weights=_weights_from_row(best_row))
+            _render("best", best_df, "stitched_id", str(out_dir / "overlay_best.mp4"))
+
+            # Stage 3 — worst config
+            with contextlib.redirect_stdout(io.StringIO()):
+                worst_df = stitch(long_df=long_df, vial_rois=vial_rois,
+                                  tracklets=tracklets, weights=_weights_from_row(worst_row))
+            _render("worst", worst_df, "stitched_id", str(out_dir / "overlay_worst.mp4"))
+
+            print(f"  overlay_pre_stitch.mp4  (raw tracker IDs)")
+            print(f"  overlay_best.mp4        (best config: extrap={best_row['extrap']} dir={best_row['direction']} beh={best_row['behavioral']})")
+            print(f"  overlay_worst.mp4       (worst config: extrap={worst_row['extrap']} dir={worst_row['direction']} beh={worst_row['behavioral']})")
 
 
 if __name__ == "__main__":

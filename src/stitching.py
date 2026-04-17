@@ -886,6 +886,19 @@ def _run_assignment_round(
     if not matches:
         return frozen_mapping
 
+    # Reject matched pairs that are much worse than the average candidate link.
+    # This makes the outcome sensitive to weights: changing weights shifts the cost
+    # distribution, so different pairs fall above/below the threshold.
+    BIG = 1e9
+    valid_cells = C[C < BIG / 10]
+    if len(valid_cells) > 0:
+        ref_cost = float(np.mean(valid_cells))
+        max_link_score = cfg_stitching['max_cost_ratio'] * ref_cost
+        matches = [(i, j, cost) for i, j, cost in matches if cost <= max_link_score]
+
+    if not matches:
+        return frozen_mapping
+
     new_mapping = _map_chains_to_roots(roots, matches)
 
     # Propagate new merges into the frozen mapping.

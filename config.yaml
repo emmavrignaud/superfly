@@ -9,11 +9,12 @@ tracker:
   minimum_consecutive_frames: 3
   min_area: 40                   # px^2; detections smaller than this are ignored
   asso_func: diou               # association function: hmiou (recommended) or iou
-  brownian_pos_noise: 5.0       # scale factor on Q[cx] and Q[cy]; 1.0 = original, increase to tolerate saccades
+  brownian_pos_noise: 7       # scale factor on Q[cx] and Q[cy]; 1.0 = original, increase to tolerate saccades
 
 stitching:
   stitching_mode: per_vial       # per_vial: stitch within each vial independently | general: stitch across all vials (cross-vial links still forbidden)
   vial_count_cap: 7             # per_vial mode: stop when active IDs per vial ≤ this
+  max_cost_ratio: 2.0           # reject matched pairs whose cost > this × mean(all valid candidate costs)
   general_count_cap: 56          # general mode: stop when total active IDs ≤ this
   fps: 30
   pause_threshold: 1.0
