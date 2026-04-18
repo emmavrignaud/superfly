@@ -29,6 +29,7 @@ def export_tracks_xy_tuple_csv_one_config(
     output_csv: str,
     api_key: str,
     model_id: str,
+    detection_confidence_rfdetr: float = 0.4,
     confidence: float = 0.10,
     track_activation_threshold: float = 0.10,
     lost_track_buffer: int = 90,
@@ -58,12 +59,14 @@ def export_tracks_xy_tuple_csv_one_config(
     """
     # inference_sdk calls the Roboflow API over HTTP — no local torch/GPU needed.
     from inference_sdk import InferenceHTTPClient
+    from inference_sdk.http.entities import InferenceConfiguration
     from .ocsort import OCSort
 
     client = InferenceHTTPClient(
         api_url="https://detect.roboflow.com",
         api_key=api_key,
     )
+    client.configure(InferenceConfiguration(confidence_threshold=detection_confidence_rfdetr))
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():

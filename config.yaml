@@ -2,12 +2,13 @@
 # See scripts/run_tracking.py --help and scripts/run_classification.py --help.
 
 tracker:
-  confidence: 0.03
-  track_activation_threshold: 0.10
+  detection_confidence_rfdetr: 0.4  # confidence threshold passed to Roboflow inference (controls what RF-DETR returns)
+  confidence: 0.4                   # tracker confidence threshold: higher = more conservative about accepting matches (recommended: 0.3-0.5)
+  track_activation_threshold: 0.10 # min confidence to start a new track; lower = more tracks but more false positives
   lost_track_buffer: 180         # max frames a track can be lost before being dropped
-  minimum_matching_threshold: 0.2
+  minimum_matching_threshold: 0.2 # min association score to accept a match; lower = more matches but more false positives
   minimum_consecutive_frames: 3
-  min_area: 40                   # px^2; detections smaller than this are ignored
+  min_area: 20                   # px^2; detections smaller than this are ignored
   asso_func: diou               # association function: hmiou (recommended) or iou
   brownian_pos_noise: 5       # scale factor on Q[cx] and Q[cy]; 1.0 = original, increase to tolerate saccades
 
@@ -20,7 +21,7 @@ stitching:
   pause_threshold: 1.0
   edge_fraction: 0.10
   min_points_for_scale: 10
-  expected_per_vial: 7             # ground-truth fly count per vial; used by stitching objectives
+  expected_per_vial: 7             # ground-truth fly count per vial; used by stitching/tracker objectives
   short_track_frac: 0.10           # tracks shorter than this fraction of num_frames are flagged
   link_score_weights:
     extrap: 0
@@ -52,5 +53,5 @@ visualization:
   show_ids: true
 
 roi:
-  snap_threshold_pct: 0.01   # snap zone as a fraction of the last drawn box height
+  snap_threshold_pct: 0.005   # snap zone as a fraction of the last drawn box height
   snap_enabled: true          # default on; press S in the GUI to toggle per-vial

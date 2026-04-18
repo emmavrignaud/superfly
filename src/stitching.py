@@ -60,6 +60,9 @@ def wide_to_long(df_wide, out_csv: Optional[str] = None):
     """
     id_cols = [c for c in df_wide.columns if c != "frame"]
 
+    if not id_cols:
+        return pd.DataFrame(columns=["frame", "orig_id", "x", "y"])
+
     # Set frame as the index so that stack() melts only the ID columns.
     # Before: columns are [frame, id1, id2, ...] with frame as index
     # After stack(): each (frame, id) combination becomes its own row,

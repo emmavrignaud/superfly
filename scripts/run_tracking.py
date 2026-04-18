@@ -26,6 +26,7 @@ All parameters have defaults from config.yaml.  Use --help for full list.
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 import yaml
@@ -41,6 +42,20 @@ def load_config(config_path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def _auto_output_dir(video_path: str) -> str:
+    """Generate outputs/run_N_<day>DPE_n<NNN> from the video path."""
+    m = re.search(r"(\d+)\s+DPE[/\\](\d+)", video_path)
+    if m:
+        short = f"{m.group(1)}DPE_n{m.group(2).zfill(3)}"
+    else:
+        short = Path(video_path).stem[:20]
+    base_tpl = str(Path("outputs") / f"run_{{N}}_{short}")
+    n = 0
+    while Path(base_tpl.format(N=n)).exists():
+        n += 1
+    return base_tpl.format(N=n)
+
+
 def build_parser(cfg: dict) -> argparse.ArgumentParser:
     t = cfg.get("tracker", {})
 
@@ -50,7 +65,9 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
     )
 
     p.add_argument("--video", required=True, help="Path to the raw input video")
-    p.add_argument("--output-dir", required=True, help="Directory for all outputs")
+    p.add_argument("--output-dir", default=None,
+                   help="Directory for all outputs. If omitted, auto-generated as "
+                        "outputs/run_N_<DPE>DPE_n<NNN> from the video path.")
     p.add_argument("--api-key", required=True, help="Roboflow API key")
     p.add_argument("--model-id", required=True, help="Roboflow model ID (e.g. flies-123/1)")
 
@@ -75,6 +92,11 @@ def main():
     config_path = Path(__file__).resolve().parents[1] / "config.yaml"
     cfg = load_config(str(config_path))
     args = build_parser(cfg).parse_args()
+    detection_confidence_rfdetr = cfg.get("tracker", {}).get("detection_confidence_rfdetr", 0.4)
+
+    if args.output_dir is None:
+        args.output_dir = _auto_output_dir(args.video)
+        print(f"Auto output-dir: {args.output_dir}")
 
     import cv2
     from src.preprocessing import preprocess_bgsub_gui
@@ -150,6 +172,7 @@ def main():
         output_csv=wide_csv,
         api_key=args.api_key,
         model_id=args.model_id,
+        detection_confidence_rfdetr=detection_confidence_rfdetr,
         confidence=args.confidence,
         lost_track_buffer=args.lost_track_buffer,
         minimum_matching_threshold=args.min_matching_threshold,
@@ -180,7 +203,7 @@ def main():
     render_detections_video(
         video_path=video_path,
         det_log_csv=det_log_csv,
-        out_mp4=os.path.join(args.output_dir, "detections_rfdetr.mp4"),
+        out_mp4=os.path.join(args.output_dir, f"{Path(video_path).stem}_detections_RF-DETR.mp4"),
         fps_out=cfg.get("visualization", {}).get("fps_out", 30),
     )
 
