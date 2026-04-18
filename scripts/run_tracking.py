@@ -36,10 +36,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from utils import save_run_params
 
+ROI_LIBRARY_PATH = Path(__file__).resolve().parents[1] / "outputs" / "roi_library.json"
+
 
 def load_config(config_path: str) -> dict:
     with open(config_path) as f:
         return yaml.safe_load(f)
+
+
+def _load_roi_library() -> dict:
+    if ROI_LIBRARY_PATH.exists():
+        with open(ROI_LIBRARY_PATH) as f:
+            return json.load(f)
+    return {}
+
+
+def _save_roi_library(library: dict) -> None:
+    ROI_LIBRARY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(ROI_LIBRARY_PATH, "w") as f:
+        json.dump(library, f, indent=2)
 
 
 def _auto_output_dir(video_path: str) -> str:
@@ -77,13 +92,13 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
     p.add_argument("--confidence", type=float, default=t.get("confidence", 0.10))
     p.add_argument("--lost-track-buffer", type=int, default=t.get("lost_track_buffer", 90))
     p.add_argument("--min-matching-threshold", type=float,
-                   default=t.get("minimum_matching_threshold", 0.01))
+                   default=t.get("minimum_matching_threshold", 0.2))
     p.add_argument("--min-consecutive-frames", type=int,
-                   default=t.get("minimum_consecutive_frames", 10))
+                   default=t.get("minimum_consecutive_frames", 3))
     p.add_argument("--max-frames", type=int, default=None,
                    help="Limit number of frames to process (None = all)")
-    p.add_argument("--asso-func", type=str, default=t.get("asso_func", "hmiou"),
-                   help="OC-SORT association function: hmiou (recommended) or iou")
+    p.add_argument("--asso-func", type=str, default=t.get("asso_func", "diou"),
+                   help="OC-SORT association function: diou, hmiou, or iou")
 
     return p
 
@@ -92,7 +107,12 @@ def main():
     config_path = Path(__file__).resolve().parents[1] / "config.yaml"
     cfg = load_config(str(config_path))
     args = build_parser(cfg).parse_args()
-    detection_confidence_rfdetr = cfg.get("tracker", {}).get("detection_confidence_rfdetr", 0.4)
+
+    _t = cfg.get("tracker", {})
+    _p = cfg.get("preprocessing", {})
+    _r = cfg.get("roi", {})
+    detection_confidence_rfdetr = _t.get("detection_confidence_rfdetr", 0.4)
+    use_saved_roi = _r.get("use_saved_roi", True)
 
     if args.output_dir is None:
         args.output_dir = _auto_output_dir(args.video)
@@ -115,8 +135,10 @@ def main():
             shutil.copy2(args.video, dest_video)
 
     video_path = args.video
+    _video_key = Path(args.video).stem
+    _library   = _load_roi_library()
 
-    # persist config + video metadata on first call (writes timestamp + git)
+    # persist config + video metadata
     cap = cv2.VideoCapture(video_path)
     save_run_params(args.output_dir, "config", {
         "video": video_path,
@@ -125,6 +147,7 @@ def main():
         "video_height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
         "video_frames": int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
         "tracker": {
+            "detection_confidence_rfdetr": detection_confidence_rfdetr,
             "confidence": args.confidence,
             "lost_track_buffer": args.lost_track_buffer,
             "min_matching_threshold": args.min_matching_threshold,
@@ -141,15 +164,37 @@ def main():
     if args.preprocess:
         print("\n=== Stage 1: Background subtraction ===")
         pp_out = os.path.join(args.output_dir, Path(args.video).stem + "_pp.mp4")
+
+        _stored_crop = _library.get(_video_key, {}).get("preprocessing")
+        if use_saved_roi and _stored_crop is not None:
+            print(f"Found stored preprocessing params for: {_video_key}")
+        else:
+            print(f"No stored preprocessing params for: {_video_key} — opening GUI...")
+
         video_path, crop_params = preprocess_bgsub_gui(
             video_path=video_path,
             out_mp4=pp_out,
+            default_end=_p.get("default_end", 700),
+            gain=_p.get("bg_gain", 1.2),
+            white_level=_p.get("bg_white_level", 245),
+            bg_sample_stride=_p.get("bg_sample_stride", 1),
+            bg_percentile=_p.get("bg_percentile", 85.0),
+            crop_params=_stored_crop if (use_saved_roi and _stored_crop is not None) else None,
         )
         print(f"Preprocessed video: {video_path}")
+
+        # persist to library
+        if _video_key not in _library:
+            _library[_video_key] = {}
+        _library[_video_key]["preprocessing"] = crop_params
+        _library[_video_key]["video_path"] = args.video
+        _save_roi_library(_library)
+
         crop_roi_json = os.path.join(args.output_dir, "crop_roi.json")
         with open(crop_roi_json, "w") as _f:
             json.dump(crop_params, _f, indent=2)
         print(f"Saved crop params: {crop_roi_json}")
+
     save_run_params(args.output_dir, "preprocessing",
                     {"video_pp": video_path, "crop_params": crop_params})
 
@@ -158,7 +203,27 @@ def main():
     # ------------------------------------------------------------------
     roi_json = os.path.join(args.output_dir, "vial_rois.json")
     print("\n=== Stage 2: Draw vial ROIs ===")
-    vials = draw_and_save_vial_rois(video_path=video_path, roi_json_path=roi_json)
+
+    _stored_vials = _library.get(_video_key, {}).get("vial_rois")
+    if use_saved_roi and _stored_vials is not None:
+        print(f"Found stored vial ROIs for: {_video_key}")
+        vials = {k: tuple(v) for k, v in _stored_vials.items()}
+        with open(roi_json, "w") as f:
+            json.dump({k: list(v) for k, v in vials.items()}, f, indent=2)
+        print(f"Loaded {len(vials)} vials from library.")
+    else:
+        if not use_saved_roi:
+            print("use_saved_roi=False — opening GUI...")
+        else:
+            print(f"No stored vial ROIs for: {_video_key} — opening GUI...")
+        vials = draw_and_save_vial_rois(video_path=video_path, roi_json_path=roi_json)
+
+        # persist to library
+        if _video_key not in _library:
+            _library[_video_key] = {}
+        _library[_video_key]["vial_rois"] = {k: list(v) for k, v in vials.items()}
+        _save_roi_library(_library)
+
     save_run_params(args.output_dir, "roi", {k: list(v) for k, v in vials.items()})
 
     # ------------------------------------------------------------------
