@@ -11,3 +11,5 @@ venv/
 outputs/
 creds_config.yaml
 ignore_mds/
+.claude/settings.local.json
+.vscode/settings.json
