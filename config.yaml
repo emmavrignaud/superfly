@@ -53,6 +53,6 @@ visualization:
   show_ids: true
 
 roi:
-  use_saved_roi: false         # true: load from roi_library if available; false: always pop GUI
+  use_saved_roi: true         # true: load from roi_library if available; false: always pop GUI
   snap_threshold_pct: 0.005   # snap zone as a fraction of the last drawn box height
   snap_enabled: true          # default on; press S in the GUI to toggle per-vial
