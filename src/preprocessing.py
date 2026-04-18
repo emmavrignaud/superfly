@@ -24,6 +24,8 @@ import cv2
 import numpy as np
 from pathlib import Path
 
+from src.ui_context import VideoContext, build_context_chips, build_window_title
+
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QLabel,
     QPushButton, QSizePolicy, QSlider, QVBoxLayout, QWidget,
@@ -104,6 +106,20 @@ class _VideoCanvas(QLabel):
 
     def get_roi(self):
         return self._roi
+
+    def undo(self) -> None:
+        self.clear_roi()
+
+    def reset(self) -> None:
+        self.clear_roi()
+
+    def clear_roi(self) -> None:
+        self._drawing = False
+        self._roi = None
+        self._p0 = None
+        self._p1 = None
+        self.roi_changed.emit(None)
+        self._repaint()
 
     # ── coordinate helpers ────────────────────────────────────────────────
 
@@ -237,7 +253,8 @@ class _SliderRow(QWidget):
 
 class _ROIPickerDialog(QDialog):
     def __init__(self, cap, n_frames: int, w_vid: int, h_vid: int,
-                 default_end: int, parent=None):
+                 default_end: int, video_context: VideoContext | None = None,
+                 parent=None):
         super().__init__(parent)
         self.cap      = cap
         self.n_frames = n_frames
@@ -246,6 +263,7 @@ class _ROIPickerDialog(QDialog):
         self.start    = 0
         self.end      = min(default_end, n_frames) if n_frames > 0 else default_end
         self.cur      = 0
+        self.video_context = video_context
 
         self._build()
         self._load_frame()
@@ -259,7 +277,9 @@ class _ROIPickerDialog(QDialog):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        self.setWindowFlags(
+            (self.windowFlags() | Qt.WindowStaysOnTopHint) & ~Qt.WindowContextHelpButtonHint
+        )
         self.show()
         self.raise_()
         self.activateWindow()
@@ -269,6 +289,7 @@ class _ROIPickerDialog(QDialog):
         self.setMinimumSize(1100, 820)
         self.resize(1380, 940)
         self.setStyleSheet(_QSS)
+        self.setWindowTitle(build_window_title("Preprocessing", self.video_context))
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 16)
@@ -277,6 +298,9 @@ class _ROIPickerDialog(QDialog):
         hdr = QLabel("PICK ROI & FRAME RANGE")
         hdr.setObjectName("header")
         root.addWidget(hdr)
+
+        if self.video_context is not None:
+            root.addWidget(build_context_chips(self.video_context))
 
         self.canvas = _VideoCanvas()
         self.canvas.roi_changed.connect(self._on_roi)
@@ -307,9 +331,17 @@ class _ROIPickerDialog(QDialog):
         root.addWidget(self._divider())
 
         btn_row = QHBoxLayout()
+        self.btn_undo = QPushButton("Undo")
+        self.btn_reset = QPushButton("Reset")
+        self.btn_undo.setEnabled(False)
+        self.btn_reset.setEnabled(False)
+        self.btn_undo.clicked.connect(self.canvas.undo)
+        self.btn_reset.clicked.connect(self.canvas.reset)
+        btn_row.addWidget(self.btn_undo)
+        btn_row.addWidget(self.btn_reset)
         btn_row.addStretch()
         self.btn_cancel = QPushButton("Cancel")
-        self.btn_accept = QPushButton("Accept  →")
+        self.btn_accept = QPushButton("Accept ->")
         self.btn_accept.setObjectName("accept")
         self.btn_accept.setEnabled(False)
         self.btn_cancel.clicked.connect(self.reject)
@@ -321,10 +353,20 @@ class _ROIPickerDialog(QDialog):
     # ── slots ─────────────────────────────────────────────────────────────
 
     def _on_roi(self, roi) -> None:
+        if roi is None:
+            self.roi_lbl.setText("Draw a ROI by dragging on the video")
+            self.roi_lbl.setStyleSheet(_STYLE_ROI_NONE)
+            self.btn_accept.setEnabled(False)
+            self.btn_undo.setEnabled(False)
+            self.btn_reset.setEnabled(False)
+            return
+
         x, y, w, h = roi
         self.roi_lbl.setText(f"ROI   x={x}   y={y}   w={w}   h={h}")
         self.roi_lbl.setStyleSheet(_STYLE_ROI_SET)
         self.btn_accept.setEnabled(True)
+        self.btn_undo.setEnabled(True)
+        self.btn_reset.setEnabled(True)
 
     def _on_start(self, v: int) -> None:
         self.start = v
@@ -374,6 +416,10 @@ class _ROIPickerDialog(QDialog):
                 self.accept()
         elif e.key() == Qt.Key_Escape:
             self.reject()
+        elif e.key() == Qt.Key_U:
+            self.canvas.undo()
+        elif e.key() == Qt.Key_R:
+            self.canvas.reset()
         else:
             super().keyPressEvent(e)
 
@@ -386,7 +432,11 @@ class _ROIPickerDialog(QDialog):
 
 # ─── Public API ───────────────────────────────────────────────────────────
 
-def gui_pick_roi_and_range(video_path: str, default_end: int | None = None):
+def gui_pick_roi_and_range(
+    video_path: str,
+    default_end: int | None = None,
+    video_context: VideoContext | None = None,
+):
     """
     PyQt5 GUI to pick ROI + [start, end_excl).
 
@@ -418,7 +468,14 @@ def gui_pick_roi_and_range(video_path: str, default_end: int | None = None):
     else:
         app = QApplication.instance()
 
-    dlg      = _ROIPickerDialog(cap, n_frames, w_vid, h_vid, default_end)
+    dlg      = _ROIPickerDialog(
+        cap,
+        n_frames,
+        w_vid,
+        h_vid,
+        default_end,
+        video_context=video_context,
+    )
     accepted = dlg.exec_()
     cap.release()
 
@@ -438,6 +495,7 @@ def preprocess_bgsub_gui(
     bg_sample_stride: int | None = None,
     bg_percentile: float | None = None,
     crop_params: dict | None = None,
+    video_context: VideoContext | None = None,
 ) -> tuple[str, dict]:
     """
     GUI-driven ROI/range selection + temporal-median background subtraction.
@@ -486,7 +544,11 @@ def preprocess_bgsub_gui(
         start, end_excl = crop_params["start"], crop_params["end"]
         print(f"Using stored crop params: x={x}, y={y}, w={w}, h={h}, frames={start}–{end_excl}")
     else:
-        x, y, w, h, start, end_excl = gui_pick_roi_and_range(video_path, default_end=default_end)
+        x, y, w, h, start, end_excl = gui_pick_roi_and_range(
+            video_path,
+            default_end=default_end,
+            video_context=video_context,
+        )
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():

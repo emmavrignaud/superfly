@@ -20,6 +20,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from src.ui_context import VideoContext, build_context_chips, build_window_title
+
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QHBoxLayout, QLabel,
     QPushButton, QSizePolicy, QVBoxLayout,
@@ -48,10 +50,10 @@ QDialog, QWidget {
     font-size: 13px;
 }
 QLabel#header {
-    font-size: 15px;
+    font-size: 18px;
     font-weight: bold;
     color: #89b4fa;
-    padding: 4px 0;
+    padding: 6px 0;
 }
 QLabel#status {
     color: #a6adc8;
@@ -404,16 +406,20 @@ class _MultiROICanvas(QLabel):
 class _VialROIDialog(QDialog):
     def __init__(self, frame_bgr: np.ndarray, n_vials: int,
                  snap_threshold_pct: float, snap_enabled: bool,
+                 video_context: VideoContext | None = None,
                  parent=None):
         super().__init__(parent)
         self.n_vials = n_vials
         self._snap_threshold_pct = snap_threshold_pct
         self._snap_enabled       = snap_enabled
+        self.video_context       = video_context
         self._build()
         self.canvas.set_frame(frame_bgr)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.show()
         self.raise_()
         self.activateWindow()
 
@@ -422,6 +428,7 @@ class _VialROIDialog(QDialog):
         self.setMinimumSize(1100, 800)
         self.resize(1380, 940)
         self.setStyleSheet(_QSS)
+        self.setWindowTitle(build_window_title("Vial ROI", self.video_context))
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 16)
@@ -430,6 +437,9 @@ class _VialROIDialog(QDialog):
         hdr = QLabel("DRAW VIAL ROIs")
         hdr.setObjectName("header")
         root.addWidget(hdr)
+
+        if self.video_context is not None:
+            root.addWidget(build_context_chips(self.video_context))
 
         self.canvas = _MultiROICanvas(self._snap_threshold_pct,
                                       self._snap_enabled)
@@ -451,7 +461,7 @@ class _VialROIDialog(QDialog):
         btn_row.addWidget(self.btn_undo)
         btn_row.addWidget(self.btn_reset)
         btn_row.addStretch()
-        self.btn_done = QPushButton("Done  →")
+        self.btn_done = QPushButton("Done ->")
         self.btn_done.setObjectName("done")
         self.btn_done.setEnabled(False)
         self.btn_done.clicked.connect(self.accept)
@@ -506,6 +516,7 @@ def draw_and_save_vial_rois(
     roi_json_path: str,
     frame_idx: int = 0,
     n_vials: int = 6,
+    video_context: VideoContext | None = None,
 ) -> Dict[str, Tuple[int, int, int, int]]:
     """
     Interactive PyQt5 GUI to manually draw rectangular ROIs for fly vials.
@@ -543,7 +554,13 @@ def draw_and_save_vial_rois(
     snap_threshold_pct = cfg.get("snap_threshold_pct", 0.02)
     snap_enabled       = cfg.get("snap_enabled", True)
 
-    dlg      = _VialROIDialog(frame, n_vials, snap_threshold_pct, snap_enabled)
+    dlg      = _VialROIDialog(
+        frame,
+        n_vials,
+        snap_threshold_pct,
+        snap_enabled,
+        video_context=video_context,
+    )
     accepted = dlg.exec_()
 
     if not accepted:

@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from utils import save_run_params
 
-ROI_LIBRARY_PATH = Path(__file__).resolve().parents[1] / "outputs" / "roi_library.json"
+ROI_LIBRARY_PATH = Path(__file__).resolve().parents[1] / "roi_library.json"
 
 
 def load_config(config_path: str) -> dict:
@@ -120,6 +120,7 @@ def main():
 
     import cv2
     from src.preprocessing import preprocess_bgsub_gui
+    from src.ui_context import parse_video_context
     from src.tracking import export_tracks_xy_tuple_csv_one_config
     from src.roi import draw_and_save_vial_rois
     from src.visualization import render_detections_video
@@ -137,6 +138,7 @@ def main():
     video_path = args.video
     _video_key = Path(args.video).stem
     _library   = _load_roi_library()
+    video_context = parse_video_context(args.video)
 
     # persist config + video metadata
     cap = cv2.VideoCapture(video_path)
@@ -180,6 +182,7 @@ def main():
             bg_sample_stride=_p.get("bg_sample_stride", 1),
             bg_percentile=_p.get("bg_percentile", 85.0),
             crop_params=_stored_crop if (use_saved_roi and _stored_crop is not None) else None,
+            video_context=video_context,
         )
         print(f"Preprocessed video: {video_path}")
 
@@ -216,7 +219,11 @@ def main():
             print("use_saved_roi=False — opening GUI...")
         else:
             print(f"No stored vial ROIs for: {_video_key} — opening GUI...")
-        vials = draw_and_save_vial_rois(video_path=video_path, roi_json_path=roi_json)
+        vials = draw_and_save_vial_rois(
+            video_path=video_path,
+            roi_json_path=roi_json,
+            video_context=video_context,
+        )
 
         # persist to library
         if _video_key not in _library:
