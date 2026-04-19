@@ -99,6 +99,9 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
                    help="Limit number of frames to process (None = all)")
     p.add_argument("--asso-func", type=str, default=t.get("asso_func", "diou"),
                    help="OC-SORT association function: diou, hmiou, or iou")
+    p.add_argument("--brownian-pos-noise", type=float,
+                   default=t.get("brownian_pos_noise", 1.0),
+                   help="Scale factor on Kalman Q[cx], Q[cy] (1.0 = original; higher tolerates saccades)")
 
     return p
 
@@ -155,6 +158,7 @@ def main():
             "min_matching_threshold": args.min_matching_threshold,
             "min_consecutive_frames": args.min_consecutive_frames,
             "asso_func": args.asso_func,
+            "brownian_pos_noise": args.brownian_pos_noise,
         },
     })
     cap.release()
@@ -251,6 +255,7 @@ def main():
         minimum_consecutive_frames=args.min_consecutive_frames,
         max_frames=args.max_frames,
         asso_func=args.asso_func,
+        brownian_pos_noise=args.brownian_pos_noise,
         det_log_csv=det_log_csv,
     )
     print(f"  shape: {df.shape}")
