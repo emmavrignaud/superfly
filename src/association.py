@@ -344,7 +344,7 @@ def _filter_matches(matched_indices, iou_matrix, iou_threshold, num_dets, num_tr
     return matches, unmatched_dets.astype(int), unmatched_trks.astype(int)
 
 
-def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc_weight):
+def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc_weight, asso_func=iou_batch):
     if(len(trackers)==0):
         return np.empty((0,2),dtype=int), np.arange(len(detections)), np.empty((0,5),dtype=int)
 
@@ -360,7 +360,7 @@ def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc
     valid_mask = np.ones(previous_obs.shape[0])
     valid_mask[previous_obs[:,4] < 0] = 0
 
-    iou_matrix = iou_batch(detections, trackers)
+    iou_matrix = asso_func(detections, trackers)
     scores = detections[:,-1][:, np.newaxis]
     valid_mask = valid_mask[:, np.newaxis]
 

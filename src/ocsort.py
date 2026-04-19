@@ -376,7 +376,7 @@ class OCSort(object):
             First round of association
         """
         matched, unmatched_dets, unmatched_trks = associate(
-            dets, trks, self.iou_threshold, velocities, k_observations, self.inertia)
+            dets, trks, self.iou_threshold, velocities, k_observations, self.inertia, self.asso_func)
         for m in matched:
             self.trackers[m[1]].update(dets[m[0], :])
 

@@ -3,7 +3,7 @@ src/kalmanfilter.py
 
 What this file does
 -------------------
-A self-contained Kalman filter implementation — no filterpy dependency.
+A self-contained Kalman filter implementation
 Used by KalmanBoxTracker in ocsort.py to track each fly's position over time.
 
 State vs observation
