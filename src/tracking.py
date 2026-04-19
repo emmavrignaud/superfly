@@ -45,6 +45,7 @@ def export_tracks_xy_tuple_csv_one_config(
     asso_func: str = "hmiou",
     brownian_pos_noise: float = 1.0,
     det_log_csv: str | None = None,
+    vial_rois: dict | None = None,
 ) -> tuple[pd.DataFrame, object]:
     """
     Run RF-DETR + OC-SORT for one configuration and write a wide CSV where:
@@ -86,6 +87,7 @@ def export_tracks_xy_tuple_csv_one_config(
         inertia=0.2,
         use_byte=False,
         brownian_pos_noise=brownian_pos_noise,
+        vial_rois=vial_rois,
     )
 
     rows = []
