@@ -14,12 +14,16 @@ tracker:
   aspect_weight: 0.05               # bonus for matching boxes of similar aspect ratio; 0 = disabled, try 0.05–0.2
 
 stitching:
-  # Greedy linking of tracklets until active-ID count ≤ cap.
+  # Iterative Hungarian linking. Each round, candidate matches are accepted as a
+  # cost-ordered prefix that minimizes Σ link_scores + asymmetric deviance penalty.
   # Cost = weighted sum of extrapolation + direction + behavioral terms.
   stitching_mode: per_vial       # per_vial | general
-  vial_count_cap: 7              # per_vial: stop at this many IDs per vial
-  max_cost_ratio: 2.0            # reject match if cost > this × mean candidate cost
-  general_count_cap: 56          # general: stop at this many total IDs
+  stop_mode: converge            # converge (run until the hungarian round adds no new merges) | cap (run until the number of IDs in a vial reaches the vial_count_cap) | fixed (provide a number :)) 
+  max_rounds: 10                 # used when stop_mode == fixed
+  w_under: 15                    # penalty per extra ID above expected (under-merging)
+  w_over: 2.0                    # penalty per missing ID below expected (over-merging)
+  vial_count_cap: 7              # per_vial + stop_mode=cap: stop at this many IDs per vial
+  general_count_cap: 56          # general + stop_mode=cap: stop at this many total IDs
   fps: 30                        # video fps (for px→px/s)
   pause_threshold: 1.0           # px/s below this = pause
   edge_fraction: 0.10            # wall-proximity zone as fraction of vial w/h

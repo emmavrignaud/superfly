@@ -842,13 +842,62 @@ def _count_active_ids(tracklets: List[Tracklet], mapping: Dict[str, str]) -> int
     return len({mapping.get(t.orig_id, t.orig_id) for t in tracklets})
  
  
+def _select_prefix(
+    matches:  List[Tuple[int, int, float]],
+    n_roots:  int,
+    expected: int,
+    w_under:  float,
+    w_over:   float,
+) -> Tuple[List[Tuple[int, int, float]], int]:
+    """
+    Pick how many of Hungarian's cost-sorted matches to accept this round.
+
+    Each accepted match merges two chain roots into one, so accepting k matches
+    leaves (n_roots - k) distinct IDs. We score every prefix k = 0..len(matches)
+    by
+
+        total(k) = sum(link_scores of k cheapest matches)
+                 + w_under · max(n_roots - k - expected, 0)   # under-merged
+                 + w_over  · max(expected - (n_roots - k), 0) # over-merged
+
+    and return the prefix minimising total(k). w_under > w_over asymmetrically
+    penalises leaving flies fragmented more than collapsing two flies together.
+
+    Returns
+    -------
+    (accepted_matches, k_star)
+        accepted_matches : the top-k_star matches by link_score
+        k_star           : number of accepted matches (0 allowed)
+    """
+    ordered = sorted(matches, key=lambda m: m[2])
+
+    def _penalty(num_flies: int) -> float:
+        dev = num_flies - expected
+        return w_under * max(dev, 0) + w_over * max(-dev, 0)
+
+    running_sum = 0.0
+    best_k      = 0
+    best_total  = _penalty(n_roots)          # k = 0 baseline
+    for k, (_, _, link_score_val) in enumerate(ordered, start=1):
+        running_sum += link_score_val
+        total = running_sum + _penalty(n_roots - k)
+        if total < best_total:
+            best_total = total
+            best_k     = k
+
+    return ordered[:best_k], best_k
+
+
 def _run_assignment_round(
-    tracklets:      List[Tracklet],
-    frozen_mapping: Dict[str, str],
-    vial_rois:      Dict[str, Tuple[int, int, int, int]],
-    weights:        Dict[str, Dict],
-    debug_path:     Optional[str] = None,
-) -> Dict[str, str]:
+    tracklets:         List[Tracklet],
+    frozen_mapping:    Dict[str, str],
+    vial_rois:         Dict[str, Tuple[int, int, int, int]],
+    weights:           Dict[str, Dict],
+    expected:          int,
+    w_under:           float,
+    w_over:            float,
+    debug_path:        Optional[str] = None,
+) -> Tuple[Dict[str, str], int]:
     """
     Run one round of Hungarian assignment over currently-unmerged tracklets.
 
@@ -857,23 +906,32 @@ def _run_assignment_round(
     allows chains longer than two tracklets to be resolved across rounds.
     Merges from previous rounds are never revisited or undone.
 
+    Match acceptance is count-aware: among Hungarian's cost-sorted matches,
+    we accept the prefix k that minimises Σ link_scores + asymmetric deviance
+    penalty w.r.t. `expected`. See _select_prefix for the scoring rule.
+
     Parameters
     ----------
     tracklets      : all tracklets for this vial
     frozen_mapping : {orig_id: root_id} from all previous rounds; entries
                      here are preserved unchanged in the output
     vial_rois      : {vial_id: (x0, y0, x1, y1)} for wall detection in link_score
+    expected       : target number of chain roots (flies) for the penalty
+    w_under        : per-unit penalty when num_flies > expected (under-merging)
+    w_over         : per-unit penalty when num_flies < expected (over-merging)
     debug_path     : if set, save the cost matrix as a CSV to this path
 
     Returns
     -------
-    Updated mapping {orig_id: root_id} incorporating any new merges from this round.
+    (updated_mapping, n_accepted)
+        updated_mapping : {orig_id: root_id} with new merges folded in
+        n_accepted      : number of matches accepted this round (0 → no progress)
     """
     roots = [t for t in tracklets
              if frozen_mapping.get(t.orig_id, t.orig_id) == t.orig_id]
 
     if len(roots) <= 1:
-        return frozen_mapping
+        return frozen_mapping, 0
 
     # Effective end_frame for each root = max end_frame across all chain members.
     # Prevents round 2+ from linking a root to a tracklet that overlaps with a
@@ -887,20 +945,18 @@ def _run_assignment_round(
     matches = _solve_hungarian(C)
 
     if not matches:
-        return frozen_mapping
+        return frozen_mapping, 0
 
-    # Reject matched pairs that are much worse than the average candidate link.
-    # This makes the outcome sensitive to weights: changing weights shifts the cost
-    # distribution, so different pairs fall above/below the threshold.
-    BIG = 1e9
-    valid_cells = C[C < BIG / 10]
-    if len(valid_cells) > 0:
-        ref_cost = float(np.mean(valid_cells))
-        max_link_score = cfg_stitching['max_cost_ratio'] * ref_cost
-        matches = [(i, j, cost) for i, j, cost in matches if cost <= max_link_score]
+    matches, n_accepted = _select_prefix(
+        matches  = matches,
+        n_roots  = len(roots),
+        expected = expected,
+        w_under  = w_under,
+        w_over   = w_over,
+    )
 
     if not matches:
-        return frozen_mapping
+        return frozen_mapping, 0
 
     new_mapping = _map_chains_to_roots(roots, matches)
 
@@ -913,7 +969,7 @@ def _run_assignment_round(
         if orig_id not in updated:
             updated[orig_id] = new_root
 
-    return updated
+    return updated, n_accepted
 
 
 # ---------------------------------------------------------------------------
@@ -941,6 +997,25 @@ def _report_duplicates(
         print(f"    {sid}{vial_str}: {n_frames} affected frame(s)")
 
 
+def _should_continue(
+    stop_mode:      str,
+    round_num:      int,
+    n_active:       int,
+    cap:            int,
+    max_rounds:     int,
+) -> bool:
+    """Return True iff another assignment round should be run."""
+    if stop_mode == "cap":
+        return n_active > cap
+    if stop_mode == "fixed":
+        return round_num <= max_rounds
+    if stop_mode == "converge":
+        return True   # convergence is signalled by n_accepted==0 inside the loop
+    raise ValueError(
+        f"Unknown stop_mode {stop_mode!r}. Expected 'converge', 'cap', or 'fixed'."
+    )
+
+
 def stitch_per_vial(
     long_df:        pd.DataFrame,
     vial_rois:      Dict[str, Tuple[int, int, int, int]],
@@ -948,6 +1023,10 @@ def stitch_per_vial(
     weights:        Dict[str, Dict],
     output_dir:     Optional[str] = None,
     vial_count_cap: Optional[int] = None,
+    w_under:        Optional[float] = None,
+    w_over:         Optional[float] = None,
+    stop_mode:      Optional[str] = None,
+    max_rounds:     Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Top-level stitching function. Merges tracklets into fly identities, per vial.
@@ -958,26 +1037,18 @@ def stitch_per_vial(
     be linked to a tracklet in vial 2. Within each vial, Hungarian assignment
     runs iteratively: each round freezes the merges it finds, then the next
     round operates on the reduced set of chain roots. This allows chains longer
-    than two tracklets to be resolved across rounds. The loop stops when the
-    number of distinct identities reaches vial_count_cap or no further merges
-    are possible.
+    than two tracklets to be resolved across rounds. Inside each round, matches
+    are accepted as a cost-ordered prefix minimising
+    Σ link_scores + w_under·max(n_flies-expected,0) + w_over·max(expected-n_flies,0).
 
-    Parameters
-    ----------
-    long_df    : long-format dataframe with columns (frame, orig_id, x, y)
-    vial_rois  : {vial_id: (x0, y0, x1, y1)} bounding boxes from roi.py
-    tracklets  : Tracklet objects from build_tracklets()
-    output_dir : if set, cost matrices are saved to output_dir/debug/ as CSVs
+    Stop condition depends on cfg_stitching['stop_mode']:
+      - 'converge' (default): stop when a round accepts zero matches.
+      - 'cap'               : stop when active IDs per vial ≤ vial_count_cap.
+      - 'fixed'             : run exactly max_rounds rounds.
 
-    Config (read from config.yaml)
-    ------------------------------
-    vial_count_cap : stop when active IDs per vial ≤ this value
-
-    Returns
-    -------
-    long_df with an added 'stitched_id' column mapping each row's orig_id to its
-    resolved fly identity. Downstream, assign_vials_and_compact_ids() in roi.py
-    converts stitched_id into a sequential compact_id.
+    Config (read from config.yaml unless overridden)
+    ------------------------------------------------
+    expected_per_vial, w_under, w_over, vial_count_cap, stop_mode, max_rounds
     """
 
     # 1. Assign tracklets to vials by start_xy
@@ -990,27 +1061,37 @@ def stitch_per_vial(
     # 2. Per-vial iterative stitching
     global_mapping: Dict[str, str] = {}
 
+    cap        = vial_count_cap if vial_count_cap is not None else cfg_stitching['vial_count_cap']
+    expected   = cfg_stitching['expected_per_vial']
+    w_under    = w_under    if w_under    is not None else cfg_stitching['w_under']
+    w_over     = w_over     if w_over     is not None else cfg_stitching['w_over']
+    stop_mode  = stop_mode  if stop_mode  is not None else cfg_stitching['stop_mode']
+    max_rounds = max_rounds if max_rounds is not None else cfg_stitching['max_rounds']
+
     for vial_id in sorted(vial_rois.keys()):
         vt = vial_tracklets[vial_id]
         if not vt:
             continue
 
-        vial_count_cap = vial_count_cap if vial_count_cap is not None else cfg_stitching['vial_count_cap']
-        mapping        = {t.orig_id: t.orig_id for t in vt}
-        round_num      = 1
+        mapping   = {t.orig_id: t.orig_id for t in vt}
+        round_num = 1
 
-        while _count_active_ids(vt, mapping) > vial_count_cap:
+        while _should_continue(stop_mode, round_num,
+                               _count_active_ids(vt, mapping), cap, max_rounds):
             n_before = _count_active_ids(vt, mapping)
 
             debug_path = (
                 os.path.join(output_dir, "debug", f"cost_matrix_{vial_id}_round{round_num}.csv")
                 if output_dir is not None else None
             )
-            mapping = _run_assignment_round(
+            mapping, n_accepted = _run_assignment_round(
                 tracklets      = vt,
                 frozen_mapping = mapping,
                 vial_rois      = vial_rois,
                 weights        = weights,
+                expected       = expected,
+                w_under        = w_under,
+                w_over         = w_over,
                 debug_path     = debug_path,
             )
 
@@ -1019,10 +1100,13 @@ def stitch_per_vial(
             print(
                 f"  {vial_id} round {round_num}: "
                 f"{n_before} -> {n_after} IDs "
-                f"(cap {vial_count_cap})"
+                f"(accepted {n_accepted}, mode={stop_mode}, expected={expected})"
             )
 
-            if n_after == n_before:
+            if stop_mode == "converge" and n_accepted == 0:
+                break
+            if n_after == n_before and stop_mode != "fixed":
+                # No progress under cap mode either — abort to avoid infinite loop.
                 print(f"  {vial_id}: stuck at {n_after} IDs, stopping")
                 break
 
@@ -1071,23 +1155,32 @@ def stitch_general(
     tracklets  : Tracklet objects from build_tracklets()
     output_dir : if set, cost matrices are saved to output_dir/debug/ as CSVs
     """
-    general_count_cap = cfg_stitching['general_count_cap']
+    cap        = cfg_stitching['general_count_cap']
+    expected   = cfg_stitching['expected_per_vial'] * len(vial_rois)
+    w_under    = cfg_stitching['w_under']
+    w_over     = cfg_stitching['w_over']
+    stop_mode  = cfg_stitching['stop_mode']
+    max_rounds = cfg_stitching['max_rounds']
 
     mapping   = {t.orig_id: t.orig_id for t in tracklets}
     round_num = 1
 
-    while _count_active_ids(tracklets, mapping) > general_count_cap:
+    while _should_continue(stop_mode, round_num,
+                           _count_active_ids(tracklets, mapping), cap, max_rounds):
         n_before = _count_active_ids(tracklets, mapping)
 
         debug_path = (
             os.path.join(output_dir, "debug", f"cost_matrix_global_round{round_num}.csv")
             if output_dir is not None else None
         )
-        mapping = _run_assignment_round(
+        mapping, n_accepted = _run_assignment_round(
             tracklets      = tracklets,
             frozen_mapping = mapping,
             vial_rois      = vial_rois,
             weights        = weights,
+            expected       = expected,
+            w_under        = w_under,
+            w_over         = w_over,
             debug_path     = debug_path,
         )
 
@@ -1096,10 +1189,12 @@ def stitch_general(
         print(
             f"  global round {round_num}: "
             f"{n_before} -> {n_after} IDs "
-            f"(cap {general_count_cap})"
+            f"(accepted {n_accepted}, mode={stop_mode}, expected={expected})"
         )
 
-        if n_after == n_before:
+        if stop_mode == "converge" and n_accepted == 0:
+            break
+        if n_after == n_before and stop_mode != "fixed":
             print(f"  global: stuck at {n_after} IDs, stopping")
             break
 
@@ -1130,6 +1225,10 @@ def stitch(
     output_dir:     Optional[str] = None,
     weights:        Optional[Dict[str, Dict]] = None,
     vial_count_cap: Optional[int] = None,
+    w_under:        Optional[float] = None,
+    w_over:         Optional[float] = None,
+    stop_mode:      Optional[str] = None,
+    max_rounds:     Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Dispatch to stitch_per_vial or stitch_general based on
@@ -1143,6 +1242,9 @@ def stitch(
     output_dir : if set, debug cost matrices are written here
     weights    : override for link_score_weights, direction_weights, and
                  behavioral_weights; reads from config.yaml when None
+    w_under, w_over, stop_mode, max_rounds, vial_count_cap :
+        optional overrides for the corresponding config.yaml keys. Passed
+        through only to stitch_per_vial; stitch_general reads from config.
     """
     if weights is None:
         weights = {
@@ -1152,7 +1254,14 @@ def stitch(
         }
     mode = cfg_stitching['stitching_mode']
     if mode == 'per_vial':
-        return stitch_per_vial(long_df, vial_rois, tracklets, weights, output_dir, vial_count_cap)
+        return stitch_per_vial(
+            long_df, vial_rois, tracklets, weights, output_dir,
+            vial_count_cap = vial_count_cap,
+            w_under        = w_under,
+            w_over         = w_over,
+            stop_mode      = stop_mode,
+            max_rounds     = max_rounds,
+        )
     elif mode == 'general':
         return stitch_general(long_df, vial_rois, tracklets, weights, output_dir)
     else:
