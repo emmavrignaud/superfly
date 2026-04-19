@@ -146,7 +146,7 @@ class KalmanBoxTracker(object):
     _H = np.array([[1, 0, 0, 0, 0, 0, 0], [0, 1, 0, 0, 0, 0, 0],
                         [0, 0, 1, 0, 0, 0, 0], [0, 0, 0, 1, 0, 0, 0]], dtype=np.float64)
 
-    def __init__(self, bbox, delta_t=3, orig=False, brownian_pos_noise=1.0):
+    def __init__(self, bbox, delta_t=3, orig=False, brownian_pos_noise=1.0, vial_roi=None):
         """
         Initialises a tracker using initial bounding box.
 
@@ -214,6 +214,7 @@ class KalmanBoxTracker(object):
         self.history_observations = []
         self.velocity = None
         self.delta_t = delta_t
+        self.vial_roi = vial_roi  # (x0, y0, x1, y1) or None — used for wall-bounce prediction
 
     def update(self, bbox):
         """
@@ -253,6 +254,12 @@ class KalmanBoxTracker(object):
     def predict(self):
         """
         Advances the state vector and returns the predicted bounding box estimate.
+
+        If a vial_roi was set at construction, the predicted centre is reflected
+        back inside the vial when it would land outside (wall bounce). The Kalman
+        state itself is not modified — only the box returned for association is
+        corrected. This means the IoU between the prediction and a real post-bounce
+        detection is much higher, preventing spurious track breaks at vial walls.
         """
         if((self.kf.x[6]+self.kf.x[2]) <= 0):
             self.kf.x[6] *= 0.0
@@ -262,7 +269,23 @@ class KalmanBoxTracker(object):
         if(self.time_since_update > 0):
             self.hit_streak = 0
         self.time_since_update += 1
-        self.history.append(convert_x_to_bbox(self.kf.x))
+
+        box = convert_x_to_bbox(self.kf.x)[0]  # [x1, y1, x2, y2]
+
+        if self.vial_roi is not None:
+            vx0, vy0, vx1, vy1 = self.vial_roi
+            cx = (box[0] + box[2]) / 2.0
+            cy = (box[1] + box[3]) / 2.0
+            w  = box[2] - box[0]
+            h  = box[3] - box[1]
+            # Only reflect off left/right walls — flies move freely vertically
+            if cx < vx0:
+                cx = 2 * vx0 - cx
+            elif cx > vx1:
+                cx = 2 * vx1 - cx
+            box = np.array([cx - w/2, cy - h/2, cx + w/2, cy + h/2])
+
+        self.history.append(box.reshape(1, 4))
         return self.history[-1]
 
     def get_state(self):
@@ -289,7 +312,7 @@ ASSO_FUNCS = {  "iou": iou_batch,
 class OCSort(object):
     def __init__(self, det_thresh, max_age=30, min_hits=3,
         iou_threshold=0.3, delta_t=3, asso_func="iou", inertia=0.2, use_byte=False,
-        brownian_pos_noise=1.0):
+        brownian_pos_noise=1.0, vial_rois=None):
         """
         Sets key parameters for SORT
         """
@@ -304,6 +327,7 @@ class OCSort(object):
         self.inertia = inertia
         self.use_byte = use_byte
         self.brownian_pos_noise = brownian_pos_noise
+        self.vial_rois = vial_rois  # {vial_id: (x0,y0,x1,y1)} or None
         KalmanBoxTracker.count = 0
 
         # --- Diagnostics ---
@@ -433,8 +457,18 @@ class OCSort(object):
 
         # create and initialise new trackers for unmatched detections
         for i in unmatched_dets:
+            cx = (dets[i, 0] + dets[i, 2]) / 2.0
+            cy = (dets[i, 1] + dets[i, 3]) / 2.0
+            vial_roi = None
+            if self.vial_rois is not None:
+                for roi in self.vial_rois.values():
+                    x0, y0, x1, y1 = roi
+                    if x0 <= cx <= x1 and y0 <= cy <= y1:
+                        vial_roi = roi
+                        break
             trk = KalmanBoxTracker(dets[i, :], delta_t=self.delta_t,
-                                   brownian_pos_noise=self.brownian_pos_noise)
+                                   brownian_pos_noise=self.brownian_pos_noise,
+                                   vial_roi=vial_roi)
             self.trackers.append(trk)
         i = len(self.trackers)
         for trk in reversed(self.trackers):
