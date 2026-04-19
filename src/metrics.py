@@ -18,7 +18,7 @@ It works in three stages, each pointing to different fixes:
 
   Stage 2 — OCSort tracker
     Of those detections, how many became tracks? And how long do they last?
-    With any short suppressed tracks → min_hits too high (takes 10 frames in a row to create a track but should be lower), 
+    With any short suppressed tracks → min_hits too high (takes 10 frames in a row to create a track but should be lower),
     or flies jumping a lot!
     Many IDs but high coverage → maybe matching problem (wrong asso_func or IoU threshold).
 
@@ -31,21 +31,29 @@ Main entry point
 ----------------
     run_diagnostics(tracker, df_wide, df_stitched, n_expected, fps)
 
-Prints a summary and shows four plots stacked vertically:
-  1. Detection log — raw detections vs emitted tracks per frame
-  2. Tracklet timeline — one bar per track, coloured by emitted vs suppressed
-  3. Suppressed track length histogram — where in the min_hits range do they cluster?
-  4. Coverage before vs after stitching per vial (if df_stitched provided)
+Builds two composite Plotly figures (interactive hover) and optionally writes:
+  metrics_report.html          — interactive, all figures embedded
+  metrics_report.md            — markdown with static PNG references
+  metrics_xy_trajectories.png  — side-by-side XY (raw vs compact)
+  metrics_pipeline.png         — 4-panel pipeline diagnostics
 """
 
-import io
 import json
 import os
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
+import plotly.graph_objects as go
+import plotly.colors as pc
+from plotly.subplots import make_subplots
+
+
+# Stable palette (20+ distinct colours, cycled for many-ID runs)
+_PALETTE = pc.qualitative.Dark24
+
+
+def _track_color(i: int) -> str:
+    return _PALETTE[i % len(_PALETTE)]
 
 
 # ---------------------------------------------------------------------------
@@ -163,10 +171,29 @@ def print_tracker_summary(stats, tracker, n_expected=None):
 
 
 # ---------------------------------------------------------------------------
-# Plots
+# Plots (Plotly)
 # ---------------------------------------------------------------------------
 
-def plot_xy_trajectories(df_wide, vial_rois=None, ax=None):
+def _add_vial_shapes(fig, vial_rois, row=None, col=None):
+    """Add grey ROI rectangles + labels behind trajectories."""
+    if not vial_rois:
+        return
+    for label, (x1, y1, x2, y2) in vial_rois.items():
+        fig.add_shape(
+            type="rect", x0=x1, y0=y1, x1=x2, y1=y2,
+            line=dict(color="lightgrey", width=1),
+            fillcolor="whitesmoke", layer="below",
+            row=row, col=col,
+        )
+        fig.add_annotation(
+            x=(x1 + x2) / 2, y=y1 - 8, text=label,
+            showarrow=False, font=dict(size=9, color="grey"),
+            xanchor="center", yanchor="bottom",
+            row=row, col=col,
+        )
+
+
+def plot_xy_trajectories(df_wide, vial_rois=None, fig=None, row=None, col=None):
     """
     XY trajectory plot: one coloured line per emitted track ID.
 
@@ -175,265 +202,359 @@ def plot_xy_trajectories(df_wide, vial_rois=None, ax=None):
       - tracks that jump across vials            → ID-switch bug
       - tracks that wander erratically           → matching/IoU problem
 
+    Hovering a trajectory reveals the track ID and frame number for each point.
+
     Parameters
     ----------
     df_wide    : wide-format DataFrame (rows=frames, columns=track IDs)
     vial_rois  : optional dict  {vial_id: [x1, y1, x2, y2]}
-                 draws grey ROI rectangles behind the trajectories so you
-                 can see which vial each track belongs to.
-                 Load from run_params.json["roi"].
-    ax         : optional matplotlib axis
-
-    Returns
-    -------
-    ax
+    fig, row, col : optional parent figure + subplot cell
     """
+    if fig is None:
+        fig = go.Figure()
+
+    _add_vial_shapes(fig, vial_rois, row=row, col=col)
+
     id_cols = [c for c in df_wide.columns if c != "frame"]
-    cmap = plt.cm.get_cmap("tab20", max(len(id_cols), 1))
-
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(14, 8))
-
-    # draw vial ROI rectangles first (behind trajectories)
-    if vial_rois:
-        for label, (x1, y1, x2, y2) in vial_rois.items():
-            rect = mpatches.Rectangle(
-                (x1, y1), x2 - x1, y2 - y1,
-                linewidth=1, edgecolor="lightgrey", facecolor="whitesmoke", zorder=0
-            )
-            ax.add_patch(rect)
-            ax.text((x1 + x2) / 2, y1 - 8, label, ha="center", va="bottom",
-                    fontsize=7, color="grey")
-
-    for i, col in enumerate(id_cols):
-        sub = df_wide[df_wide[col].notna() & (df_wide[col] != "")][["frame", col]].copy()
+    for i, tid in enumerate(id_cols):
+        sub = df_wide[df_wide[tid].notna() & (df_wide[tid] != "")][["frame", tid]].copy()
         if sub.empty:
             continue
-        # parse "(x, y)" strings
-        xy = sub[col].str.strip("()").str.split(", ", expand=True).astype(float)
-        xs, ys = xy.iloc[:, 0].values, xy.iloc[:, 1].values
+        xy = sub[tid].str.strip("()").str.split(", ", expand=True).astype(float)
+        xs = xy.iloc[:, 0].values
+        ys = xy.iloc[:, 1].values
         frames = sub["frame"].values
+        color = _track_color(i)
+        customdata = np.stack([frames, np.full(len(frames), str(tid))], axis=-1)
 
-        color = cmap(i)
-        # draw line with alpha so overlapping tracks are visible
-        ax.plot(xs, ys, color=color, lw=0.8, alpha=0.7)
-        # mark start with a circle, end with a cross
-        ax.scatter(xs[0],  ys[0],  marker="o", s=30, color=color, zorder=5)
-        ax.scatter(xs[-1], ys[-1], marker="x", s=30, color=color, zorder=5)
-        # label at the midpoint
-        mid = len(xs) // 2
-        ax.text(xs[mid], ys[mid], col, fontsize=6, color=color,
-                ha="center", va="center", zorder=6)
+        fig.add_trace(
+            go.Scatter(
+                x=xs, y=ys, mode="lines",
+                line=dict(color=color, width=1),
+                opacity=0.75,
+                name=f"ID {tid}",
+                legendgroup=f"raw-{tid}",
+                customdata=customdata,
+                hovertemplate=(
+                    "ID %{customdata[1]}<br>"
+                    "frame %{customdata[0]}<br>"
+                    "(%{x:.1f}, %{y:.1f})<extra></extra>"
+                ),
+                showlegend=False,
+            ),
+            row=row, col=col,
+        )
+        # start (circle) and end (x) markers
+        fig.add_trace(
+            go.Scatter(
+                x=[xs[0], xs[-1]], y=[ys[0], ys[-1]],
+                mode="markers+text",
+                marker=dict(color=color, size=[8, 9], symbol=["circle", "x"]),
+                text=[f"{tid}", ""],
+                textposition="middle right",
+                textfont=dict(size=8, color=color),
+                legendgroup=f"raw-{tid}",
+                hoverinfo="skip",
+                showlegend=False,
+            ),
+            row=row, col=col,
+        )
 
-    ax.set_xlabel("x (pixels)")
-    ax.set_ylabel("y (pixels)")
-    ax.invert_yaxis()   # image coordinates: y increases downward
-    ax.set_title("XY trajectories per track ID  (○=start  ×=end)\n"
-                 "Tracks that jump across vials indicate ID switches")
-    ax.set_aspect("equal", adjustable="datalim")
-    return ax
+    fig.update_xaxes(title_text="x (pixels)", row=row, col=col)
+    fig.update_yaxes(title_text="y (pixels)", row=row, col=col)
+    return fig
 
 
-def plot_xy_trajectories_compact(df_compact, vial_rois=None, ax=None):
+def plot_xy_trajectories_compact(df_compact, vial_rois=None, fig=None, row=None, col=None):
     """
     XY trajectory plot using compact IDs (after stitching + vial assignment).
 
     Each line is one compact_id, so you can verify that stitching correctly
     merged fragments and that each compact ID stays within its vial.
-
-    Parameters
-    ----------
-    df_compact : compact_tracks DataFrame (frame, x, y, compact_id, vial_id, ...)
-    vial_rois  : optional dict {vial_id: [x1, y1, x2, y2]}
-    ax         : optional matplotlib axis
     """
+    if fig is None:
+        fig = go.Figure()
+
+    _add_vial_shapes(fig, vial_rois, row=row, col=col)
+
     compact_ids = sorted(df_compact["compact_id"].unique())
-    cmap = plt.cm.get_cmap("tab20", max(len(compact_ids), 1))
-
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(14, 8))
-
-    if vial_rois:
-        for label, (x1, y1, x2, y2) in vial_rois.items():
-            rect = mpatches.Rectangle(
-                (x1, y1), x2 - x1, y2 - y1,
-                linewidth=1, edgecolor="lightgrey", facecolor="whitesmoke", zorder=0
-            )
-            ax.add_patch(rect)
-            ax.text((x1 + x2) / 2, y1 - 8, label, ha="center", va="bottom",
-                    fontsize=7, color="grey")
-
+    has_vial = "vial_id" in df_compact.columns
     for i, cid in enumerate(compact_ids):
         sub = df_compact[df_compact["compact_id"] == cid].sort_values("frame")
         if sub.empty:
             continue
-        xs, ys = sub["x"].values, sub["y"].values
-        color = cmap(i % 20)
-        ax.plot(xs, ys, color=color, lw=0.8, alpha=0.7)
-        ax.scatter(xs[0],  ys[0],  marker="o", s=30, color=color, zorder=5)
-        ax.scatter(xs[-1], ys[-1], marker="x", s=30, color=color, zorder=5)
-        mid = len(xs) // 2
-        ax.text(xs[mid], ys[mid], str(cid), fontsize=6, color=color,
-                ha="center", va="center", zorder=6)
+        xs = sub["x"].values
+        ys = sub["y"].values
+        frames = sub["frame"].values
+        vials = sub["vial_id"].values if has_vial else np.full(len(frames), "?")
+        color = _track_color(i)
+        customdata = np.stack(
+            [frames, np.full(len(frames), str(cid)), np.asarray(vials, dtype=object)],
+            axis=-1,
+        )
 
-    ax.set_xlabel("x (pixels)")
-    ax.set_ylabel("y (pixels)")
-    ax.invert_yaxis()
-    ax.set_title("XY trajectories — compact IDs after stitching  (○=start  ×=end)\n"
-                 "Each line = one stitched fly. Cross-vial lines = stitching bug.")
-    ax.set_aspect("equal", adjustable="datalim")
-    return ax
+        fig.add_trace(
+            go.Scatter(
+                x=xs, y=ys, mode="lines",
+                line=dict(color=color, width=1),
+                opacity=0.75,
+                name=f"cID {cid}",
+                legendgroup=f"compact-{cid}",
+                customdata=customdata,
+                hovertemplate=(
+                    "compact %{customdata[1]}<br>"
+                    "vial %{customdata[2]}<br>"
+                    "frame %{customdata[0]}<br>"
+                    "(%{x:.1f}, %{y:.1f})<extra></extra>"
+                ),
+                showlegend=False,
+            ),
+            row=row, col=col,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=[xs[0], xs[-1]], y=[ys[0], ys[-1]],
+                mode="markers+text",
+                marker=dict(color=color, size=[8, 9], symbol=["circle", "x"]),
+                text=[f"{cid}", ""],
+                textposition="middle right",
+                textfont=dict(size=8, color=color),
+                legendgroup=f"compact-{cid}",
+                hoverinfo="skip",
+                showlegend=False,
+            ),
+            row=row, col=col,
+        )
+
+    fig.update_xaxes(title_text="x (pixels)", row=row, col=col)
+    fig.update_yaxes(title_text="y (pixels)", row=row, col=col)
+    return fig
 
 
-def plot_detection_log(tracker, fps=30, ax=None):
+def plot_detection_log(tracker, fps=30, fig=None, row=None, col=None):
     """
     Line plot: raw detections vs emitted tracks per frame.
 
-    The gap between the two lines is the signal suppressed by min_hits
-    or lost in association. A persistently large gap means a lot of real
-    fly detections are never making it into the CSV.
+    The shaded area between the two lines is the signal suppressed by min_hits
+    or lost in association.
     """
+    if fig is None:
+        fig = go.Figure()
+
     log = np.array(tracker.detection_log)
     frames    = log[:, 0]
     n_dets    = log[:, 1]
     n_emitted = log[:, 2]
 
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(14, 3))
+    # emitted first, then detections with fill='tonexty' → fills between them
+    fig.add_trace(
+        go.Scatter(
+            x=frames, y=n_emitted, mode="lines",
+            line=dict(color="darkorange", width=1.4),
+            name="emitted tracks",
+            hovertemplate="frame %{x}<br>emitted %{y}<extra></extra>",
+        ),
+        row=row, col=col,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=frames, y=n_dets, mode="lines",
+            line=dict(color="steelblue", width=1.4),
+            fill="tonexty",
+            fillcolor="rgba(255, 0, 0, 0.15)",
+            name="detections (RF-DETR)",
+            hovertemplate="frame %{x}<br>detections %{y}<extra></extra>",
+        ),
+        row=row, col=col,
+    )
+    fig.update_xaxes(title_text="Frame", row=row, col=col)
+    fig.update_yaxes(title_text="Count", row=row, col=col)
+    return fig
 
-    ax.fill_between(frames, n_dets, n_emitted, alpha=0.15, color="red", label="suppressed gap")
-    ax.plot(frames, n_dets,    color="steelblue", lw=1.2, label="detections (RF-DETR)")
-    ax.plot(frames, n_emitted, color="darkorange", lw=1.2, label="emitted tracks")
-    ax.set_xlabel("Frame")
-    ax.set_ylabel("Count")
-    ax.set_title("Stage 1→2: Detections vs emitted tracks per frame")
-    ax.legend(loc="upper right", fontsize=8)
-    return ax
 
-
-def plot_tracklet_timeline(df_wide, suppressed_tracks=None, ax=None):
+def plot_tracklet_timeline(df_wide, suppressed_tracks=None, fig=None, row=None, col=None):
     """
-    Tracklet timeline: one horizontal bar per track ID showing when it is active.
-    Emitted tracks (in CSV) are blue. Suppressed tracks are shown in red if provided.
+    Tracklet timeline: one horizontal bar per track segment.
+    Emitted tracks (in CSV) are blue. Suppressed tracks are red if provided.
 
     Gaps in emitted tracks are visible as breaks in the bars — these are the
-    fragments stitching has to repair.
+    fragments stitching has to repair. Hover a bar to see the track ID and
+    frame range.
     """
+    if fig is None:
+        fig = go.Figure()
+
     id_cols = [c for c in df_wide.columns if c != "frame"]
     n_frames = len(df_wide)
 
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(14, max(4, len(id_cols) * 0.25)))
-
-    # emitted tracks
-    for y, col in enumerate(id_cols):
-        present = df_wide[col].notna() & (df_wide[col] != "")
+    emitted_x, emitted_y, emitted_base, emitted_cd = [], [], [], []
+    for y, col_id in enumerate(id_cols):
+        present = df_wide[col_id].notna() & (df_wide[col_id] != "")
         frames_present = df_wide.loc[present, "frame"].values
         if len(frames_present) == 0:
             continue
-        # draw contiguous segments as bars
         starts, ends = _contiguous_segments(frames_present)
         for s, e in zip(starts, ends):
-            ax.barh(y, e - s + 1, left=s, height=0.7, color="steelblue", alpha=0.8)
+            emitted_x.append(e - s + 1)
+            emitted_y.append(y)
+            emitted_base.append(s)
+            emitted_cd.append([str(col_id), int(s), int(e)])
 
-    # suppressed tracks (below the emitted ones)
+    fig.add_trace(
+        go.Bar(
+            x=emitted_x, y=emitted_y, base=emitted_base,
+            orientation="h",
+            marker=dict(color="steelblue", line=dict(width=0)),
+            opacity=0.85,
+            name="emitted tracks",
+            customdata=emitted_cd,
+            hovertemplate=(
+                "ID %{customdata[0]}<br>"
+                "frames %{customdata[1]}–%{customdata[2]}<extra></extra>"
+            ),
+        ),
+        row=row, col=col,
+    )
+
+    sup_tick_vals, sup_tick_text = [], []
     if suppressed_tracks:
         offset = len(id_cols) + 1
+        sup_x, sup_y, sup_base, sup_cd = [], [], [], []
         for y, trk in enumerate(suppressed_tracks):
             frames = [xy[0] for xy in trk["xy"]]
             if not frames:
                 continue
+            label = f"sup-{y}"
+            sup_tick_vals.append(offset + y)
+            sup_tick_text.append(label)
             starts, ends = _contiguous_segments(np.array(frames))
             for s, e in zip(starts, ends):
-                ax.barh(offset + y, e - s + 1, left=s, height=0.7, color="tomato", alpha=0.7)
+                sup_x.append(e - s + 1)
+                sup_y.append(offset + y)
+                sup_base.append(int(s))
+                sup_cd.append([label, int(s), int(e)])
 
-    blue_patch = mpatches.Patch(color="steelblue", label="emitted tracks")
-    red_patch  = mpatches.Patch(color="tomato",    label="suppressed tracks")
-    ax.legend(handles=[blue_patch, red_patch], loc="upper right", fontsize=8)
-    ax.set_xlabel("Frame")
-    ax.set_ylabel("Track")
-    ax.set_title("Stage 2: Tracklet timeline (blue=emitted, red=suppressed)")
-    ax.set_xlim(0, n_frames)
-    return ax
+        fig.add_trace(
+            go.Bar(
+                x=sup_x, y=sup_y, base=sup_base,
+                orientation="h",
+                marker=dict(color="tomato", line=dict(width=0)),
+                opacity=0.80,
+                name="suppressed tracks",
+                customdata=sup_cd,
+                hovertemplate=(
+                    "%{customdata[0]}<br>"
+                    "frames %{customdata[1]}–%{customdata[2]}<extra></extra>"
+                ),
+            ),
+            row=row, col=col,
+        )
+
+    tick_vals = list(range(len(id_cols))) + sup_tick_vals
+    tick_text = [str(c) for c in id_cols] + sup_tick_text
+    fig.update_xaxes(title_text="Frame", range=[0, n_frames], row=row, col=col)
+    fig.update_yaxes(
+        title_text="Track",
+        tickmode="array", tickvals=tick_vals, ticktext=tick_text,
+        row=row, col=col,
+    )
+    return fig
 
 
-def plot_suppressed_histogram(tracker, ax=None):
+def plot_suppressed_histogram(tracker, fig=None, row=None, col=None):
     """
     Histogram of suppressed track lengths (hit counts).
-
-    Where the histogram peaks tells you why tracks are being suppressed:
-      Peak at 1-3  → genuine noise, very fast movement, or det_thresh too low
-      Peak at 7-9  → min_hits is too strict (currently {min_hits}), lower it
-      Flat spread  → mixed causes
+    A dashed line marks the min_hits threshold.
     """
+    if fig is None:
+        fig = go.Figure()
+
     sup = tracker.suppressed_tracks
     if not sup:
-        print("No suppressed tracks.")
-        return ax
+        return fig
 
     hits = [s["hits"] for s in sup]
+    fig.add_trace(
+        go.Histogram(
+            x=hits,
+            xbins=dict(start=0.5, end=tracker.min_hits + 1.5, size=1),
+            marker=dict(color="tomato", line=dict(color="white", width=1)),
+            opacity=0.85,
+            name="suppressed",
+            hovertemplate="hits %{x}<br>count %{y}<extra></extra>",
+            showlegend=False,
+        ),
+        row=row, col=col,
+    )
+    fig.add_vline(
+        x=tracker.min_hits, line_dash="dash", line_color="black", line_width=1.2,
+        annotation_text=f"min_hits = {tracker.min_hits}",
+        annotation_position="top right",
+        row=row, col=col,
+    )
+    fig.update_xaxes(title_text="Hits before track was suppressed", row=row, col=col)
+    fig.update_yaxes(title_text="Number of tracks", row=row, col=col)
+    return fig
 
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(7, 3))
 
-    ax.hist(hits, bins=range(1, tracker.min_hits + 2), color="tomato",
-            edgecolor="white", alpha=0.85)
-    ax.axvline(tracker.min_hits, color="black", ls="--", lw=1.2,
-               label=f"min_hits = {tracker.min_hits}")
-    ax.set_xlabel("Hits before track was suppressed")
-    ax.set_ylabel("Number of tracks")
-    ax.set_title("Stage 2: Suppressed track length distribution")
-    ax.legend(fontsize=8)
-    return ax
-
-
-def plot_coverage_comparison(df_wide, df_stitched, ax=None):
+def plot_coverage_comparison(df_wide, df_stitched, fig=None, row=None, col=None):
     """
     Bar chart: mean frame coverage per ID before and after stitching.
-
-    If coverage drops after stitching, the link_score is merging tracks
-    in a way that loses detections. If coverage increases, stitching is
-    successfully bridging gaps.
     """
+    if fig is None:
+        fig = go.Figure()
+
     id_cols_wide = [c for c in df_wide.columns if c != "frame"]
     cov_before = np.mean(
         [(df_wide[c].notna() & (df_wide[c] != "")).mean() for c in id_cols_wide]
-    ) * 100 if id_cols_wide else 0
-
-    if df_stitched is not None and "stitched_id" in df_stitched.columns:
-        n_frames = df_wide["frame"].max() + 1
-        cov_after_vals = []
-        for sid, grp in df_stitched.groupby("stitched_id"):
-            cov_after_vals.append(grp["frame"].nunique() / n_frames)
-        cov_after = np.mean(cov_after_vals) * 100
-        n_before = len(id_cols_wide)
-        n_after  = df_stitched["stitched_id"].nunique()
-    else:
-        cov_after = None
-
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(5, 3))
+    ) * 100 if id_cols_wide else 0.0
 
     labels = ["Before stitching"]
     values = [cov_before]
     colors = ["steelblue"]
-    if cov_after is not None:
+    cov_after = None
+
+    if df_stitched is not None and "stitched_id" in df_stitched.columns:
+        n_frames = df_wide["frame"].max() + 1
+        cov_after_vals = [
+            grp["frame"].nunique() / n_frames
+            for _, grp in df_stitched.groupby("stitched_id")
+        ]
+        cov_after = float(np.mean(cov_after_vals) * 100) if cov_after_vals else 0.0
         labels.append("After stitching")
         values.append(cov_after)
         colors.append("mediumseagreen")
+        n_before = len(id_cols_wide)
+        n_after  = df_stitched["stitched_id"].nunique()
 
-    bars = ax.bar(labels, values, color=colors, alpha=0.85, edgecolor="white")
-    ax.set_ylabel("Mean frame coverage per ID (%)")
-    ax.set_title("Stage 2→3: Coverage before vs after stitching")
-    ax.set_ylim(0, 100)
-    for bar, val in zip(bars, values):
-        ax.text(bar.get_x() + bar.get_width() / 2, val + 1, f"{val:.1f}%",
-                ha="center", va="bottom", fontsize=9)
+    fig.add_trace(
+        go.Bar(
+            x=labels, y=values,
+            marker=dict(color=colors, line=dict(color="white", width=1)),
+            opacity=0.9,
+            text=[f"{v:.1f}%" for v in values],
+            textposition="outside",
+            hovertemplate="%{x}<br>%{y:.2f}%<extra></extra>",
+            showlegend=False,
+        ),
+        row=row, col=col,
+    )
+    fig.update_xaxes(row=row, col=col)
+    fig.update_yaxes(title_text="Mean frame coverage per ID (%)", range=[0, 110], row=row, col=col)
+
     if cov_after is not None:
-        ax.text(0.5, -0.25,
-                f"IDs: {n_before} → {n_after}  |  Coverage: {cov_before:.1f}% → {cov_after:.1f}%",
-                ha="center", transform=ax.transAxes, fontsize=8, color="gray")
-    return ax
+        fig.add_annotation(
+            text=f"IDs: {n_before} → {n_after}  |  Coverage: {cov_before:.1f}% → {cov_after:.1f}%",
+            showarrow=False,
+            xref=f"x{'' if (row is None or col is None) else f' domain'}",
+            yref=f"y{'' if (row is None or col is None) else f' domain'}",
+            x=0.5, y=-0.25,
+            xanchor="center", yanchor="top",
+            font=dict(size=10, color="gray"),
+            row=row, col=col,
+        )
+
+    return fig
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +701,74 @@ def print_stitching_objectives(objectives: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Composite figure builders
+# ---------------------------------------------------------------------------
+
+def _build_xy_figure(df_wide, df_compact, vial_rois):
+    """Build the XY trajectory composite figure (1×1 or 1×2)."""
+    if df_compact is not None:
+        fig = make_subplots(
+            rows=1, cols=2,
+            subplot_titles=("Raw tracker IDs", "Compact IDs after stitching"),
+            horizontal_spacing=0.06,
+        )
+        plot_xy_trajectories(df_wide, vial_rois=vial_rois, fig=fig, row=1, col=1)
+        plot_xy_trajectories_compact(df_compact, vial_rois=vial_rois, fig=fig, row=1, col=2)
+        fig.update_yaxes(autorange="reversed", row=1, col=1)
+        fig.update_yaxes(autorange="reversed", row=1, col=2)
+        fig.update_xaxes(scaleanchor="y",  scaleratio=1, row=1, col=1)
+        fig.update_xaxes(scaleanchor="y2", scaleratio=1, row=1, col=2)
+        title = "XY trajectories: raw tracker IDs (left) vs compact IDs after stitching (right)"
+        width = 1600
+    else:
+        fig = make_subplots(rows=1, cols=1, subplot_titles=("Raw tracker IDs",))
+        plot_xy_trajectories(df_wide, vial_rois=vial_rois, fig=fig, row=1, col=1)
+        fig.update_yaxes(autorange="reversed", row=1, col=1)
+        fig.update_xaxes(scaleanchor="y", scaleratio=1, row=1, col=1)
+        title = "XY trajectories (○=start ×=end)"
+        width = 1000
+
+    fig.update_layout(
+        title=dict(text=title, x=0.5, xanchor="center", font=dict(size=13)),
+        height=700, width=width,
+        hovermode="closest",
+        margin=dict(l=60, r=30, t=70, b=50),
+    )
+    return fig
+
+
+def _build_pipeline_figure(tracker, df_wide, df_stitched, fps):
+    """Build the 4-row pipeline diagnostics figure."""
+    fig = make_subplots(
+        rows=4, cols=1,
+        row_heights=[2/10, 4/10, 2/10, 2/10],
+        vertical_spacing=0.08,
+        subplot_titles=(
+            "Stage 1→2: Detections vs emitted tracks per frame",
+            "Stage 2: Tracklet timeline (blue=emitted, red=suppressed)",
+            "Stage 2: Suppressed track length distribution",
+            "Stage 2→3: Coverage before vs after stitching",
+        ),
+    )
+    plot_detection_log(tracker, fps=fps, fig=fig, row=1, col=1)
+    plot_tracklet_timeline(df_wide, suppressed_tracks=tracker.suppressed_tracks, fig=fig, row=2, col=1)
+    plot_suppressed_histogram(tracker, fig=fig, row=3, col=1)
+    plot_coverage_comparison(df_wide, df_stitched, fig=fig, row=4, col=1)
+
+    fig.update_layout(
+        title=dict(text="Tracking pipeline diagnostics", x=0.5, xanchor="center",
+                   font=dict(size=13)),
+        height=1400, width=1400,
+        hovermode="closest",
+        barmode="overlay",
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=1, xanchor="right"),
+        margin=dict(l=60, r=30, t=80, b=50),
+    )
+    return fig
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -588,7 +777,7 @@ def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
                     config=None, output_dir=None,
                     stitching_objectives=None):
     """
-    Run all diagnostics, display plots, and optionally save a report.
+    Run all diagnostics, display interactive Plotly figures, and optionally save a report.
 
     Parameters
     ----------
@@ -599,13 +788,10 @@ def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
     n_expected  : total number of flies expected (e.g. n_vials × flies_per_vial)
     fps         : video frame rate (used for axis labels)
     vial_rois   : optional dict {vial_id: [x1, y1, x2, y2]} for XY plot background
-                  (load from run_params.json["roi"])
-    config      : optional dict — the full config used for this run (from config.yaml or
-                  run_params.json). Printed in the summary and included in the report.
-    output_dir  : optional path — if given, saves plots as PNGs and writes
-                  metrics_report.md inside that directory.
+    config      : optional dict — the full config used for this run
+    output_dir  : optional path — if given, saves HTML + markdown + PNGs inside that directory
+    stitching_objectives : optional dict from compute_stitching_objectives()
     """
-    # --- print config if provided ---
     if config is not None:
         print("=" * 55)
         print("  RUN CONFIGURATION")
@@ -619,59 +805,140 @@ def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
 
     dup_stats = compute_stitch_duplicate_stats(df_stitched, vial_rois) if df_stitched is not None else None
 
-    # --- XY trajectory plots: raw tracker IDs vs compact IDs side by side ---
-    if df_compact is not None:
-        fig_xy, (ax_raw, ax_compact) = plt.subplots(1, 2, figsize=(20, 8))
-        fig_xy.suptitle("XY trajectories: raw tracker IDs (left) vs compact IDs after stitching (right)",
-                         fontsize=12, fontweight="bold")
-        plot_xy_trajectories(df_wide, vial_rois=vial_rois, ax=ax_raw)
-        plot_xy_trajectories_compact(df_compact, vial_rois=vial_rois, ax=ax_compact)
-    else:
-        fig_xy, ax_raw = plt.subplots(figsize=(14, 8))
-        fig_xy.suptitle("Track XY trajectories", fontsize=13, fontweight="bold")
-        plot_xy_trajectories(df_wide, vial_rois=vial_rois, ax=ax_raw)
-    plt.tight_layout()
+    fig_xy       = _build_xy_figure(df_wide, df_compact, vial_rois)
+    fig_pipeline = _build_pipeline_figure(tracker, df_wide, df_stitched, fps)
 
-    # --- Pipeline stage plots stacked ---
-    fig_pipeline, axes = plt.subplots(4, 1, figsize=(14, 14),
-                                      gridspec_kw={"height_ratios": [2, 4, 2, 2]})
-    fig_pipeline.suptitle("Tracking pipeline diagnostics", fontsize=13, fontweight="bold")
-
-    plot_detection_log(tracker, fps=fps, ax=axes[0])
-    plot_tracklet_timeline(df_wide, suppressed_tracks=tracker.suppressed_tracks, ax=axes[1])
-    plot_suppressed_histogram(tracker, ax=axes[2])
-    plot_coverage_comparison(df_wide, df_stitched, ax=axes[3])
-
-    plt.tight_layout()
-
-    # --- save report if output_dir given ---
     if output_dir is not None:
-        _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline, dup_stats, stitching_objectives)
+        _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
+                     dup_stats, stitching_objectives)
 
-    plt.show()
+    fig_xy.show()
+    fig_pipeline.show()
 
 
-def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline, dup_stats=None, objectives=None):
+# ---------------------------------------------------------------------------
+# Report writer
+# ---------------------------------------------------------------------------
+
+def _html_escape(text: str) -> str:
+    return (text.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;"))
+
+
+def _dup_stats_html(dup_stats) -> str:
+    if dup_stats is None:
+        return "<p><em>Stitched output not provided — duplicate check skipped.</em></p>"
+    n_ids    = dup_stats["n_duplicate_ids"]
+    n_frames = dup_stats["n_duplicate_frames"]
+    if n_ids == 0:
+        return "<p><strong>0 duplicate (frame, stitched_id) pairs — clean.</strong></p>"
+    rows = "".join(
+        f"<tr><td>{d['stitched_id']}</td><td>{d['vial_id']}</td><td>{d['n_frames']}</td></tr>"
+        for d in dup_stats["details"]
+    )
+    return (
+        f"<p><strong>{n_ids} stitched_id(s) had duplicates across {n_frames} frame(s).</strong></p>"
+        f"<table><thead><tr><th>stitched_id</th><th>vial</th><th>affected frames</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+    )
+
+
+def _objectives_html(objectives) -> str:
+    if objectives is None:
+        return "<p><em>Not computed for this run.</em></p>"
+    return (
+        "<table><thead><tr><th>Objective</th><th>Value</th></tr></thead><tbody>"
+        f"<tr><td>vial_count_error</td><td>{objectives['vial_count_error']:.1f}</td></tr>"
+        f"<tr><td>per_id_coverage_loss</td><td>{objectives['per_id_coverage_loss']:.1f} frames/fly</td></tr>"
+        f"<tr><td>short_track_count</td><td>{objectives['short_track_count']}</td></tr>"
+        f"<tr><td>per_frame_id_variance</td><td>{objectives['per_frame_id_variance']:.3f}</td></tr>"
+        "</tbody></table>"
+    )
+
+
+_HTML_STYLE = """
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+         max-width: 1700px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { border-bottom: 2px solid #444; padding-bottom: 0.2em; }
+  h2 { border-bottom: 1px solid #ccc; padding-bottom: 0.2em; margin-top: 2em; }
+  pre { background: #f6f6f6; padding: 0.8em; border-radius: 4px; overflow-x: auto;
+        font-size: 12px; line-height: 1.3; }
+  details { margin: 0.8em 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  table { border-collapse: collapse; margin: 0.5em 0; }
+  th, td { border: 1px solid #ccc; padding: 4px 10px; font-size: 13px; text-align: left; }
+  th { background: #eee; }
+</style>
+"""
+
+
+def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
+                 dup_stats=None, objectives=None):
     """
-    Save the two diagnostic figures as PNGs and write a metrics_report.md
-    that embeds them alongside the text summary and config.
-
-    Files written to output_dir:
-      metrics_xy_trajectories.png  — XY trajectory side-by-side plot
-      metrics_pipeline.png         — 4-panel pipeline diagnostics plot
-      metrics_report.md            — markdown report with all of the above
+    Write:
+      metrics_report.html          — interactive, all figures embedded
+      metrics_report.md            — markdown with PNG refs
+      metrics_xy_trajectories.png  — static XY plot
+      metrics_pipeline.png         — static pipeline plot
     """
     os.makedirs(output_dir, exist_ok=True)
 
     xy_png       = os.path.join(output_dir, "metrics_xy_trajectories.png")
     pipeline_png = os.path.join(output_dir, "metrics_pipeline.png")
     report_md    = os.path.join(output_dir, "metrics_report.md")
+    report_html  = os.path.join(output_dir, "metrics_report.html")
 
-    fig_xy.savefig(xy_png,       dpi=150, bbox_inches="tight")
-    fig_pipeline.savefig(pipeline_png, dpi=150, bbox_inches="tight")
+    # Static PNG exports (kaleido)
+    try:
+        fig_xy.write_image(xy_png,             width=1600, height=700,  scale=2)
+        fig_pipeline.write_image(pipeline_png, width=1400, height=1400, scale=2)
+    except Exception as exc:
+        print(f"[metrics] PNG export failed ({exc}); install kaleido to enable.")
 
-    # build markdown
-    md = ["# Metrics Report\n"]
+    # Interactive HTML divs — load plotly.js from CDN once (first fig only)
+    xy_div       = fig_xy.to_html(include_plotlyjs="cdn",  full_html=False,
+                                  div_id="fig-xy")
+    pipeline_div = fig_pipeline.to_html(include_plotlyjs=False, full_html=False,
+                                        div_id="fig-pipeline")
+
+    config_block = (
+        f"<details open><summary>Configuration</summary>"
+        f"<pre>{_html_escape(json.dumps(config, indent=2, default=str))}</pre></details>"
+        if config is not None else ""
+    )
+
+    html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Metrics Report</title>{_HTML_STYLE}</head>
+<body>
+<h1>Metrics Report</h1>
+
+{config_block}
+
+<h2>Summary</h2>
+<pre>{_html_escape(summary_text)}</pre>
+
+<h2>Stitching Duplicate Check</h2>
+{_dup_stats_html(dup_stats)}
+
+<h2>Stitching Quality Objectives</h2>
+{_objectives_html(objectives)}
+
+<h2>XY Trajectories</h2>
+{xy_div}
+
+<h2>Pipeline Diagnostics</h2>
+{pipeline_div}
+
+</body></html>
+"""
+    with open(report_html, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    # Markdown (static PNG refs) — mirrors the HTML structure
+    md = ["# Metrics Report\n",
+          f"> Interactive version: [metrics_report.html](metrics_report.html)\n"]
 
     if config is not None:
         md.append("## Configuration\n")
@@ -721,7 +988,8 @@ def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline, dup_sta
     with open(report_md, "w", encoding="utf-8") as f:
         f.write("\n".join(md))
 
-    print(f"Report saved to: {report_md}")
+    print(f"Report saved: {report_html}")
+    print(f"           +  {report_md}")
 
 
 # ---------------------------------------------------------------------------

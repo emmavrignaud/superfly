@@ -6,10 +6,129 @@ Render overlay video: fly positions coloured by vial, shaded by compact_id.
 Expects compact_tracks CSV columns: frame, x, y, vial_id, compact_id.
 """
 
+import json
 import os
+from pathlib import Path
+
 import cv2
 import numpy as np
 import pandas as pd
+import yaml
+
+
+def _visualization_cfg() -> dict:
+    p = Path(__file__).parent.parent / "config.yaml"
+    if not p.exists():
+        return {}
+    with open(p) as f:
+        return yaml.safe_load(f).get("visualization", {})
+
+
+def _roi_library_path() -> Path:
+    return Path(__file__).parent.parent / "roi_library.json"
+
+
+def _resolve_overlay_source(video_path: str) -> tuple[str, dict | None]:
+    """Pick the substrate the overlay should be drawn on.
+
+    Returns (effective_video_path, crop_params or None).
+
+    - ``overlay_source: processed`` (or unknown / fallback): returns the caller's
+      path unchanged; caller reads frames as-is (current behavior).
+    - ``overlay_source: raw_cropped``: strips the ``_pp`` suffix from the input
+      path to get the raw video, looks up ``crop_params`` in roi_library.json
+      by raw-video stem, and returns both so the caller can seek+crop.
+
+    Any missing file / missing library entry falls back silently (with a warning)
+    to the processed substrate — visualization must never crash the pipeline.
+    """
+    cfg = _visualization_cfg()
+    mode = str(cfg.get("overlay_source", "raw_cropped")).lower()
+    if mode == "processed":
+        return video_path, None
+    if mode != "raw_cropped":
+        print(f"[visualization] unknown overlay_source {mode!r} — using processed substrate.")
+        return video_path, None
+
+    p = Path(video_path)
+    raw_path = p.with_name(p.stem[:-3]).with_suffix(p.suffix) if p.stem.endswith("_pp") else p
+
+    if not raw_path.exists():
+        print(f"[visualization] raw video not found at {raw_path} — falling back to processed substrate.")
+        return video_path, None
+
+    lib_path = _roi_library_path()
+    if not lib_path.exists():
+        print("[visualization] roi_library.json not found — falling back to processed substrate.")
+        return video_path, None
+
+    try:
+        with open(lib_path, "r") as f:
+            library = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[visualization] could not read roi_library.json ({exc}) — falling back to processed substrate.")
+        return video_path, None
+
+    entry = library.get(raw_path.stem)
+    if not entry or "preprocessing" not in entry:
+        print(f"[visualization] no preprocessing crop_params for stem {raw_path.stem!r} — falling back to processed substrate.")
+        return video_path, None
+
+    try:
+        crop = entry["preprocessing"]
+        crop_params = {
+            "x":     int(crop["x"]),
+            "y":     int(crop["y"]),
+            "w":     int(crop["w"]),
+            "h":     int(crop["h"]),
+            "start": int(crop["start"]),
+            "end":   int(crop["end"]),
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        print(f"[visualization] malformed preprocessing entry for {raw_path.stem!r} ({exc}) — falling back to processed substrate.")
+        return video_path, None
+
+    return str(raw_path), crop_params
+
+
+def _draw_fly_marker(
+    img,
+    x: int,
+    y: int,
+    color: tuple,
+    *,
+    tick_len: int = 4,
+    tick_thick: int = 1,
+    label: str | None = None,
+    label_offset: tuple = (10, -10),
+    chip_pad: int = 2,
+    chip_font_scale: float = 0.4,
+    leader_thick: int = 1,
+):
+    """Crosshair tick at (x, y) + optional chip label with leader line.
+
+    Diagonal ticks (NE/SW, NW/SE) leave the fly body itself visible; the
+    ID is drawn inside a small filled rectangle offset from the centroid,
+    with a thin line pointing back to the fly.
+    """
+    cv2.line(img, (x - tick_len, y - tick_len), (x - 1, y - 1), color, tick_thick, cv2.LINE_AA)
+    cv2.line(img, (x + 1, y + 1), (x + tick_len, y + tick_len), color, tick_thick, cv2.LINE_AA)
+    cv2.line(img, (x - tick_len, y + tick_len), (x - 1, y + 1), color, tick_thick, cv2.LINE_AA)
+    cv2.line(img, (x + 1, y - 1), (x + tick_len, y - tick_len), color, tick_thick, cv2.LINE_AA)
+
+    if label is None:
+        return
+
+    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, chip_font_scale, 1)
+    cx = x + label_offset[0]
+    cy = y + label_offset[1]
+    x0, y0 = cx - chip_pad, cy - th - chip_pad
+    x1, y1 = cx + tw + chip_pad, cy + chip_pad
+
+    cv2.line(img, (x, y), (x0, y1), color, leader_thick, cv2.LINE_AA)
+    cv2.rectangle(img, (x0, y0), (x1, y1), color, -1, cv2.LINE_AA)
+    cv2.putText(img, label, (cx, cy), cv2.FONT_HERSHEY_SIMPLEX,
+                chip_font_scale, (255, 255, 255), 1, cv2.LINE_AA)
 
 
 def render_vial_overlay_video(
@@ -22,11 +141,14 @@ def render_vial_overlay_video(
     end: int = -1,
     step: int = 1,
     fps_out: int = 30,
-    radius: int = 5,
     show_ids: bool = True,
-    font_scale: float = 0.5,
-    text_thick: int = 1,
-    outline_thick: int = 2,
+    tick_len: int = 4,
+    tick_thick: int = 1,
+    chip_font_scale: float = 0.4,
+    label_offset_x: int = 10,
+    label_offset_y: int = -10,
+    chip_pad: int = 2,
+    leader_thick: int = 1,
 ):
     """
     Render an overlay video where flies are coloured by vial and shaded
@@ -55,12 +177,18 @@ def render_vial_overlay_video(
         Render every N-th frame (1 = every frame).
     fps_out : int
         Output frame rate.
-    radius : int
-        Dot radius in pixels.
     show_ids : bool
-        Overlay compact_id text next to each dot.
-    font_scale, text_thick, outline_thick : float/int
-        OpenCV text rendering parameters.
+        Overlay compact_id chip next to each fly.
+    tick_len, tick_thick : int
+        Half-length and stroke width of the crosshair at the fly centroid.
+    chip_font_scale : float
+        Font scale for the ID chip text.
+    label_offset_x, label_offset_y : int
+        Chip anchor relative to the fly centroid (pixels).
+    chip_pad : int
+        Padding inside the chip background rectangle.
+    leader_thick : int
+        Stroke width of the line connecting fly to chip.
     """
 
     VIAL_HUE = {
@@ -91,18 +219,25 @@ def render_vial_overlay_video(
         bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0]
         return int(bgr[0]), int(bgr[1]), int(bgr[2])
 
-    def put_text_outlined(img, text, org):
-        for col, thick in [((0, 0, 0), outline_thick), ((255, 255, 255), text_thick)]:
-            cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX,
-                        font_scale, col, thick, cv2.LINE_AA)
+    effective_path, crop_params = _resolve_overlay_source(video_path)
 
-    cap = cv2.VideoCapture(video_path)
+    cap = cv2.VideoCapture(effective_path)
     if not cap.isOpened():
-        raise FileNotFoundError(video_path)
+        raise FileNotFoundError(effective_path)
 
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if crop_params is not None:
+        w = crop_params["w"]
+        h = crop_params["h"]
+        cx0 = crop_params["x"]
+        cy0 = crop_params["y"]
+        raw_start = crop_params["start"]
+        n_frames = crop_params["end"] - crop_params["start"]
+    else:
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cx0 = cy0 = 0
+        raw_start = 0
+        n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     if end == -1 or end >= n_frames:
         end = n_frames - 1
@@ -113,11 +248,18 @@ def render_vial_overlay_video(
     if not writer.isOpened():
         raise RuntimeError("Could not open VideoWriter")
 
+    label_offset = (label_offset_x, label_offset_y)
+
     for frame_idx in range(start, end + 1, step):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, raw_start + frame_idx)
         ok, frame_bgr = cap.read()
         if not ok:
             break
+
+        if crop_params is not None:
+            frame_bgr = frame_bgr[cy0:cy0 + h, cx0:cx0 + w]
+            if frame_bgr.shape[0] != h or frame_bgr.shape[1] != w:
+                break
 
         dets = by_frame.get(int(frame_idx + frame_offset))
         if dets is not None:
@@ -129,9 +271,14 @@ def render_vial_overlay_video(
                 if 0 <= xi < w and 0 <= yi < h:
                     cid = int(cid)
                     vial_id = str(vial_id)
-                    cv2.circle(frame_bgr, (xi, yi), radius, color_for(vial_id, cid), -1)
-                    if show_ids:
-                        put_text_outlined(frame_bgr, str(cid), (xi + 8, yi - 8))
+                    _draw_fly_marker(
+                        frame_bgr, xi, yi, color_for(vial_id, cid),
+                        tick_len=tick_len, tick_thick=tick_thick,
+                        label=str(cid) if show_ids else None,
+                        label_offset=label_offset,
+                        chip_pad=chip_pad, chip_font_scale=chip_font_scale,
+                        leader_thick=leader_thick,
+                    )
 
         writer.write(frame_bgr)
 
@@ -150,11 +297,14 @@ def render_raw_overlay_video(
     end: int = -1,
     step: int = 1,
     fps_out: int = 30,
-    radius: int = 5,
     show_ids: bool = True,
-    font_scale: float = 0.5,
-    text_thick: int = 1,
-    outline_thick: int = 2,
+    tick_len: int = 4,
+    tick_thick: int = 1,
+    chip_font_scale: float = 0.4,
+    label_offset_x: int = 10,
+    label_offset_y: int = -10,
+    chip_pad: int = 2,
+    leader_thick: int = 1,
 ):
     """
     Render an overlay video from raw long-format tracks (frame, orig_id, x, y).
@@ -180,18 +330,25 @@ def render_raw_overlay_video(
         bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0]
         return int(bgr[0]), int(bgr[1]), int(bgr[2])
 
-    def put_text_outlined(img, text, org):
-        for col, thick in [((0, 0, 0), outline_thick), ((255, 255, 255), text_thick)]:
-            cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX,
-                        font_scale, col, thick, cv2.LINE_AA)
+    effective_path, crop_params = _resolve_overlay_source(video_path)
 
-    cap = cv2.VideoCapture(video_path)
+    cap = cv2.VideoCapture(effective_path)
     if not cap.isOpened():
-        raise FileNotFoundError(video_path)
+        raise FileNotFoundError(effective_path)
 
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if crop_params is not None:
+        w = crop_params["w"]
+        h = crop_params["h"]
+        cx0 = crop_params["x"]
+        cy0 = crop_params["y"]
+        raw_start = crop_params["start"]
+        n_frames = crop_params["end"] - crop_params["start"]
+    else:
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cx0 = cy0 = 0
+        raw_start = 0
+        n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     if end == -1 or end >= n_frames:
         end = n_frames - 1
@@ -202,11 +359,18 @@ def render_raw_overlay_video(
     if not writer.isOpened():
         raise RuntimeError("Could not open VideoWriter")
 
+    label_offset = (label_offset_x, label_offset_y)
+
     for frame_idx in range(start, end + 1, step):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, raw_start + frame_idx)
         ok, frame_bgr = cap.read()
         if not ok:
             break
+
+        if crop_params is not None:
+            frame_bgr = frame_bgr[cy0:cy0 + h, cx0:cx0 + w]
+            if frame_bgr.shape[0] != h or frame_bgr.shape[1] != w:
+                break
 
         dets = by_frame.get(int(frame_idx + frame_offset))
         if dets is not None:
@@ -215,9 +379,14 @@ def render_raw_overlay_video(
                 yi_r = float(y)
                 yi   = int(round((h - 1 - yi_r) if invert_y else yi_r))
                 if 0 <= xi < w and 0 <= yi < h:
-                    cv2.circle(frame_bgr, (xi, yi), radius, color_for(str(oid)), -1)
-                    if show_ids:
-                        put_text_outlined(frame_bgr, str(oid), (xi + 8, yi - 8))
+                    _draw_fly_marker(
+                        frame_bgr, xi, yi, color_for(str(oid)),
+                        tick_len=tick_len, tick_thick=tick_thick,
+                        label=str(oid) if show_ids else None,
+                        label_offset=label_offset,
+                        chip_pad=chip_pad, chip_font_scale=chip_font_scale,
+                        leader_thick=leader_thick,
+                    )
 
         writer.write(frame_bgr)
 

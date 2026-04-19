@@ -1,36 +1,38 @@
-# Default pipeline parameters — override on the CLI or in notebook cells.
-# See scripts/run_tracking.py --help and scripts/run_classification.py --help.
+# Default pipeline parameters — override via CLI or notebook.
 
 tracker:
-  detection_confidence_rfdetr: 0.4  # confidence threshold passed to Roboflow inference (controls what RF-DETR returns)
-  confidence: 0.55                   # tracker confidence threshold: higher = more conservative about accepting matches (recommended: 0.3-0.5)
-  track_activation_threshold: 0.10 # min confidence to start a new track; lower = more tracks but more false positives
-  lost_track_buffer: 180         # max frames a track can be lost before being dropped
-  minimum_matching_threshold: 0.01 # min association score to accept a match; lower = more matches but more false positives
-  minimum_consecutive_frames: 3
-  min_area: 20                   # px^2; detections smaller than this are ignored
-  asso_func: diou               # association function: hmiou (recommended) or iou
-  brownian_pos_noise: 8       # scale factor on Q[cx] and Q[cy]; 1.0 = original, increase to tolerate saccades
+  # RF-DETR detections + OC-SORT association into tracklets.
+  detection_confidence_rfdetr: 0.4   # RF-DETR output threshold
+  confidence: 0.55                   # tracker match threshold (0.3–0.5 typical)
+  track_activation_threshold: 0.10   # min conf to open a new track
+  lost_track_buffer: 180             # frames a track may go unseen before drop
+  minimum_matching_threshold: 0.01   # min association score to keep a match
+  minimum_consecutive_frames: 3      # frames needed to confirm a new track
+  min_area: 20                       # px²; smaller detections discarded
+  asso_func: diou                    # iou | giou | diou | ciou | hmiou
+  brownian_pos_noise: 15             # Kalman Q[cx,cy] scale; ↑ tolerates saccades
 
 stitching:
-  stitching_mode: per_vial       # per_vial: stitch within each vial independently | general: stitch across all vials (cross-vial links still forbidden)
-  vial_count_cap: 7             # per_vial mode: stop when active IDs per vial ≤ this
-  max_cost_ratio: 2.0           # reject matched pairs whose cost > this × mean(all valid candidate costs)
-  general_count_cap: 56          # general mode: stop when total active IDs ≤ this
-  fps: 30
-  pause_threshold: 1.0
-  edge_fraction: 0.10
-  min_points_for_scale: 10
-  expected_per_vial: 7             # ground-truth fly count per vial; used by stitching/tracker objectives
-  short_track_frac: 0.10           # tracks shorter than this fraction of num_frames are flagged
-  link_score_weights:
-    extrap: 0
-    direction: 0
-    behavioral: 0            # for later: add a gap penalty term :) 
-  direction_weights:
-    heading_vs_gap: 0.50        # weight for: A's final heading vs. gap vector
-    overall_vs_overall: 0.50    # weight for: A's overall direction vs. B's overall direction
-  behavioral_weights:           # per-feature weights for weighted Euclidean dissimilarity
+  # Greedy linking of tracklets until active-ID count ≤ cap.
+  # Cost = weighted sum of extrapolation + direction + behavioral terms.
+  stitching_mode: per_vial       # per_vial | general
+  vial_count_cap: 7              # per_vial: stop at this many IDs per vial
+  max_cost_ratio: 2.0            # reject match if cost > this × mean candidate cost
+  general_count_cap: 56          # general: stop at this many total IDs
+  fps: 30                        # video fps (for px→px/s)
+  pause_threshold: 1.0           # px/s below this = pause
+  edge_fraction: 0.10            # wall-proximity zone as fraction of vial w/h
+  min_points_for_scale: 10       # min tracklet length to contribute to feature scales
+  expected_per_vial: 7           # ground-truth fly count per vial
+  short_track_frac: 0.10         # tracklets below this × num_frames flagged as short
+  link_score_weights:            # 0 disables a term
+    extrap: 0.4
+    direction: 0.3
+    behavioral: 0.3                # TODO: add gap penalty
+  direction_weights:             # sub-weights inside direction term (sum = 1.0)
+    heading_vs_gap: 0.7         # A's final heading vs. A→B gap vector
+    overall_vs_overall: 0.30     # A's overall direction vs. B's
+  behavioral_weights:            # per-feature weights for behavioral dissimilarity
     median_velocity: 1.0
     pause_fraction: 1.0
     mean_turning_angle: 1.0
@@ -40,19 +42,29 @@ stitching:
     tortuosity: 1.0
 
 preprocessing:
-  bg_gain: 1.2
-  bg_white_level: 245
-  bg_percentile: 85.0            # percentile used for background estimation (85-90 recommended)
-  bg_sample_stride: 1            # use every N-th frame for background estimation
-  default_end: 700               # default upper frame bound shown in the GUI slider
-  codec: mp4v
+  # Per-pixel percentile background, divided out and rescaled to white.
+  bg_gain: 1.2                   # post-division gain
+  bg_white_level: 245            # target background value (0–255)
+  bg_percentile: 85.0            # percentile over time per pixel (85–90)
+  bg_sample_stride: 1            # use every N-th frame for estimation
+  default_end: 700               # ROI GUI slider upper bound
+  codec: mp4v                    # FourCC for preprocessed output
 
 visualization:
-  fps_out: 30
-  radius: 5
-  show_ids: true
+  # Overlay: diagonal crosshair on the fly + off-body ID chip with leader line.
+  overlay_source: raw_cropped  # raw_cropped | processed — substrate for the overlay
+  fps_out: 30              # output video fps
+  show_ids: true           # false = crosshair only
+  tick_len: 2              # half-length of crosshair arm (px)
+  tick_thick: 0.3          # crosshair stroke (px)
+  chip_font_scale: 0.2     # OpenCV font scale for the ID
+  label_offset_x: 10       # chip offset from centroid, x (px, +right)
+  label_offset_y: -10      # chip offset from centroid, y (px, −up)
+  chip_pad: 2              # padding inside the chip (px)
+  leader_thick: 1          # leader line stroke (px)
 
 roi:
-  use_saved_roi: true         # true: load from roi_library if available; false: always pop GUI
-  snap_threshold_pct: 0.005   # snap zone as a fraction of the last drawn box height
-  snap_enabled: true          # default on; press S in the GUI to toggle per-vial
+  # Per-vial ROI; cached in roi_library/. Snapping aligns boxes vertically.
+  use_saved_roi: true         # false = always open GUI to redraw
+  snap_threshold_pct: 0.005   # snap zone as fraction of last box height
+  snap_enabled: true          # press 'S' in GUI to toggle per-vial
