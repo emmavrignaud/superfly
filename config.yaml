@@ -6,11 +6,12 @@ tracker:
   confidence: 0.55                   # tracker match threshold (0.3–0.5 typical)
   track_activation_threshold: 0.10   # min conf to open a new track
   lost_track_buffer: 180             # frames a track may go unseen before drop
-  minimum_matching_threshold: 0.01   # min association score to keep a match
+  minimum_matching_threshold: 0.1   # min association score to keep a match
   minimum_consecutive_frames: 3      # frames needed to confirm a new track
   min_area: 20                       # px²; smaller detections discarded
   asso_func: diou                    # iou | giou | diou | ciou | hmiou
   brownian_pos_noise: 15             # Kalman Q[cx,cy] scale; ↑ tolerates saccades
+  aspect_weight: 0.05               # bonus for matching boxes of similar aspect ratio; 0 = disabled, try 0.05–0.2
 
 stitching:
   # Greedy linking of tracklets until active-ID count ≤ cap.

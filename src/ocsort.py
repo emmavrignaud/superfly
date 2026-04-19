@@ -312,7 +312,7 @@ ASSO_FUNCS = {  "iou": iou_batch,
 class OCSort(object):
     def __init__(self, det_thresh, max_age=30, min_hits=3,
         iou_threshold=0.3, delta_t=3, asso_func="iou", inertia=0.2, use_byte=False,
-        brownian_pos_noise=1.0, vial_rois=None):
+        brownian_pos_noise=1.0, vial_rois=None, aspect_weight=0.0):
         """
         Sets key parameters for SORT
         """
@@ -328,6 +328,7 @@ class OCSort(object):
         self.use_byte = use_byte
         self.brownian_pos_noise = brownian_pos_noise
         self.vial_rois = vial_rois  # {vial_id: (x0,y0,x1,y1)} or None
+        self.aspect_weight = aspect_weight
         KalmanBoxTracker.count = 0
 
         # --- Diagnostics ---
@@ -400,7 +401,7 @@ class OCSort(object):
             First round of association
         """
         matched, unmatched_dets, unmatched_trks = associate(
-            dets, trks, self.iou_threshold, velocities, k_observations, self.inertia, self.asso_func)
+            dets, trks, self.iou_threshold, velocities, k_observations, self.inertia, self.asso_func, self.aspect_weight)
         for m in matched:
             self.trackers[m[1]].update(dets[m[0], :])
 

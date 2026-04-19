@@ -344,36 +344,46 @@ def _filter_matches(matched_indices, iou_matrix, iou_threshold, num_dets, num_tr
     return matches, unmatched_dets.astype(int), unmatched_trks.astype(int)
 
 
-def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc_weight, asso_func=iou_batch):
+def aspect_ratio_bonus_batch(detections, trackers, weight):
+    """
+    One-sided aspect ratio similarity bonus.
+
+    For each detection-tracker pair, compute how similar their aspect ratios are.
+    Similar shape → bonus; dissimilar shape → 0 (never penalised).
+
+        r = w / h  for each box
+        similarity = 1 - |r_det - r_trk| / (r_det + r_trk)   in [0, 1]
+        bonus = max(0, similarity) * weight
+
+    Shape: (n_det, n_trk)
+    """
+    det_w = detections[:, 2] - detections[:, 0]
+    det_h = detections[:, 3] - detections[:, 1] + 1e-6
+    det_r = (det_w / det_h)[:, np.newaxis]          # (n_det, 1)
+
+    trk_w = trackers[:, 2] - trackers[:, 0]
+    trk_h = trackers[:, 3] - trackers[:, 1] + 1e-6
+    trk_r = (trk_w / trk_h)[np.newaxis, :]          # (1, n_trk)
+
+    similarity = 1.0 - np.abs(det_r - trk_r) / (det_r + trk_r + 1e-6)
+    return np.maximum(0.0, similarity) * weight
+
+
+def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc_weight, asso_func=iou_batch, aspect_weight=0.0):
     if(len(trackers)==0):
         return np.empty((0,2),dtype=int), np.arange(len(detections)), np.empty((0,5),dtype=int)
 
-    Y, X = speed_direction_batch(detections, previous_obs)
-    inertia_Y, inertia_X = velocities[:,0], velocities[:,1]
-    inertia_Y = inertia_Y[:, np.newaxis]
-    inertia_X = inertia_X[:, np.newaxis]
-    diff_angle_cos = inertia_X * X + inertia_Y * Y
-    diff_angle_cos = np.clip(diff_angle_cos, a_min=-1, a_max=1)
-    diff_angle = np.arccos(diff_angle_cos)
-    diff_angle = (np.pi /2.0 - np.abs(diff_angle)) / np.pi
-
-    valid_mask = np.ones(previous_obs.shape[0])
-    valid_mask[previous_obs[:,4] < 0] = 0
-
     iou_matrix = asso_func(detections, trackers)
-    scores = detections[:,-1][:, np.newaxis]
-    valid_mask = valid_mask[:, np.newaxis]
 
-    angle_diff_cost = (valid_mask * diff_angle) * vdc_weight
-    angle_diff_cost = angle_diff_cost.T
-    angle_diff_cost = angle_diff_cost * scores
+    # Aspect ratio bonus: same shape → small bonus, different shape → 0
+    bonus = aspect_ratio_bonus_batch(detections, trackers, aspect_weight)
 
     if min(iou_matrix.shape) > 0:
         a = (iou_matrix > iou_threshold).astype(np.int32)
         if a.sum(1).max() == 1 and a.sum(0).max() == 1:
             matched_indices = np.stack(np.where(a), axis=1)
         else:
-            matched_indices = linear_assignment(-(iou_matrix+angle_diff_cost))
+            matched_indices = linear_assignment(-(iou_matrix + bonus))
     else:
         matched_indices = np.empty(shape=(0,2))
 
