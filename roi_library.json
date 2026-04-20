@@ -145,5 +145,54 @@
         377
       ]
     }
+  },
+  "2024-02-27_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_28d_003-converted": {
+    "preprocessing": {
+      "x": 149,
+      "y": 172,
+      "w": 703,
+      "h": 402,
+      "start": 0,
+      "end": 393
+    },
+    "video_path": "C:\\Users\\emmav\\Downloads\\superfly\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m\\28 DPE\\003\\2024-02-27_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_28d_003-converted.mp4",
+    "vial_rois": {
+      "vial1": [
+        8,
+        6,
+        82,
+        384
+      ],
+      "vial2": [
+        129,
+        7,
+        203,
+        384
+      ],
+      "vial3": [
+        256,
+        6,
+        330,
+        384
+      ],
+      "vial4": [
+        379,
+        7,
+        453,
+        384
+      ],
+      "vial5": [
+        503,
+        5,
+        577,
+        384
+      ],
+      "vial6": [
+        627,
+        5,
+        701,
+        384
+      ]
+    }
   }
 }

@@ -12,6 +12,10 @@ tracker:
   asso_func: diou                    # iou | giou | diou | ciou | hmiou
   brownian_pos_noise: 15             # Kalman Q[cx,cy] scale; ↑ tolerates saccades
   aspect_weight: 0.05               # bonus for matching boxes of similar aspect ratio; 0 = disabled, try 0.05–0.2
+  behavioral_weight: 0.05           # bonus for speed-plausibility + scale-consistency; 0 = disabled, try 0.05–0.15
+  jump_factor: 2.0                  # round-2 velocity scale + bbox inflation (how far/wide to search)
+  jump_iou_threshold: 0.05          # looser IoU threshold for jump round
+  jump_inertia: 0.05                # reduced OCM weight for jump round (direction less reliable after a jump)
 
 stitching:
   # Iterative Hungarian linking. Each round, candidate matches are accepted as a

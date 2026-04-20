@@ -369,21 +369,112 @@ def aspect_ratio_bonus_batch(detections, trackers, weight):
     return np.maximum(0.0, similarity) * weight
 
 
-def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc_weight, asso_func=iou_batch, aspect_weight=0.0):
+def behavioral_consistency_batch(detections, trk_profiles, trk_last_centers, behavioral_weight):
+    """
+    Behavioral consistency bonus for each (detection, tracker) pair.
+
+    Asks two questions per pair:
+      1. Speed plausibility — is the detection within a plausible distance
+         given the tracker's typical movement speed?
+            bonus_speed = max(0, 1 - excess / (median_speed + 1))
+         where excess = max(0, dist - median_speed). Falls to 0 only when
+         the detection is much farther than the tracker's typical step size.
+
+      2. Scale consistency — does the detection box area match the tracker's
+         typical box area?
+            bonus_scale = 1 - |area_det - median_scale| / (area_det + median_scale + 1e-6)
+
+    Final bonus = behavioral_weight × 0.5 × (bonus_speed + bonus_scale)
+
+    Trackers with no profile yet (< 2 observations) contribute 0 bonus so
+    they don't distort the cost matrix for newly spawned tracks.
+
+    Parameters
+    ----------
+    detections       : (n_det, 5) array [x1,y1,x2,y2,score]
+    trk_profiles     : list of n_trk dicts (from KalmanBoxTracker.behavioral_profile)
+                       or None entries for trackers with insufficient history
+    trk_last_centers : (n_trk, 2) array of (cx, cy) from last_observation
+    behavioral_weight: scalar weight applied to the final bonus
+
+    Returns
+    -------
+    bonus : (n_det, n_trk) float array
+    """
+    n_det = len(detections)
+    n_trk = len(trk_profiles)
+    bonus = np.zeros((n_det, n_trk), dtype=float)
+
+    if behavioral_weight == 0.0 or n_det == 0 or n_trk == 0:
+        return bonus
+
+    det_cx = (detections[:, 0] + detections[:, 2]) / 2.0  # (n_det,)
+    det_cy = (detections[:, 1] + detections[:, 3]) / 2.0
+    det_areas = (detections[:, 2] - detections[:, 0]) * (detections[:, 3] - detections[:, 1])  # (n_det,)
+
+    for j, prof in enumerate(trk_profiles):
+        if prof is None:
+            continue
+        tcx, tcy = trk_last_centers[j]
+        dist = np.sqrt((det_cx - tcx) ** 2 + (det_cy - tcy) ** 2)  # (n_det,)
+
+        med_speed = prof["median_speed"]
+        excess     = np.maximum(0.0, dist - med_speed)
+        b_speed    = np.maximum(0.0, 1.0 - excess / (med_speed + 1.0))  # (n_det,)
+
+        med_scale  = prof["median_scale"]
+        b_scale    = 1.0 - np.abs(det_areas - med_scale) / (det_areas + med_scale + 1e-6)  # (n_det,)
+        b_scale    = np.maximum(0.0, b_scale)
+
+        bonus[:, j] = behavioral_weight * 0.5 * (b_speed + b_scale)
+
+    return bonus
+
+
+def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc_weight, asso_func=iou_batch, aspect_weight=0.0, vial_mask=None, trk_profiles=None, trk_last_centers=None, behavioral_weight=0.0):
     if(len(trackers)==0):
         return np.empty((0,2),dtype=int), np.arange(len(detections)), np.empty((0,5),dtype=int)
 
     iou_matrix = asso_func(detections, trackers)
 
+    # Vial-aware hard constraint: a detection in vial A can never match a tracker
+    # last seen in vial B. Zero out cross-vial entries in the iou_matrix so they
+    # fall below iou_threshold and are filtered by _filter_matches.
+    # vial_mask is (n_det, n_trk) bool; True = same vial (or unknown). None = no constraint.
+    if vial_mask is not None:
+        iou_matrix = iou_matrix * vial_mask.astype(float)
+
     # Aspect ratio bonus: same shape → small bonus, different shape → 0
     bonus = aspect_ratio_bonus_batch(detections, trackers, aspect_weight)
+
+    # Behavioral consistency bonus: speed plausibility + scale consistency
+    if trk_profiles is not None and trk_last_centers is not None:
+        bonus = bonus + behavioral_consistency_batch(
+            detections, trk_profiles, trk_last_centers, behavioral_weight
+        )
+
+    # OCM: velocity direction consistency term.
+    # For each tracker we know which direction it was moving (velocities[:,dy,dx]).
+    # For each detection we compute the direction from the tracker's last
+    # observation to the detection centre. If that matches the tracker's inertia,
+    # we add a bonus; if opposite, a penalty. Trackers with no valid previous
+    # observation (previous_obs[:,4] < 0) are masked to zero so they don't
+    # contribute noise for freshly spawned trackers.
+    Y, X = speed_direction_batch(detections, previous_obs)   # (n_trk, n_det)
+    inertia_Y = velocities[:, 0][:, np.newaxis]              # (n_trk, 1)
+    inertia_X = velocities[:, 1][:, np.newaxis]
+    diff_angle_cos = np.clip(inertia_X * X + inertia_Y * Y, -1, 1)
+    diff_angle = (np.pi / 2.0 - np.abs(np.arccos(diff_angle_cos))) / np.pi  # (n_trk, n_det)
+    valid_mask = (previous_obs[:, 4] >= 0).astype(float)[:, np.newaxis]     # (n_trk, 1)
+    scores = detections[:, -1][np.newaxis, :]                                # (1, n_det)
+    angle_diff_cost = (valid_mask * diff_angle * scores * vdc_weight).T      # (n_det, n_trk)
 
     if min(iou_matrix.shape) > 0:
         a = (iou_matrix > iou_threshold).astype(np.int32)
         if a.sum(1).max() == 1 and a.sum(0).max() == 1:
             matched_indices = np.stack(np.where(a), axis=1)
         else:
-            matched_indices = linear_assignment(-(iou_matrix + bonus))
+            matched_indices = linear_assignment(-(iou_matrix + bonus + angle_diff_cost))
     else:
         matched_indices = np.empty(shape=(0,2))
 

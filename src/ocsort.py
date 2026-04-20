@@ -288,11 +288,87 @@ class KalmanBoxTracker(object):
         self.history.append(box.reshape(1, 4))
         return self.history[-1]
 
+    def predict_jump(self, jump_factor: float) -> np.ndarray:
+        """
+        Return a jump-round prediction bbox WITHOUT modifying the Kalman state.
+
+        Two effects controlled by jump_factor:
+          1. Position extrapolation — the predicted centre is pushed further along
+             the tracker's current velocity:
+               cx_jump = cx + vx * jump_factor
+               cy_jump = cy + vy * jump_factor
+          2. Bbox size inflation — the area (scale) is multiplied by jump_factor²,
+             making the box jump_factor times wider and taller. This increases IoU
+             overlap with detections that are near but not perfectly aligned.
+
+        Wall bounce (left/right only) is applied when a vial_roi is set, same as
+        the regular predict(). The Kalman state is never touched.
+        """
+        x  = self.kf.x
+        cx = float(x[0]) + float(x[4]) * jump_factor
+        cy = float(x[1]) + float(x[5]) * jump_factor
+        s  = max(float(x[2]) * (jump_factor ** 2), 1.0)   # inflate area
+        r  = float(x[3])
+
+        w = np.sqrt(s * r)
+        h = s / (w + 1e-6)
+
+        if self.vial_roi is not None:
+            vx0, vy0, vx1, vy1 = self.vial_roi
+            if cx < vx0:
+                cx = 2 * vx0 - cx
+            elif cx > vx1:
+                cx = 2 * vx1 - cx
+
+        return np.array([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2])
+
     def get_state(self):
         """
         Returns the current bounding box estimate.
         """
         return convert_x_to_bbox(self.kf.x)
+
+    @property
+    def behavioral_profile(self):
+        """
+        Rolling kinematic summary computed from all raw observations so far.
+
+        Returns a dict with:
+          median_speed      — median centre-to-centre distance between consecutive
+                             observations (px/frame). Proxy for how fast this fly moves.
+          median_scale      — median bounding-box area (px²). Proxy for detected size.
+          pause_fraction    — fraction of steps where speed < 1 px/frame.
+          mean_turning_angle — mean absolute heading change between consecutive steps
+                             (degrees). High = erratic; low = straight-line mover.
+
+        Returns None when fewer than 2 observations are available (can't compute
+        kinematics from a single point).
+        """
+        obs = self.history_observations
+        if len(obs) < 2:
+            return None
+
+        centers = np.array([((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0) for b in obs])
+        diffs   = np.diff(centers, axis=0)                        # (N-1, 2)
+        speeds  = np.sqrt((diffs ** 2).sum(axis=1))               # px/frame
+
+        headings = np.arctan2(diffs[:, 1], diffs[:, 0])           # radians
+        if len(headings) >= 2:
+            delta_h = np.diff(headings)
+            # wrap to [-pi, pi]
+            delta_h = (delta_h + np.pi) % (2 * np.pi) - np.pi
+            mean_turning_angle = float(np.degrees(np.abs(delta_h).mean()))
+        else:
+            mean_turning_angle = 0.0
+
+        scales = np.array([(b[2] - b[0]) * (b[3] - b[1]) for b in obs])
+
+        return {
+            "median_speed":       float(np.median(speeds)),
+            "median_scale":       float(np.median(scales)),
+            "pause_fraction":     float((speeds < 1.0).mean()),
+            "mean_turning_angle": mean_turning_angle,
+        }
 
 
 """
@@ -312,7 +388,8 @@ ASSO_FUNCS = {  "iou": iou_batch,
 class OCSort(object):
     def __init__(self, det_thresh, max_age=30, min_hits=3,
         iou_threshold=0.3, delta_t=3, asso_func="iou", inertia=0.2, use_byte=False,
-        brownian_pos_noise=1.0, vial_rois=None, aspect_weight=0.0):
+        brownian_pos_noise=1.0, vial_rois=None, aspect_weight=0.0, behavioral_weight=0.0,
+        jump_factor=2.0, jump_iou_threshold=0.05, jump_inertia=0.05):
         """
         Sets key parameters for SORT
         """
@@ -329,6 +406,10 @@ class OCSort(object):
         self.brownian_pos_noise = brownian_pos_noise
         self.vial_rois = vial_rois  # {vial_id: (x0,y0,x1,y1)} or None
         self.aspect_weight = aspect_weight
+        self.behavioral_weight = behavioral_weight
+        self.jump_factor = jump_factor
+        self.jump_iou_threshold = jump_iou_threshold
+        self.jump_inertia = jump_inertia
         KalmanBoxTracker.count = 0
 
         # --- Diagnostics ---
@@ -397,11 +478,49 @@ class OCSort(object):
         k_observations = np.array(
             [k_previous_obs(trk.observations, trk.age, self.delta_t) for trk in self.trackers])
 
+        # Behavioral profiles for each active tracker (None if < 2 observations)
+        trk_profiles = [trk.behavioral_profile for trk in self.trackers]
+        trk_last_centers = np.array([
+            ((trk.last_observation[0] + trk.last_observation[2]) / 2.0,
+             (trk.last_observation[1] + trk.last_observation[3]) / 2.0)
+            if trk.last_observation.sum() >= 0 else (0.0, 0.0)
+            for trk in self.trackers
+        ])
+
         """
             First round of association
         """
+        # Vial-aware mask: True where detection i and tracker j are in the same vial
+        # (or either is outside all vials — we don't constrain those).
+        vial_mask = None
+        if self.vial_rois is not None and len(dets) > 0 and len(self.trackers) > 0:
+            def _vial_of(cx, cy):
+                for vid, (x0, y0, x1, y1) in self.vial_rois.items():
+                    if x0 <= cx <= x1 and y0 <= cy <= y1:
+                        return vid
+                return None
+
+            det_vials = [
+                _vial_of((d[0] + d[2]) / 2.0, (d[1] + d[3]) / 2.0)
+                for d in dets
+            ]
+            trk_vials = [
+                _vial_of(
+                    (trk.last_observation[0] + trk.last_observation[2]) / 2.0,
+                    (trk.last_observation[1] + trk.last_observation[3]) / 2.0,
+                ) if trk.last_observation.sum() >= 0 else None
+                for trk in self.trackers
+            ]
+            vial_mask = np.array([
+                [(dv is None or tv is None or dv == tv) for tv in trk_vials]
+                for dv in det_vials
+            ], dtype=bool)
+
         matched, unmatched_dets, unmatched_trks = associate(
-            dets, trks, self.iou_threshold, velocities, k_observations, self.inertia, self.asso_func, self.aspect_weight)
+            dets, trks, self.iou_threshold, velocities, k_observations, self.inertia, self.asso_func, self.aspect_weight,
+            vial_mask=vial_mask,
+            trk_profiles=trk_profiles, trk_last_centers=trk_last_centers,
+            behavioral_weight=self.behavioral_weight)
         for m in matched:
             self.trackers[m[1]].update(dets[m[0], :])
 
@@ -429,29 +548,46 @@ class OCSort(object):
                     to_remove_trk_indices.append(trk_ind)
                 unmatched_trks = np.setdiff1d(unmatched_trks, np.array(to_remove_trk_indices))
 
+        # Jump round: for still-unmatched pairs, use inflated predictions.
+        # predict_jump() pushes the predicted centre further along velocity and
+        # inflates the bbox, giving a wider search radius at lower confidence.
+        # OCM weight is reduced (jump_inertia) since direction is less reliable
+        # for a fly that may have changed course during the gap.
         if unmatched_dets.shape[0] > 0 and unmatched_trks.shape[0] > 0:
             left_dets = dets[unmatched_dets]
-            left_trks = last_boxes[unmatched_trks]
-            iou_left = self.asso_func(left_dets, left_trks)
-            iou_left = np.array(iou_left)
-            if iou_left.max() > self.iou_threshold:
-                """
-                    NOTE: by using a lower threshold, e.g., self.iou_threshold - 0.1, you may
-                    get a higher performance especially on MOT17/MOT20 datasets. But we keep it
-                    uniform here for simplicity
-                """
-                rematched_indices = linear_assignment(-iou_left)
-                to_remove_det_indices = []
-                to_remove_trk_indices = []
-                for m in rematched_indices:
-                    det_ind, trk_ind = unmatched_dets[m[0]], unmatched_trks[m[1]]
-                    if iou_left[m[0], m[1]] < self.iou_threshold:
-                        continue
-                    self.trackers[trk_ind].update(dets[det_ind, :])
-                    to_remove_det_indices.append(det_ind)
-                    to_remove_trk_indices.append(trk_ind)
-                unmatched_dets = np.setdiff1d(unmatched_dets, np.array(to_remove_det_indices))
-                unmatched_trks = np.setdiff1d(unmatched_trks, np.array(to_remove_trk_indices))
+
+            jump_boxes = np.array([
+                np.append(self.trackers[t].predict_jump(self.jump_factor), 0)
+                for t in unmatched_trks
+            ])
+
+            jump_vial_mask = None
+            if vial_mask is not None:
+                jump_vial_mask = vial_mask[np.ix_(unmatched_dets, unmatched_trks)]
+
+            jump_profiles     = [trk_profiles[t]     for t in unmatched_trks]
+            jump_last_centers = trk_last_centers[unmatched_trks]
+            jump_velocities   = velocities[unmatched_trks]
+            jump_k_obs        = k_observations[unmatched_trks]
+
+            jump_matched, jump_ud, jump_ut = associate(
+                left_dets, jump_boxes,
+                self.jump_iou_threshold,
+                jump_velocities, jump_k_obs, self.jump_inertia,
+                self.asso_func, self.aspect_weight,
+                vial_mask=jump_vial_mask,
+                trk_profiles=jump_profiles,
+                trk_last_centers=jump_last_centers,
+                behavioral_weight=self.behavioral_weight,
+            )
+
+            for m in jump_matched:
+                det_ind = unmatched_dets[m[0]]
+                trk_ind = unmatched_trks[m[1]]
+                self.trackers[trk_ind].update(dets[det_ind, :])
+
+            unmatched_dets = unmatched_dets[jump_ud]
+            unmatched_trks = unmatched_trks[jump_ut]
 
         for m in unmatched_trks:
             self.trackers[m].update(None)
