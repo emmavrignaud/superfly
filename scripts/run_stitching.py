@@ -91,6 +91,9 @@ def main():
         label_offset_y=v_cfg.get("label_offset_y", -10),
         chip_pad=v_cfg.get("chip_pad", 2),
         leader_thick=v_cfg.get("leader_thick", 1),
+        show_border=v_cfg.get("show_border", True),
+        shadow_text=v_cfg.get("shadow_text", True),
+        anchor_radius=v_cfg.get("anchor_radius", 0),
     )
 
     wide_csv     = os.path.join(args.output_dir, "tracks_wide_format.csv")

@@ -10,10 +10,28 @@ import json
 import os
 from pathlib import Path
 
+import colorcet as cc
 import cv2
 import numpy as np
 import pandas as pd
 import yaml
+
+_GLASBEY = cc.glasbey_bw_minc_20  # 256 perceptually distinct '#rrggbb' colors
+
+
+def _glasbey_bgr(idx: int) -> tuple:
+    """Index into the glasbey palette, return an OpenCV BGR tuple.
+
+    colorcet palettes come in two shapes depending on version: a list of
+    '#rrggbb' strings, or a list of (r, g, b) floats in [0, 1]. Handle both.
+    """
+    entry = _GLASBEY[idx % len(_GLASBEY)]
+    if isinstance(entry, str):
+        hex_c = entry.lstrip("#")
+        r, g, b = int(hex_c[0:2], 16), int(hex_c[2:4], 16), int(hex_c[4:6], 16)
+    else:
+        r, g, b = (int(round(c * 255)) for c in entry[:3])
+    return (b, g, r)
 
 
 def _visualization_cfg() -> dict:
@@ -109,30 +127,56 @@ def _draw_fly_marker(
     chip_pad: int = 2,
     chip_font_scale: float = 0.4,
     leader_thick: int = 1,
+    show_border: bool = True,
+    shadow_text: bool = True,
+    anchor_radius: int = 0,
 ):
-    """Crosshair tick at (x, y) + optional chip label with leader line.
+    """Diagonal crosshair + optional ID chip with leader line.
 
-    Diagonal ticks (NE/SW, NW/SE) leave the fly body itself visible; the
-    ID is drawn inside a small filled rectangle offset from the centroid,
-    with a thin line pointing back to the fly.
+    Ticks (NE/SW, NW/SE) cross through the fly body for easy visual lock.
+    The ID sits in a solid chip offset from the centroid, with a white
+    border for contrast and drop-shadow text for legibility; the chip is
+    clamped to frame bounds so it never renders off-screen.
     """
     cv2.line(img, (x - tick_len, y - tick_len), (x - 1, y - 1), color, tick_thick, cv2.LINE_AA)
     cv2.line(img, (x + 1, y + 1), (x + tick_len, y + tick_len), color, tick_thick, cv2.LINE_AA)
     cv2.line(img, (x - tick_len, y + tick_len), (x - 1, y + 1), color, tick_thick, cv2.LINE_AA)
     cv2.line(img, (x + 1, y - 1), (x + tick_len, y - tick_len), color, tick_thick, cv2.LINE_AA)
 
+    if anchor_radius > 0:
+        cv2.circle(img, (x, y), anchor_radius, color, -1, cv2.LINE_AA)
+
     if label is None:
         return
 
     (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, chip_font_scale, 1)
-    cx = x + label_offset[0]
-    cy = y + label_offset[1]
-    x0, y0 = cx - chip_pad, cy - th - chip_pad
-    x1, y1 = cx + tw + chip_pad, cy + chip_pad
+    cw = tw + 2 * chip_pad
+    ch = th + 2 * chip_pad
 
-    cv2.line(img, (x, y), (x0, y1), color, leader_thick, cv2.LINE_AA)
+    h_img, w_img = img.shape[:2]
+    x0 = x + label_offset[0] - chip_pad
+    y0 = y + label_offset[1] - th - chip_pad
+    x0 = max(0, min(x0, w_img - cw))
+    y0 = max(0, min(y0, h_img - ch))
+    x1 = x0 + cw
+    y1 = y0 + ch
+
+    # Leader line from fly to the chip corner nearest the fly (avoids
+    # crossing the chip body regardless of where the chip was clamped).
+    corner_x = x0 if x < x0 else x1
+    corner_y = y0 if y < y0 else y1
+    cv2.line(img, (x, y), (corner_x, corner_y), color, leader_thick, cv2.LINE_AA)
+
     cv2.rectangle(img, (x0, y0), (x1, y1), color, -1, cv2.LINE_AA)
-    cv2.putText(img, label, (cx, cy), cv2.FONT_HERSHEY_SIMPLEX,
+    if show_border:
+        cv2.rectangle(img, (x0, y0), (x1, y1), (255, 255, 255), 1, cv2.LINE_AA)
+
+    tx = x0 + chip_pad
+    ty = y0 + chip_pad + th
+    if shadow_text:
+        cv2.putText(img, label, (tx + 1, ty + 1), cv2.FONT_HERSHEY_SIMPLEX,
+                    chip_font_scale, (0, 0, 0), 1, cv2.LINE_AA)
+    cv2.putText(img, label, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX,
                 chip_font_scale, (255, 255, 255), 1, cv2.LINE_AA)
 
 
@@ -154,6 +198,9 @@ def render_vial_overlay_video(
     label_offset_y: int = -10,
     chip_pad: int = 2,
     leader_thick: int = 1,
+    show_border: bool = True,
+    shadow_text: bool = True,
+    anchor_radius: int = 0,
 ):
     """
     Render an overlay video where flies are coloured by vial and shaded
@@ -219,8 +266,9 @@ def render_vial_overlay_video(
     def color_for(vial_id: str, cid: int) -> tuple:
         hue = int(VIAL_HUE.get(vial_id, 0))
         m = int(max_in_vial.get(vial_id, cid))
-        v = 235 if m <= 1 else int(120 + (cid - 1) / (m - 1) * (255 - 120))
-        hsv = np.uint8([[[hue, 240, v]]])
+        # Desaturated palette: lower S + narrower V range → muted, grown-up look.
+        v = 200 if m <= 1 else int(140 + (cid - 1) / (m - 1) * (220 - 140))
+        hsv = np.uint8([[[hue, 150, v]]])
         bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0]
         return int(bgr[0]), int(bgr[1]), int(bgr[2])
 
@@ -269,9 +317,11 @@ def render_vial_overlay_video(
         dets = by_frame.get(int(frame_idx + frame_offset))
         if dets is not None:
             for x, y, vial_id, cid in dets:
-                xi = int(round(float(x)))
-                yi_raw = float(y)
-                yi = int(round((h - 1 - yi_raw) if invert_y else yi_raw))
+                xf, yf = float(x), float(y)
+                if not (np.isfinite(xf) and np.isfinite(yf)):
+                    continue
+                xi = int(round(xf))
+                yi = int(round((h - 1 - yf) if invert_y else yf))
 
                 if 0 <= xi < w and 0 <= yi < h:
                     cid = int(cid)
@@ -283,6 +333,9 @@ def render_vial_overlay_video(
                         label_offset=label_offset,
                         chip_pad=chip_pad, chip_font_scale=chip_font_scale,
                         leader_thick=leader_thick,
+                        show_border=show_border,
+                        shadow_text=shadow_text,
+                        anchor_radius=anchor_radius,
                     )
 
         writer.write(frame_bgr)
@@ -310,20 +363,22 @@ def render_raw_overlay_video(
     label_offset_y: int = -10,
     chip_pad: int = 2,
     leader_thick: int = 1,
+    show_border: bool = True,
+    shadow_text: bool = True,
+    anchor_radius: int = 0,
 ):
     """
     Render an overlay video from raw long-format tracks (frame, orig_id, x, y).
 
-    Each orig_id gets a distinct hue, evenly spaced in HSV space.
-    Used to inspect raw OC-SORT output before stitching.
+    Each orig_id gets a distinct glasbey color — perceptually spaced
+    categorical palette, good for many-class visualization.
     """
     df = pd.read_csv(csv_path)
     df["frame"]   = df["frame"].astype(int)
     df["orig_id"] = df["orig_id"].astype(str)
 
     unique_ids = sorted(df["orig_id"].unique(), key=lambda v: int(v) if v.isdigit() else v)
-    n = len(unique_ids)
-    id_to_hue = {oid: int(i * 180 / max(n, 1)) for i, oid in enumerate(unique_ids)}
+    id_to_idx = {oid: i for i, oid in enumerate(unique_ids)}
 
     by_frame = {
         int(f): g[["x", "y", "orig_id"]].to_numpy()
@@ -331,9 +386,7 @@ def render_raw_overlay_video(
     }
 
     def color_for(oid: str) -> tuple:
-        hsv = np.uint8([[[id_to_hue[oid], 230, 220]]])
-        bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0]
-        return int(bgr[0]), int(bgr[1]), int(bgr[2])
+        return _glasbey_bgr(id_to_idx[oid])
 
     effective_path, crop_params = _resolve_overlay_source(video_path)
 
@@ -380,9 +433,11 @@ def render_raw_overlay_video(
         dets = by_frame.get(int(frame_idx + frame_offset))
         if dets is not None:
             for x, y, oid in dets:
-                xi   = int(round(float(x)))
-                yi_r = float(y)
-                yi   = int(round((h - 1 - yi_r) if invert_y else yi_r))
+                xf, yf = float(x), float(y)
+                if not (np.isfinite(xf) and np.isfinite(yf)):
+                    continue
+                xi = int(round(xf))
+                yi = int(round((h - 1 - yf) if invert_y else yf))
                 if 0 <= xi < w and 0 <= yi < h:
                     _draw_fly_marker(
                         frame_bgr, xi, yi, color_for(str(oid)),
@@ -391,6 +446,9 @@ def render_raw_overlay_video(
                         label_offset=label_offset,
                         chip_pad=chip_pad, chip_font_scale=chip_font_scale,
                         leader_thick=leader_thick,
+                        show_border=show_border,
+                        shadow_text=shadow_text,
+                        anchor_radius=anchor_radius,
                     )
 
         writer.write(frame_bgr)

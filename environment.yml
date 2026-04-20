@@ -12,6 +12,9 @@ dependencies:
   - pyyaml>=6.0
   - ipython>=8.0
   - jupyter>=1.0
+  - matplotlib>=3.7
+  - colorcet>=3.0
+  - filterpy>=1.4
   - pip:
     - opencv-python>=4.8
     - supervision>=0.18

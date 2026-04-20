@@ -67,6 +67,9 @@ visualization:
   label_offset_y: -10      # chip offset from centroid, y (px, −up)
   chip_pad: 2              # padding inside the chip (px)
   leader_thick: 1          # leader line stroke (px)
+  show_border: true        # 1px white border around the chip
+  shadow_text: true        # drop-shadow behind the ID text for legibility
+  anchor_radius: 0         # small dot at the fly centroid; 0 disables (ticks already mark it)
 
 roi:
   # Per-vial ROI; cached in roi_library/. Snapping aligns boxes vertically.
