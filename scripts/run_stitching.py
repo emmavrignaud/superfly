@@ -34,7 +34,7 @@ matplotlib.use("Agg")  # headless backend — must precede any pyplot import
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from utils import save_run_params
+from utils import save_run_params, resolve_overlay_video
 
 
 def load_config(config_path: str) -> dict:
@@ -193,10 +193,18 @@ def main():
     if not args.no_overlay:
         print("\n=== Stage 6: Overlay videos ===")
 
+        # Pick the overlay substrate from config.yaml:visualization.overlay_source.
+        # args.video is kept for fps reading (line ~109) since cv2 reads fps from
+        # either file equally. Overlays want the raw video when overlay_source is
+        # raw_cropped, so _resolve_overlay_source can match it against roi_library.json.
+        _overlay_mode = cfg.get("visualization", {}).get("overlay_source", "raw_cropped")
+        overlay_video = resolve_overlay_video(args.output_dir, _overlay_mode) or args.video
+        print(f"  overlay_source={_overlay_mode}  →  substrate: {overlay_video}")
+
         # 6a — raw OC-SORT overlay (before stitching)
         raw_overlay_mp4 = os.path.join(args.output_dir, "overlay_raw_ocsort.mp4")
         render_raw_overlay_video(
-            video_path=args.video,
+            video_path=overlay_video,
             csv_path=long_csv,
             out_mp4=raw_overlay_mp4,
             **overlay_kwargs,
@@ -206,7 +214,7 @@ def main():
         # 6b — stitched overlay
         overlay_mp4 = os.path.join(args.output_dir, "overlay_vials_shaded.mp4")
         render_vial_overlay_video(
-            video_path=args.video,
+            video_path=overlay_video,
             csv_path=compact_csv,
             out_mp4=overlay_mp4,
             **overlay_kwargs,

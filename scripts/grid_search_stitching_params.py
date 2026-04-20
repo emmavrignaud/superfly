@@ -86,6 +86,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.stitching import wide_to_long, build_tracklets, stitch, link_score
 from src.metrics import compute_stitching_objectives
 from src.visualization import render_raw_overlay_video
+from utils import resolve_overlay_video
 
 
 # ---------------------------------------------------------------------------
@@ -316,11 +317,7 @@ def main():
     args = parser.parse_args()
 
     # --- Pick the video file for overlays ---
-    # The substrate is decided by visualization.overlay_source in config.yaml:
-    #   raw_cropped → use the raw video (config.video in run_params.json),
-    #                 cropped on the fly using crop_params from roi_library.json
-    #   processed   → use the _pp video (preprocessing.video_pp in run_params.json),
-    #                 used as-is, no crop
+    # The substrate is decided by visualization.overlay_source in config.yaml.
     # --video overrides this and uses whatever path you pass, as-is.
     if args.overlay and args.video is None:
         import yaml
@@ -330,43 +327,14 @@ def main():
             with open(_cfg_path) as _f:
                 _mode = str(yaml.safe_load(_f).get("visualization", {}).get("overlay_source", "raw_cropped")).lower()
 
-        _run_dir     = Path(args.wide_csv).parent
-        _params_path = _run_dir / "run_params.json"
-        if _params_path.exists():
-            with open(_params_path) as _f:
-                _params = json.load(_f)
-
-            if _mode == "processed":
-                _vid = _params.get("preprocessing", {}).get("video_pp")
-                _label = "background-subtracted (_pp)"
-            else:
-                _vid = _params.get("config", {}).get("video")
-                _label = "raw"
-
-            if _vid:
-                # The raw video lives in one of two places:
-                #   1) copied into the run directory next to the _pp video, or
-                #   2) the original under repo_root/<experiment_folder>/<DPE>/<NNN>/
-                # config.video stores it as "../<experiment_folder>/..." relative
-                # to notebooks/ (the cwd that ran tracking), which resolves to
-                # repo_root/<experiment_folder>/... when joined with repo_root/notebooks/.
-                _repo_root = Path(__file__).resolve().parents[1]
-                _vid_p = Path(_vid)
-                _candidates = [
-                    _run_dir / _vid_p.name,
-                    (_repo_root / "notebooks" / _vid_p).resolve(),
-                ]
-                _vid_resolved = next((c for c in _candidates if c.exists()), None)
-                if _vid_resolved is not None:
-                    args.video = str(_vid_resolved)
-                    print(f"overlay_source={_mode}  →  using {_label} video: {args.video}\n")
-                else:
-                    _tried = "\n    ".join(str(c) for c in _candidates)
-                    print(f"[warn] {_label} video not found. Tried:\n    {_tried}\n  Overlays will be skipped.\n")
-            else:
-                print(f"[warn] run_params.json missing the {_label} video path — overlays will be skipped.\n")
+        _run_dir = Path(args.wide_csv).parent
+        _resolved = resolve_overlay_video(_run_dir, _mode)
+        if _resolved is not None:
+            args.video = _resolved
+            _label = "background-subtracted (_pp)" if _mode == "processed" else "raw"
+            print(f"overlay_source={_mode}  →  using {_label} video: {args.video}\n")
         else:
-            print(f"[warn] {_params_path} not found — overlays will be skipped.\n")
+            print(f"[warn] could not resolve overlay video (overlay_source={_mode}, run_dir={_run_dir}) — overlays will be skipped.\n")
 
     short_name = _parse_short_name(args.wide_csv)
 
