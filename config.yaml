@@ -7,7 +7,7 @@ tracker:
   track_activation_threshold: 0.10   # min conf to open a new track
   lost_track_buffer: 180             # frames a track may go unseen before drop
   minimum_matching_threshold: 0.1   # min association score to keep a match
-  minimum_consecutive_frames: 3      # frames needed to confirm a new track
+  minimum_consecutive_frames: 1      # frames needed to confirm a new track (1 = all detections kept)
   min_area: 20                       # px²; smaller detections discarded
   asso_func: diou                    # iou | giou | diou | ciou | hmiou
   brownian_pos_noise: 15             # Kalman Q[cx,cy] scale; ↑ tolerates saccades
