@@ -33,45 +33,50 @@ def _resolve_overlay_source(video_path: str) -> tuple[str, dict | None]:
 
     Returns (effective_video_path, crop_params or None).
 
-    - ``overlay_source: processed`` (or unknown / fallback): returns the caller's
-      path unchanged; caller reads frames as-is (current behavior).
-    - ``overlay_source: raw_cropped``: strips the ``_pp`` suffix from the input
-      path to get the raw video, looks up ``crop_params`` in roi_library.json
-      by raw-video stem, and returns both so the caller can seek+crop.
+    The caller's path is always used as-is — we never substitute a different
+    file. The only thing this function decides is whether to crop each frame
+    on the way in:
 
-    Any missing file / missing library entry falls back silently (with a warning)
-    to the processed substrate — visualization must never crash the pipeline.
+    - ``overlay_source: processed``: return (video_path, None). Caller reads
+      frames as-is. Use this when the caller already passed the processed
+      (``_pp``) video and wants the background-subtracted substrate.
+    - ``overlay_source: raw_cropped``: look up ``crop_params`` in
+      roi_library.json by the video's filename stem. If found, return
+      (video_path, crop_params) so the caller can seek+crop on the fly.
+      If no entry exists (e.g. caller passed a ``_pp`` path whose stem isn't
+      in the library), fall back to no crop and use the file as-is.
+
+    Any missing file / missing library entry falls back silently (with a
+    warning) — visualization must never crash the pipeline.
     """
     cfg = _visualization_cfg()
     mode = str(cfg.get("overlay_source", "raw_cropped")).lower()
     if mode == "processed":
         return video_path, None
     if mode != "raw_cropped":
-        print(f"[visualization] unknown overlay_source {mode!r} — using processed substrate.")
+        print(f"[visualization] unknown overlay_source {mode!r} — using file as-is.")
         return video_path, None
 
     p = Path(video_path)
-    raw_path = p.with_name(p.stem[:-3]).with_suffix(p.suffix) if p.stem.endswith("_pp") else p
-
-    if not raw_path.exists():
-        print(f"[visualization] raw video not found at {raw_path} — falling back to processed substrate.")
+    if not p.exists():
+        print(f"[visualization] video not found at {p} — using path as-is (will likely fail at open).")
         return video_path, None
 
     lib_path = _roi_library_path()
     if not lib_path.exists():
-        print("[visualization] roi_library.json not found — falling back to processed substrate.")
+        print("[visualization] roi_library.json not found — using video as-is (no crop).")
         return video_path, None
 
     try:
         with open(lib_path, "r") as f:
             library = json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"[visualization] could not read roi_library.json ({exc}) — falling back to processed substrate.")
+        print(f"[visualization] could not read roi_library.json ({exc}) — using video as-is (no crop).")
         return video_path, None
 
-    entry = library.get(raw_path.stem)
+    entry = library.get(p.stem)
     if not entry or "preprocessing" not in entry:
-        print(f"[visualization] no preprocessing crop_params for stem {raw_path.stem!r} — falling back to processed substrate.")
+        print(f"[visualization] no crop_params for stem {p.stem!r} — using video as-is (no crop).")
         return video_path, None
 
     try:
@@ -85,10 +90,10 @@ def _resolve_overlay_source(video_path: str) -> tuple[str, dict | None]:
             "end":   int(crop["end"]),
         }
     except (KeyError, TypeError, ValueError) as exc:
-        print(f"[visualization] malformed preprocessing entry for {raw_path.stem!r} ({exc}) — falling back to processed substrate.")
+        print(f"[visualization] malformed preprocessing entry for {p.stem!r} ({exc}) — using video as-is (no crop).")
         return video_path, None
 
-    return str(raw_path), crop_params
+    return video_path, crop_params
 
 
 def _draw_fly_marker(

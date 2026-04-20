@@ -26,9 +26,19 @@ Outputs (in outputs\\grid_search\\stitching_params\\<short_name>\\)
                              all weights + all objectives
   grid_search_plot.html      interactive Plotly line plot; x=0 is pre-stitch
                              baseline, x>0 sorted by vial_count_error
-  overlay_pre_stitch.mp4     raw tracker IDs (no stitching)       [--video only]
-  overlay_best.mp4           best config by vial_count_error       [--video only]
-  overlay_worst.mp4          worst config by vial_count_error      [--video only]
+  overlay_pre_stitch.mp4     raw tracker IDs (no stitching)     [with --overlay / --video]
+  overlay_best.mp4           best config by vial_count_error    [with --overlay / --video]
+  overlay_worst.mp4          worst config by vial_count_error   [with --overlay / --video]
+
+Overlay substrate
+-----------------
+What you see in the overlay videos is controlled by config.yaml:
+
+    visualization.overlay_source: raw_cropped   → raw video, cropped to vial region
+    visualization.overlay_source: processed     → background-subtracted (_pp) video
+
+Pass --overlay and the script picks the right file from run_params.json based
+on that setting. Pass --video to override and use a specific file as-is.
 
 Usage
 -----
@@ -36,11 +46,17 @@ Usage
       --wide-csv  outputs\\run_5\\tracks_wide_format.csv ^
       --roi-json  outputs\\run_5\\vial_rois.json
 
-  # also generate three overlay videos:
+  # three overlay videos, substrate set by config.yaml:
   python scripts\\grid_search_stitching_params.py ^
       --wide-csv  outputs\\run_5\\tracks_wide_format.csv ^
       --roi-json  outputs\\run_5\\vial_rois.json ^
-      --video     outputs\\run_5\\video_pp.mp4
+      --overlay
+
+  # override the file the overlays are drawn on:
+  python scripts\\grid_search_stitching_params.py ^
+      --wide-csv  outputs\\run_5\\tracks_wide_format.csv ^
+      --roi-json  outputs\\run_5\\vial_rois.json ^
+      --video     path\\to\\some_video.mp4
 
   # re-plot from an existing results CSV without re-running the search:
   python scripts\\grid_search_stitching_params.py ^
@@ -295,8 +311,62 @@ def main():
     parser.add_argument("--step",              type=float, default=0.2,  help="link_score_weights grid step")
     parser.add_argument("--plot-only",         action="store_true",      help="Skip search, re-plot from existing results CSV")
     parser.add_argument("--output-dir",        default=None,             help="Use this folder directly (skips auto-increment; required for --plot-only on a specific run)")
-    parser.add_argument("--video",             default=None,             help="Path to source video; if provided, generates three overlay MP4s after the search")
+    parser.add_argument("--video",             default=None,             help="Override: path to a specific video file to draw overlays on. Used as-is. If omitted, --overlay picks the file based on visualization.overlay_source in config.yaml.")
+    parser.add_argument("--overlay",           action="store_true",      help="Generate three overlay MP4s (pre-stitch, best, worst). The substrate (raw cropped vs background-subtracted) is set by visualization.overlay_source in config.yaml.")
     args = parser.parse_args()
+
+    # --- Pick the video file for overlays ---
+    # The substrate is decided by visualization.overlay_source in config.yaml:
+    #   raw_cropped → use the raw video (config.video in run_params.json),
+    #                 cropped on the fly using crop_params from roi_library.json
+    #   processed   → use the _pp video (preprocessing.video_pp in run_params.json),
+    #                 used as-is, no crop
+    # --video overrides this and uses whatever path you pass, as-is.
+    if args.overlay and args.video is None:
+        import yaml
+        _cfg_path = Path(__file__).resolve().parents[1] / "config.yaml"
+        _mode = "raw_cropped"
+        if _cfg_path.exists():
+            with open(_cfg_path) as _f:
+                _mode = str(yaml.safe_load(_f).get("visualization", {}).get("overlay_source", "raw_cropped")).lower()
+
+        _run_dir     = Path(args.wide_csv).parent
+        _params_path = _run_dir / "run_params.json"
+        if _params_path.exists():
+            with open(_params_path) as _f:
+                _params = json.load(_f)
+
+            if _mode == "processed":
+                _vid = _params.get("preprocessing", {}).get("video_pp")
+                _label = "background-subtracted (_pp)"
+            else:
+                _vid = _params.get("config", {}).get("video")
+                _label = "raw"
+
+            if _vid:
+                # The raw video lives in one of two places:
+                #   1) copied into the run directory next to the _pp video, or
+                #   2) the original under repo_root/<experiment_folder>/<DPE>/<NNN>/
+                # config.video stores it as "../<experiment_folder>/..." relative
+                # to notebooks/ (the cwd that ran tracking), which resolves to
+                # repo_root/<experiment_folder>/... when joined with repo_root/notebooks/.
+                _repo_root = Path(__file__).resolve().parents[1]
+                _vid_p = Path(_vid)
+                _candidates = [
+                    _run_dir / _vid_p.name,
+                    (_repo_root / "notebooks" / _vid_p).resolve(),
+                ]
+                _vid_resolved = next((c for c in _candidates if c.exists()), None)
+                if _vid_resolved is not None:
+                    args.video = str(_vid_resolved)
+                    print(f"overlay_source={_mode}  →  using {_label} video: {args.video}\n")
+                else:
+                    _tried = "\n    ".join(str(c) for c in _candidates)
+                    print(f"[warn] {_label} video not found. Tried:\n    {_tried}\n  Overlays will be skipped.\n")
+            else:
+                print(f"[warn] run_params.json missing the {_label} video path — overlays will be skipped.\n")
+        else:
+            print(f"[warn] {_params_path} not found — overlays will be skipped.\n")
 
     short_name = _parse_short_name(args.wide_csv)
 
@@ -537,9 +607,11 @@ def main():
     print(f"Plot    : {plot_html}")
 
     # --- Three-stage overlay videos ---
-    # Requires --video.  Uses render_raw_overlay_video for all three stages so
-    # that each unique ID (orig_id / stitched_id) gets a distinct hue — no
-    # vial_id or compact_id needed.
+    # Runs when a video file is available: either the user passed --video, or
+    # they passed --overlay and we pulled the raw video path from run_params.json
+    # above. Uses render_raw_overlay_video for all three stages so that each
+    # unique ID (orig_id / stitched_id) gets a distinct hue — no vial_id or
+    # compact_id needed.
     if args.video:
         configs_only = all_results[all_results["extrap"].notna()]
         if configs_only.empty:
