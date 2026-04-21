@@ -59,6 +59,7 @@ Once we have the cost matrix, linear_assignment() finds the globally cheapest
 can match two trackers and no tracker can match two detections.
 """
 import numpy as np
+from typing import Dict, List, Optional, Tuple
 
 
 def iou_batch(bboxes1, bboxes2):
@@ -418,9 +419,14 @@ def behavioral_consistency_batch(detections, trk_profiles, trk_last_centers, beh
         tcx, tcy = trk_last_centers[j]
         dist = np.sqrt((det_cx - tcx) ** 2 + (det_cy - tcy) ** 2)  # (n_det,)
 
-        med_speed = prof["median_speed"]
-        excess     = np.maximum(0.0, dist - med_speed)
-        b_speed    = np.maximum(0.0, 1.0 - excess / (med_speed + 1.0))  # (n_det,)
+        med_speed  = prof["median_speed"]
+        mean_accel = prof.get("mean_acceleration", 0.0)
+        # Acceleration-adjusted expected distance: if the tracker has been
+        # speeding up (positive acceleration), it may move faster than its
+        # median on the next step; if slowing down, expect less distance.
+        expected_dist = max(med_speed + mean_accel, 0.0)
+        excess     = np.maximum(0.0, dist - expected_dist)
+        b_speed    = np.maximum(0.0, 1.0 - excess / (expected_dist + 1.0))  # (n_det,)
 
         med_scale  = prof["median_scale"]
         b_scale    = 1.0 - np.abs(det_areas - med_scale) / (det_areas + med_scale + 1e-6)  # (n_det,)
@@ -431,7 +437,169 @@ def behavioral_consistency_batch(detections, trk_profiles, trk_last_centers, beh
     return bonus
 
 
-def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc_weight, asso_func=iou_batch, aspect_weight=0.0, vial_mask=None, trk_profiles=None, trk_last_centers=None, behavioral_weight=0.0):
+def simulate_position(
+    cx: float, cy: float,
+    vx: float, vy: float,
+    speed: float,
+    acceleration: float,
+    gap: int,
+    vial_roi: Optional[Tuple[float, float, float, float]] = None,
+) -> Tuple[float, float]:
+    """
+    Simulate a tracker's centre position frame-by-frame over `gap` frames,
+    with wall-bounce reflection when a vial_roi is provided.
+
+    Ported from stitching.simulate_position so the same physics model is
+    available during live tracking (used in link_cost_batch below).
+
+    Parameters
+    ----------
+    cx, cy       : starting centre position (px)
+    vx, vy       : unit velocity direction vector (from tracker.velocity)
+    speed        : initial speed (px/frame), e.g. tracker profile median_speed
+    acceleration : signed speed change per frame (profile mean_acceleration)
+    gap          : number of frames to simulate forward
+    vial_roi     : (x0, y0, x1, y1) bounding box; None = no reflection
+
+    Returns
+    -------
+    (x, y) predicted centre after `gap` frames
+    """
+    x, y = float(cx), float(cy)
+    spd  = float(speed)
+    dvx, dvy = float(vx), float(vy)   # unit direction
+
+    for _ in range(gap):
+        nx = x + dvx * spd
+        ny = y + dvy * spd
+
+        if vial_roi is not None:
+            x0, y0, x1, y1 = vial_roi
+            if nx < x0:
+                dvx = -dvx;  nx = x0 + (x0 - nx)
+            elif nx > x1:
+                dvx = -dvx;  nx = x1 - (nx - x1)
+            if ny < y0:
+                dvy = -dvy;  ny = y0 + (y0 - ny)
+            elif ny > y1:
+                dvy = -dvy;  ny = y1 - (ny - y1)
+
+        x, y  = nx, ny
+        spd   = max(spd + acceleration, 0.0)
+
+    return x, y
+
+
+def link_cost_batch(
+    detections:        np.ndarray,
+    trackers_state:    List[Dict],
+    weights:           Optional[Dict] = None,
+) -> np.ndarray:
+    """
+    Compute an (n_det, n_trk) cost matrix combining three terms — the same
+    logic as stitching.link_score but applied live, per frame, to each
+    detection-tracker candidate pair.
+
+    Term 1 — Extrapolated position error (px)
+        Simulate each tracker's centre forward by `gap` frames (time since
+        last observation) using its velocity, speed, and acceleration.
+        Error = distance between the predicted landing spot and the detection.
+
+    Term 2 — Direction agreement [0, 1]
+        Angle between tracker's velocity direction and the gap vector
+        (tracker last centre → detection centre), normalised to [0, 1].
+        0 = perfectly aligned, 1 = opposite directions.
+
+    Term 3 — Behavioral dissimilarity
+        Weighted z-score distance between tracker and detection kinematic
+        proxies. Detection "profile" is estimated from its bbox area and
+        the implied step distance from the tracker's last centre.
+
+    Final cost = w_extrap * term1 + w_direction * term2 + w_behavioral * term3
+
+    Parameters
+    ----------
+    detections     : (n_det, 5) array [x1,y1,x2,y2,score]
+    trackers_state : list of n_trk dicts, each with keys:
+                       'last_cx', 'last_cy'  — last observed centre
+                       'velocity'            — (vy, vx) unit vector or None
+                       'profile'             — behavioral_profile dict or None
+                       'gap'                 — frames since last observation
+                       'vial_roi'            — (x0,y0,x1,y1) or None
+    weights        : optional dict with keys 'extrap', 'direction', 'behavioral'
+                     (defaults to 1.0 each if not provided)
+
+    Returns
+    -------
+    cost : (n_det, n_trk) float array — lower = better match
+    """
+    if weights is None:
+        weights = {"extrap": 1.0, "direction": 1.0, "behavioral": 1.0}
+    w_ext = weights.get("extrap",     1.0)
+    w_dir = weights.get("direction",  1.0)
+    w_beh = weights.get("behavioral", 1.0)
+
+    n_det = len(detections)
+    n_trk = len(trackers_state)
+    cost  = np.zeros((n_det, n_trk), dtype=float)
+
+    if n_det == 0 or n_trk == 0:
+        return cost
+
+    det_cx = (detections[:, 0] + detections[:, 2]) / 2.0   # (n_det,)
+    det_cy = (detections[:, 1] + detections[:, 3]) / 2.0
+    det_areas = (detections[:, 2] - detections[:, 0]) * (detections[:, 3] - detections[:, 1])
+
+    for j, ts in enumerate(trackers_state):
+        tcx   = ts["last_cx"]
+        tcy   = ts["last_cy"]
+        vel   = ts.get("velocity")     # (vy, vx) unit vector or None
+        prof  = ts.get("profile")
+        gap   = max(int(ts.get("gap", 1)), 1)
+        roi   = ts.get("vial_roi")
+
+        speed    = prof["median_speed"]    if prof else 0.0
+        accel    = prof.get("mean_acceleration", 0.0) if prof else 0.0
+
+        # --- Term 1: extrapolated position error ---
+        if vel is not None and (vel[0] != 0 or vel[1] != 0):
+            vy_unit, vx_unit = float(vel[0]), float(vel[1])
+            ex, ey = simulate_position(tcx, tcy, vx_unit, vy_unit,
+                                       speed, accel, gap, roi)
+        else:
+            ex, ey = tcx, tcy
+
+        extrap_err = np.sqrt((det_cx - ex) ** 2 + (det_cy - ey) ** 2)  # (n_det,)
+
+        # --- Term 2: direction agreement ---
+        dx = det_cx - tcx
+        dy = det_cy - tcy
+        gap_norm = np.sqrt(dx ** 2 + dy ** 2) + 1e-6
+        if vel is not None:
+            vy_unit, vx_unit = float(vel[0]), float(vel[1])
+            dot = (dx / gap_norm) * vx_unit + (dy / gap_norm) * vy_unit
+            direction_term = (1.0 - np.clip(dot, -1.0, 1.0)) / 2.0     # [0,1]
+        else:
+            direction_term = np.zeros(n_det)
+
+        # --- Term 3: behavioral dissimilarity ---
+        if prof is not None:
+            med_speed = prof["median_speed"]
+            med_scale = prof["median_scale"]
+            # Detection proxies: step distance from tracker last centre, bbox area
+            det_step  = np.sqrt((det_cx - tcx) ** 2 + (det_cy - tcy) ** 2)
+            b_speed   = np.abs(det_step - med_speed) / (med_speed + 1.0)
+            b_scale   = np.abs(det_areas - med_scale) / (det_areas + med_scale + 1e-6)
+            beh_term  = 0.5 * (b_speed + b_scale)
+        else:
+            beh_term  = np.zeros(n_det)
+
+        cost[:, j] = w_ext * extrap_err + w_dir * direction_term + w_beh * beh_term
+
+    return cost
+
+
+def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc_weight, asso_func=iou_batch, aspect_weight=0.0, vial_mask=None, trk_profiles=None, trk_last_centers=None, behavioral_weight=0.0, link_trk_states=None, link_weights=None):
     if(len(trackers)==0):
         return np.empty((0,2),dtype=int), np.arange(len(detections)), np.empty((0,5),dtype=int)
 
@@ -468,6 +636,19 @@ def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc
     valid_mask = (previous_obs[:, 4] >= 0).astype(float)[:, np.newaxis]     # (n_trk, 1)
     scores = detections[:, -1][np.newaxis, :]                                # (1, n_det)
     angle_diff_cost = (valid_mask * diff_angle * scores * vdc_weight).T      # (n_det, n_trk)
+
+    # Link cost: full composite cost (extrapolated position + direction + behavioral)
+    # used in the jump round where IoU alone is unreliable (inflated bboxes).
+    # link_trk_states is a list of dicts built in ocsort.update(); None = disabled.
+    if link_trk_states is not None and len(link_trk_states) > 0:
+        lc = link_cost_batch(detections, link_trk_states, weights=link_weights)
+        # Normalise to [0, 1] and convert to a bonus (lower cost = higher bonus)
+        lc_max = lc.max()
+        if lc_max > 0:
+            lc_bonus = 1.0 - lc / lc_max
+        else:
+            lc_bonus = np.zeros_like(lc)
+        bonus = bonus + lc_bonus
 
     if min(iou_matrix.shape) > 0:
         a = (iou_matrix > iou_threshold).astype(np.int32)

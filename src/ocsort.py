@@ -84,6 +84,7 @@ from __future__ import print_function
 
 import numpy as np
 from .association import *
+from .association import link_cost_batch
 from .kalmanfilter import KalmanFilterNew
 
 
@@ -334,12 +335,19 @@ class KalmanBoxTracker(object):
         Rolling kinematic summary computed from all raw observations so far.
 
         Returns a dict with:
-          median_speed      — median centre-to-centre distance between consecutive
-                             observations (px/frame). Proxy for how fast this fly moves.
-          median_scale      — median bounding-box area (px²). Proxy for detected size.
-          pause_fraction    — fraction of steps where speed < 1 px/frame.
-          mean_turning_angle — mean absolute heading change between consecutive steps
-                             (degrees). High = erratic; low = straight-line mover.
+          median_speed           — median centre-to-centre distance between consecutive
+                                   observations (px/frame). Proxy for how fast this fly moves.
+          median_scale           — median bounding-box area (px²). Proxy for detected size.
+          pause_fraction         — fraction of steps where speed < 1 px/frame.
+          mean_turning_angle     — mean absolute heading change between consecutive steps
+                                   (degrees). High = erratic; low = straight-line mover.
+          mean_acceleration      — mean signed speed change per step (px/frame²). Positive =
+                                   speeding up on average; negative = slowing down.
+          n_large_displacements  — number of steps where speed > 2× median speed (burst count).
+          tortuosity             — path length / straight-line displacement. 1.0 = perfectly
+                                   straight; higher = more winding path.
+          area_covered           — convex hull area of all visited centre positions (px²).
+                                   Proxy for how much of the vial the fly has explored.
 
         Returns None when fewer than 2 observations are available (can't compute
         kinematics from a single point).
@@ -363,11 +371,44 @@ class KalmanBoxTracker(object):
 
         scales = np.array([(b[2] - b[0]) * (b[3] - b[1]) for b in obs])
 
+        median_speed = float(np.median(speeds))
+
+        # n_large_displacements: burst steps where speed exceeds 2× median
+        n_large_displacements = int((speeds > 2 * median_speed).sum())
+
+        # mean_acceleration: mean signed change in speed between consecutive steps
+        mean_acceleration = float(np.diff(speeds).mean()) if len(speeds) >= 2 else 0.0
+
+        # tortuosity: total path length divided by straight-line displacement
+        path_length   = float(speeds.sum())
+        dx = centers[-1, 0] - centers[0, 0]
+        dy = centers[-1, 1] - centers[0, 1]
+        straight_line = float(np.sqrt(dx ** 2 + dy ** 2))
+        tortuosity    = path_length / (straight_line + 1e-6)
+
+        # area_covered: convex hull area of all visited centre positions
+        if len(centers) >= 3:
+            try:
+                from scipy.spatial import ConvexHull
+                area_covered = float(ConvexHull(centers).volume)  # .volume = area in 2D
+            except Exception:
+                # Fallback for collinear points or missing scipy
+                area_covered = float(
+                    (centers[:, 0].max() - centers[:, 0].min()) *
+                    (centers[:, 1].max() - centers[:, 1].min())
+                )
+        else:
+            area_covered = 0.0
+
         return {
-            "median_speed":       float(np.median(speeds)),
-            "median_scale":       float(np.median(scales)),
-            "pause_fraction":     float((speeds < 1.0).mean()),
-            "mean_turning_angle": mean_turning_angle,
+            "median_speed":          median_speed,
+            "median_scale":          float(np.median(scales)),
+            "pause_fraction":        float((speeds < 1.0).mean()),
+            "mean_turning_angle":    mean_turning_angle,
+            "mean_acceleration":     mean_acceleration,
+            "n_large_displacements": n_large_displacements,
+            "tortuosity":            tortuosity,
+            "area_covered":          area_covered,
         }
 
 
@@ -377,6 +418,46 @@ class KalmanBoxTracker(object):
     that we hardly normalize the cost by all methods to (0,1) which may not be 
     the best practice.
 """
+def _select_prefix(costs, n_active, expected, w_under, w_over):
+    """
+    Accept the cheapest prefix of `costs` that minimises
+
+        Σ costs[:k]  +  w_under · max(n_active+k − expected, 0)
+                      +  w_over  · max(expected − (n_active+k), 0)
+
+    Used to decide how many unmatched detections to spawn as new trackers.
+    Cost of spawning detection i = (1 − confidence_i), so high-confidence
+    detections are preferred. w_under >> w_over means we prefer to over-spawn
+    slightly rather than leave real flies untracked.
+
+    Parameters
+    ----------
+    costs    : list of floats, sorted ascending (cheapest spawn first)
+    n_active : number of live trackers before spawning
+    expected : target number of active trackers
+    w_under  : penalty per tracker below expected (fragmentation cost)
+    w_over   : penalty per tracker above expected (false-positive cost)
+
+    Returns
+    -------
+    k : int — number of detections to spawn (0 = spawn nothing)
+    """
+    def _penalty(n):
+        dev = n - expected
+        return w_under * max(dev, 0) + w_over * max(-dev, 0)
+
+    best_k     = 0
+    best_total = _penalty(n_active)   # k=0 baseline
+    running    = 0.0
+    for k, c in enumerate(costs, start=1):
+        running += c
+        total = running + _penalty(n_active + k)
+        if total < best_total:
+            best_total = total
+            best_k     = k
+    return best_k
+
+
 ASSO_FUNCS = {  "iou": iou_batch,
                 "giou": giou_batch,
                 "ciou": ciou_batch,
@@ -389,9 +470,18 @@ class OCSort(object):
     def __init__(self, det_thresh, max_age=30, min_hits=3,
         iou_threshold=0.3, delta_t=3, asso_func="iou", inertia=0.2, use_byte=False,
         brownian_pos_noise=1.0, vial_rois=None, aspect_weight=0.0, behavioral_weight=0.0,
-        jump_factor=2.0, jump_iou_threshold=0.05, jump_inertia=0.05):
+        jump_factor=2.0, jump_iou_threshold=0.05, jump_inertia=0.05,
+        expected_count=None, w_under=15.0, w_over=2.0):
         """
         Sets key parameters for SORT
+
+        expected_count : total expected number of flies across all vials. When set,
+            _select_prefix is applied when spawning new trackers so the active
+            tracker count is steered toward this target. None = disabled (spawn all).
+        w_under : penalty per tracker below expected_count (fragmentation cost).
+            Higher = more aggressive merging / less spawning when over-counted.
+        w_over  : penalty per tracker above expected_count (false-positive cost).
+            Kept low so we prefer over-spawning slightly rather than missing flies.
         """
         self.max_age = max_age
         self.min_hits = min_hits
@@ -410,6 +500,9 @@ class OCSort(object):
         self.jump_factor = jump_factor
         self.jump_iou_threshold = jump_iou_threshold
         self.jump_inertia = jump_inertia
+        self.expected_count = expected_count
+        self.w_under = w_under
+        self.w_over  = w_over
         KalmanBoxTracker.count = 0
 
         # --- Diagnostics ---
@@ -553,7 +646,7 @@ class OCSort(object):
         # inflates the bbox, giving a wider search radius at lower confidence.
         # OCM weight is reduced (jump_inertia) since direction is less reliable
         # for a fly that may have changed course during the gap.
-        if unmatched_dets.shape[0] > 0 and unmatched_trks.shape[0] > 0:
+        if self.jump_factor > 0 and unmatched_dets.shape[0] > 0 and unmatched_trks.shape[0] > 0:
             left_dets = dets[unmatched_dets]
 
             jump_boxes = np.array([
@@ -570,6 +663,23 @@ class OCSort(object):
             jump_velocities   = velocities[unmatched_trks]
             jump_k_obs        = k_observations[unmatched_trks]
 
+            # Build tracker state dicts for link_cost_batch (richer cost signal
+            # during the jump round, where IoU is already inflated / unreliable).
+            jump_trk_states = []
+            for t in unmatched_trks:
+                trk  = self.trackers[t]
+                lo   = trk.last_observation
+                tcx  = (lo[0] + lo[2]) / 2.0 if lo.sum() >= 0 else 0.0
+                tcy  = (lo[1] + lo[3]) / 2.0 if lo.sum() >= 0 else 0.0
+                jump_trk_states.append({
+                    "last_cx":  tcx,
+                    "last_cy":  tcy,
+                    "velocity": trk.velocity,
+                    "profile":  trk.behavioral_profile,
+                    "gap":      trk.time_since_update,
+                    "vial_roi": trk.vial_roi,
+                })
+
             jump_matched, jump_ud, jump_ut = associate(
                 left_dets, jump_boxes,
                 self.jump_iou_threshold,
@@ -579,6 +689,7 @@ class OCSort(object):
                 trk_profiles=jump_profiles,
                 trk_last_centers=jump_last_centers,
                 behavioral_weight=self.behavioral_weight,
+                link_trk_states=jump_trk_states,
             )
 
             for m in jump_matched:
@@ -591,6 +702,20 @@ class OCSort(object):
 
         for m in unmatched_trks:
             self.trackers[m].update(None)
+
+        # Count-aware spawning: use _select_prefix to decide how many of the
+        # unmatched detections to turn into new trackers. Detections are sorted
+        # by descending confidence so the cheapest (most reliable) are tried first.
+        # If expected_count is None, all unmatched detections are spawned as before.
+        if self.expected_count is not None and len(unmatched_dets) > 0:
+            n_active    = len(self.trackers)
+            sort_order  = sorted(range(len(unmatched_dets)),
+                                 key=lambda k: -float(dets[unmatched_dets[k], 4]))
+            sorted_udets = [unmatched_dets[k] for k in sort_order]
+            costs        = [1.0 - float(dets[i, 4]) for i in sorted_udets]
+            k_spawn      = _select_prefix(costs, n_active, self.expected_count,
+                                          self.w_under, self.w_over)
+            unmatched_dets = sorted_udets[:k_spawn]
 
         # create and initialise new trackers for unmatched detections
         for i in unmatched_dets:
