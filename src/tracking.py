@@ -29,7 +29,7 @@ def export_tracks_xy_tuple_csv_one_config(
     confidence: float = 0.10,
     lost_track_buffer: int = 90,
     minimum_matching_threshold: float = 0.01,
-    minimum_consecutive_frames: int = 10,
+    minimum_consecutive_frames: int = 1,
     max_frames: int | None = None,
     fps_assumed: float | None = None,
     min_area: float | None = 40,
@@ -42,6 +42,9 @@ def export_tracks_xy_tuple_csv_one_config(
     jump_factor: float = 2.0,
     jump_iou_threshold: float = 0.05,
     jump_inertia: float = 0.05,
+    expected_count: int | None = None,
+    w_under: float = 15.0,
+    w_over: float = 2.0,
 ) -> tuple[pd.DataFrame, object]:
     """
     Run RF-DETR + OC-SORT for one configuration and write a wide CSV where:
@@ -109,6 +112,9 @@ def export_tracks_xy_tuple_csv_one_config(
         jump_factor=jump_factor,
         jump_iou_threshold=jump_iou_threshold,
         jump_inertia=jump_inertia,
+        expected_count=expected_count,
+        w_under=w_under,
+        w_over=w_over,
     )
 
     rows = []
