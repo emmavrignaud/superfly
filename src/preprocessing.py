@@ -253,7 +253,7 @@ class _SliderRow(QWidget):
 
 class _ROIPickerDialog(QDialog):
     def __init__(self, cap, n_frames: int, w_vid: int, h_vid: int,
-                 default_end: int, video_context: VideoContext | None = None,
+                 initial_end: int, video_context: VideoContext | None = None,
                  parent=None):
         super().__init__(parent)
         self.cap      = cap
@@ -261,7 +261,7 @@ class _ROIPickerDialog(QDialog):
         self.w_vid    = w_vid
         self.h_vid    = h_vid
         self.start    = 0
-        self.end      = min(default_end, n_frames) if n_frames > 0 else default_end
+        self.end      = min(initial_end, n_frames) if n_frames > 0 else initial_end
         self.cur      = 0
         self.video_context = video_context
 
@@ -295,7 +295,7 @@ class _ROIPickerDialog(QDialog):
         root.setContentsMargins(20, 16, 20, 16)
         root.setSpacing(10)
 
-        hdr = QLabel("PICK ROI & FRAME RANGE")
+        hdr = QLabel("PICK ROI & TRIM VIDEO TO FRAME RANGE")
         hdr.setObjectName("header")
         root.addWidget(hdr)
 
@@ -314,9 +314,9 @@ class _ROIPickerDialog(QDialog):
 
         hi_n = max(self.n_frames - 1, 1)
         hi_e = max(self.n_frames, 1)
-        self.sl_start = _SliderRow("Start frame", 0,    hi_n, self.start)
-        self.sl_end   = _SliderRow("End frame",   1,    hi_e, self.end)
-        self.sl_cur   = _SliderRow("Preview",     0,    hi_n, self.cur)
+        self.sl_start = _SliderRow("Trim — keep from frame",  0,    hi_n, self.start)
+        self.sl_end   = _SliderRow("Trim — keep until frame",  1,    hi_e, self.end)
+        self.sl_cur   = _SliderRow("Preview frame",            0,    hi_n, self.cur)
         self.sl_start.value_changed.connect(self._on_start)
         self.sl_end.value_changed.connect(self._on_end)
         self.sl_cur.value_changed.connect(self._on_cur)
@@ -399,9 +399,11 @@ class _ROIPickerDialog(QDialog):
         self._load_frame()
 
     def _refresh_stats(self) -> None:
+        kept = max(0, self.end - self.start)
+        discarded = max(0, self.n_frames - kept)
         self.stats_lbl.setText(
-            f"frame={self.cur}   start={self.start}"
-            f"   end={self.end}   total={self.n_frames}"
+            f"preview frame={self.cur}   |   trim: keep frames [{self.start}, {self.end})"
+            f"   →   {kept} kept, {discarded} discarded   (total in video: {self.n_frames})"
         )
 
     def _load_frame(self) -> None:
@@ -434,24 +436,17 @@ class _ROIPickerDialog(QDialog):
 
 def gui_pick_roi_and_range(
     video_path: str,
-    default_end: int | None = None,
     video_context: VideoContext | None = None,
 ):
     """
     PyQt5 GUI to pick ROI + [start, end_excl).
 
-    Controls:
-      - Drag on the video to draw a ROI
-      - Sliders: start frame, end frame, preview frame
-      - Accept (or Enter) to confirm; Cancel (or Esc) to abort
+    The end-frame slider initializes to the video's actual frame count.
+    Final start/end are whatever the user accepts in the GUI.
 
     Returns:
       (x, y, w, h, start, end_excl)
     """
-    cfg = _preprocessing_cfg()
-    if default_end is None:
-        default_end = cfg.get("default_end", 700)
-
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise FileNotFoundError(video_path)
@@ -473,7 +468,7 @@ def gui_pick_roi_and_range(
         n_frames,
         w_vid,
         h_vid,
-        default_end,
+        n_frames,
         video_context=video_context,
     )
     accepted = dlg.exec_()
@@ -488,7 +483,6 @@ def gui_pick_roi_and_range(
 def preprocess_bgsub_gui(
     video_path: str,
     out_mp4: str | None = None,
-    default_end: int | None = None,
     gain: float | None = None,
     white_level: float | None = None,
     codec: str | None = None,
@@ -531,7 +525,6 @@ def preprocess_bgsub_gui(
         {"x": int, "y": int, "w": int, "h": int, "start": int, "end": int}
     """
     cfg = _preprocessing_cfg()
-    if default_end    is None: default_end    = cfg.get("default_end",      700)
     if gain           is None: gain           = cfg.get("bg_gain",          1.2)
     if white_level    is None: white_level    = cfg.get("bg_white_level",   245)
     if codec          is None: codec          = cfg.get("codec",          "mp4v")
@@ -546,7 +539,6 @@ def preprocess_bgsub_gui(
     else:
         x, y, w, h, start, end_excl = gui_pick_roi_and_range(
             video_path,
-            default_end=default_end,
             video_context=video_context,
         )
 
@@ -566,7 +558,8 @@ def preprocess_bgsub_gui(
         end_excl = min(end_excl, n_frames)
 
     # 1) Collect sampled frames then compute median background in one shot
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+    if start > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start)
     bg_frames = []
     for f in range(start, end_excl):
         ok, frame_bgr = cap.read()
@@ -594,7 +587,13 @@ def preprocess_bgsub_gui(
         cap.release()
         raise RuntimeError(f"Could not open VideoWriter for: {out_mp4}")
 
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+    cap.release()
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        writer.release()
+        raise FileNotFoundError(video_path)
+    if start > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start)
     for f in range(start, end_excl):
         ok, frame_bgr = cap.read()
         if not ok:

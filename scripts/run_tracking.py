@@ -180,7 +180,6 @@ def main():
         video_path, crop_params = preprocess_bgsub_gui(
             video_path=video_path,
             out_mp4=pp_out,
-            default_end=_p.get("default_end", 700),
             gain=_p.get("bg_gain", 1.2),
             white_level=_p.get("bg_white_level", 245),
             bg_sample_stride=_p.get("bg_sample_stride", 1),
@@ -224,7 +223,7 @@ def main():
         else:
             print(f"No stored vial ROIs for: {_video_key} — opening GUI...")
         vials = draw_and_save_vial_rois(
-            video_path=video_path,
+            video_path=args.video,
             roi_json_path=roi_json,
             video_context=video_context,
         )

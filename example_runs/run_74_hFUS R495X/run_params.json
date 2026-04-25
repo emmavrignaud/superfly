@@ -1,0 +1,101 @@
+{
+  "timestamp": "2026-04-25T11:30:56",
+  "git_commit": "3ef4c7c",
+  "config": {
+    "video": "../generalisability_test\\09.04.26 hFUS R495X 27DPE-converted.mp4",
+    "output_dir": "..\\outputs\\run_74",
+    "short_name": "09.04.26 hFUS R495X ",
+    "video_fps": 30.049136664580622,
+    "video_width": 1024,
+    "video_height": 768,
+    "video_frames": 760,
+    "tracker": {
+      "detection_confidence_rfdetr": 0.4,
+      "confidence": 0.55,
+      "lost_track_buffer": 180,
+      "min_matching_threshold": 0.2,
+      "min_consecutive_frames": 3,
+      "asso_func": "diou",
+      "brownian_pos_noise": 15
+    },
+    "stitching": {
+      "stop_mode": "converge",
+      "w_under": 15,
+      "w_over": 2.0,
+      "vial_count_cap": 7
+    },
+    "preprocessing": {
+      "bg_gain": 1.2,
+      "bg_white_level": 245,
+      "bg_percentile": 85.0,
+      "bg_sample_stride": 1
+    }
+  },
+  "preprocessing": {
+    "video_pp": "..\\outputs\\run_74\\09.04.26 hFUS R495X 27DPE-converted_pp.mp4",
+    "crop_params": {
+      "x": 167,
+      "y": 117,
+      "w": 555,
+      "h": 463,
+      "start": 0,
+      "end": 760
+    }
+  },
+  "roi": {
+    "vial1": [
+      8,
+      18,
+      78,
+      461
+    ],
+    "vial2": [
+      124,
+      17,
+      194,
+      461
+    ],
+    "vial3": [
+      240,
+      17,
+      310,
+      461
+    ],
+    "vial4": [
+      358,
+      18,
+      432,
+      462
+    ],
+    "vial5": [
+      476,
+      18,
+      551,
+      462
+    ]
+  },
+  "tracker_output": {
+    "wide_csv": "..\\outputs\\run_74\\tracks_wide_format.csv",
+    "frames": 760,
+    "track_count": 50
+  },
+  "stitching_output": {
+    "stitched_csv": "..\\outputs\\run_74\\tracks_xy_stitched_long.csv",
+    "stitched_ids": 50,
+    "original_ids": 50
+  },
+  "compact": {
+    "csv": "..\\outputs\\run_74\\compact_tracks.csv",
+    "rows": 8819
+  },
+  "stitching_objectives": {
+    "vial_count_error": 12.0,
+    "per_id_coverage_loss": 0.0,
+    "short_track_count": 0.0,
+    "per_frame_id_variance": 4.639243699200463
+  },
+  "outputs": {
+    "raw_overlay": "..\\outputs\\run_74\\09.04.26 hFUS R495X _overlay_raw_ocsort.mp4",
+    "overlay": "..\\outputs\\run_74\\09.04.26 hFUS R495X _overlay_vials_stitched.mp4"
+  }
+}

@@ -50,7 +50,7 @@ outputs/
     ├── tracks_xy_stitched_long.csv
     ├── vial_rois.json
     ├── compact_tracks.csv
-    ├── overlay_vials_shaded.mp4
+    ├── overlay_vials_stitched.mp4
     └── classification/
         └── report_figures/
 ```

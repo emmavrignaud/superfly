@@ -404,12 +404,11 @@ class _MultiROICanvas(QLabel):
 # ─── Dialog ───────────────────────────────────────────────────────────────────
 
 class _VialROIDialog(QDialog):
-    def __init__(self, frame_bgr: np.ndarray, n_vials: int,
+    def __init__(self, frame_bgr: np.ndarray,
                  snap_threshold_pct: float, snap_enabled: bool,
                  video_context: VideoContext | None = None,
                  parent=None):
         super().__init__(parent)
-        self.n_vials = n_vials
         self._snap_threshold_pct = snap_threshold_pct
         self._snap_enabled       = snap_enabled
         self.video_context       = video_context
@@ -472,19 +471,16 @@ class _VialROIDialog(QDialog):
         return "[snap ON]" if self.canvas.snap_enabled else "[snap OFF]"
 
     def _refresh_status(self, n: int) -> None:
-        if n == self.n_vials:
-            action = "ready"
-        else:
-            action = "drag to add"
+        action = "ready — press Done when finished" if n > 0 else "drag to add"
         self.status_lbl.setText(
-            f"{n} / {self.n_vials} ROIs drawn  —  {action}"
+            f"{n} ROI{'s' if n != 1 else ''} drawn  —  {action}"
             f"    {self._snap_badge()}  (S to toggle)"
         )
 
     def _on_rois_changed(self, rois: list) -> None:
         n = len(rois)
         self._refresh_status(n)
-        self.btn_done.setEnabled(n == self.n_vials)
+        self.btn_done.setEnabled(n > 0)
         self.btn_undo.setEnabled(n > 0)
 
     def _on_snap_toggled(self, enabled: bool) -> None:
@@ -515,18 +511,21 @@ def draw_and_save_vial_rois(
     video_path: str,
     roi_json_path: str,
     frame_idx: int = 0,
-    n_vials: int = 6,
     video_context: VideoContext | None = None,
 ) -> Dict[str, Tuple[int, int, int, int]]:
     """
     Interactive PyQt5 GUI to manually draw rectangular ROIs for fly vials.
+
+    The user draws as many ROIs as the experiment has vials; the count is
+    determined entirely by what was drawn. Downstream steps read the saved
+    JSON to learn how many vials exist.
 
     Controls
     --------
     Drag mouse  : draw ROI
     U           : undo last ROI
     R           : reset all ROIs
-    Enter       : finish (only when exactly n_vials ROIs are drawn)
+    Enter       : finish (requires at least one ROI)
     Esc         : cancel
 
     Parameters
@@ -534,19 +533,35 @@ def draw_and_save_vial_rois(
     video_path    : path to the experiment video
     roi_json_path : where the ROIs will be saved as JSON
     frame_idx     : reference frame for drawing (default 0)
-    n_vials       : number of vials expected (default 6)
 
     Returns
     -------
     Dict mapping vial IDs to (x0, y0, x1, y1), sorted left -> right.
     """
-    cap = cv2.VideoCapture(video_path)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+    library_path = Path(__file__).parent.parent / "roi_library.json"
+    entry = {}
+    if library_path.exists():
+        with open(library_path) as f:
+            entry = json.load(f).get(Path(video_path).stem, {}) or {}
+
+    crop = entry.get("preprocessing")
+    raw_path = entry.get("video_path") if crop else None
+    source_path = raw_path if raw_path and os.path.exists(raw_path) else video_path
+
+    cap = cv2.VideoCapture(source_path)
+    if frame_idx > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
     ok, frame = cap.read()
     cap.release()
 
     if not ok:
         raise RuntimeError("Could not read reference frame from video")
+
+    if crop and source_path == raw_path:
+        cx, cy, cw, ch = crop["x"], crop["y"], crop["w"], crop["h"]
+        frame = frame[cy:cy + ch, cx:cx + cw]
+        if frame.shape[0] != ch or frame.shape[1] != cw:
+            raise ValueError("Crop region from roi_library.json is out of bounds for the raw video.")
 
     app = QApplication.instance() or QApplication(sys.argv)
 
@@ -556,7 +571,6 @@ def draw_and_save_vial_rois(
 
     dlg      = _VialROIDialog(
         frame,
-        n_vials,
         snap_threshold_pct,
         snap_enabled,
         video_context=video_context,

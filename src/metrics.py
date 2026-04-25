@@ -38,8 +38,10 @@ Builds two composite Plotly figures (interactive hover) and optionally writes:
   metrics_pipeline.png         — 4-panel pipeline diagnostics
 """
 
+import base64
 import json
 import os
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -844,6 +846,18 @@ def _dup_stats_html(dup_stats) -> str:
     )
 
 
+def _funny_image_html() -> str:
+    img_path = Path(__file__).parent.parent / "data" / "media" / "ty4ids_flies.png"
+    if not img_path.exists():
+        return ""
+    b64 = base64.b64encode(img_path.read_bytes()).decode("ascii")
+    return (
+        '<hr><div style="text-align:center;margin-top:24px;">'
+        f'<img src="data:image/png;base64,{b64}" '
+        'style="max-width:480px;width:100%;height:auto;" alt="ty4ids flies"></div>'
+    )
+
+
 def _objectives_html(objectives) -> str:
     if objectives is None:
         return "<p><em>Not computed for this run.</em></p>"
@@ -930,6 +944,8 @@ def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
 
 <h2>Pipeline Diagnostics</h2>
 {pipeline_div}
+
+{_funny_image_html()}
 
 </body></html>
 """

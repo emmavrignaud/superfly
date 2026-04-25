@@ -90,7 +90,6 @@ def main():
     bg_white_level = _p.get("bg_white_level", 245)
     bg_percentile = _p.get("bg_percentile", 85.0)
     bg_sample_stride = _p.get("bg_sample_stride", 1)
-    default_end = _p.get("default_end", 700)
     codec = _p.get("codec", "mp4v")
 
     data_raw = _REPO_ROOT / "data" / "raw"
@@ -172,7 +171,6 @@ def main():
             pp_path, crop_params = preprocess_bgsub_gui(
                 video_path=str(video),
                 out_mp4=str(pp_dst),
-                default_end=default_end,
                 gain=bg_gain,
                 white_level=bg_white_level,
                 codec=codec,
@@ -200,7 +198,7 @@ def main():
             print("  Opening vial ROI GUI...")
             tmp_roi_json = pp_dst.parent / "_vial_rois_tmp.json"
             vials = draw_and_save_vial_rois(
-                video_path=str(pp_dst),
+                video_path=str(video),
                 roi_json_path=str(tmp_roi_json),
                 video_context=video_context,
             )

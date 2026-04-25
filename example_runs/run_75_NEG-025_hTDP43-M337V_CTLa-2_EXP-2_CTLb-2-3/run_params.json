@@ -1,0 +1,95 @@
+{
+  "timestamp": "2026-04-25T16:30:05",
+  "git_commit": "3ef4c7c",
+  "config": {
+    "video": "../generalisability_test\\2026-03-26_NEG-025_hTDP43-M337V_CTLa-2_EXP-2_CTLb-2-3_2026-03-19.mp4",
+    "output_dir": "..\\outputs\\run_75",
+    "short_name": "2026-03-26_NEG-025_h",
+    "video_fps": 29.9700380256617,
+    "video_width": 1024,
+    "video_height": 768,
+    "video_frames": 669,
+    "tracker": {
+      "detection_confidence_rfdetr": 0.4,
+      "confidence": 0.55,
+      "lost_track_buffer": 180,
+      "min_matching_threshold": 0.2,
+      "min_consecutive_frames": 3,
+      "asso_func": "diou",
+      "brownian_pos_noise": 15
+    },
+    "stitching": {
+      "stop_mode": "converge",
+      "w_under": 15,
+      "w_over": 2.0,
+      "vial_count_cap": 7
+    },
+    "preprocessing": {
+      "bg_gain": 1.2,
+      "bg_white_level": 245,
+      "bg_percentile": 85.0,
+      "bg_sample_stride": 1
+    }
+  },
+  "preprocessing": {
+    "video_pp": "..\\outputs\\run_75\\2026-03-26_NEG-025_hTDP43-M337V_CTLa-2_EXP-2_CTLb-2-3_2026-03-19_pp.mp4",
+    "crop_params": {
+      "x": 318,
+      "y": 136,
+      "w": 420,
+      "h": 440,
+      "start": 0,
+      "end": 669
+    }
+  },
+  "roi": {
+    "vial1": [
+      0,
+      0,
+      69,
+      439
+    ],
+    "vial2": [
+      115,
+      0,
+      187,
+      439
+    ],
+    "vial3": [
+      233,
+      0,
+      303,
+      439
+    ],
+    "vial4": [
+      349,
+      0,
+      419,
+      439
+    ]
+  },
+  "tracker_output": {
+    "wide_csv": "..\\outputs\\run_75\\tracks_wide_format.csv",
+    "frames": 617,
+    "track_count": 44
+  },
+  "stitching_output": {
+    "stitched_csv": "..\\outputs\\run_75\\tracks_xy_stitched_long.csv",
+    "stitched_ids": 44,
+    "original_ids": 44
+  },
+  "compact": {
+    "csv": "..\\outputs\\run_75\\compact_tracks.csv",
+    "rows": 10794
+  },
+  "stitching_objectives": {
+    "vial_count_error": 16.0,
+    "per_id_coverage_loss": 0.0,
+    "short_track_count": 0.0,
+    "per_frame_id_variance": 4.979129442806881
+  },
+  "outputs": {
+    "raw_overlay": "..\\outputs\\run_75\\2026-03-26_NEG-025_h_overlay_raw_ocsort.mp4",
+    "overlay": "..\\outputs\\run_75\\2026-03-26_NEG-025_h_overlay_vials_stitched.mp4"
+  }
+}

@@ -8,7 +8,7 @@ Stages
 ------
 4. Hungarian stitching         -- writes tracks_xy_stitched_long.csv
 5. Vial assignment + compact IDs -- writes compact_tracks.csv
-6. Overlay video rendering     -- writes overlay_vials_shaded.mp4
+6. Overlay video rendering     -- writes overlay_vials_stitched.mp4
 
 Run scripts/run_tracking.py first to produce the wide CSV and vial_rois.json.
 
@@ -204,22 +204,29 @@ def main():
         overlay_video = resolve_overlay_video(args.output_dir, _overlay_mode) or args.video
         print(f"  overlay_source={_overlay_mode}  →  substrate: {overlay_video}")
 
+        det_log_csv = os.path.join(args.output_dir, "detections_raw.csv")
+        det_log_arg = det_log_csv if os.path.exists(det_log_csv) else None
+
         # 6a — raw OC-SORT overlay (before stitching)
         raw_overlay_mp4 = os.path.join(args.output_dir, "overlay_raw_ocsort.mp4")
         render_raw_overlay_video(
             video_path=overlay_video,
             csv_path=long_csv,
             out_mp4=raw_overlay_mp4,
+            vial_rois=vial_rois,
+            det_log_csv=det_log_arg,
             **overlay_kwargs,
         )
         print(f"  Raw OC-SORT overlay: {raw_overlay_mp4}")
 
         # 6b — stitched overlay
-        overlay_mp4 = os.path.join(args.output_dir, "overlay_vials_shaded.mp4")
+        overlay_mp4 = os.path.join(args.output_dir, "overlay_vials_stitched.mp4")
         render_vial_overlay_video(
             video_path=overlay_video,
             csv_path=compact_csv,
             out_mp4=overlay_mp4,
+            vial_rois=vial_rois,
+            det_log_csv=det_log_arg,
             **overlay_kwargs,
         )
         print(f"  Stitched overlay:    {overlay_mp4}")
