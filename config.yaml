@@ -78,6 +78,6 @@ visualization:
 
 roi:
   # Per-vial ROI; cached in roi_library/. Snapping aligns boxes vertically.
-  use_saved_roi: true         # false = always open GUI to redraw
+  use_saved_roi: false         # false = always open GUI to redraw
   snap_threshold_pct: 0.005   # snap zone as fraction of last box height
   snap_enabled: true          # press 'S' in GUI to toggle per-vial

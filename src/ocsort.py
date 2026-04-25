@@ -306,10 +306,10 @@ class KalmanBoxTracker(object):
         the regular predict(). The Kalman state is never touched.
         """
         x  = self.kf.x
-        cx = float(x[0]) + float(x[4]) * jump_factor
-        cy = float(x[1]) + float(x[5]) * jump_factor
-        s  = max(float(x[2]) * (jump_factor ** 2), 1.0)   # inflate area
-        r  = float(x[3])
+        cx = x[0].item() + x[4].item() * jump_factor
+        cy = x[1].item() + x[5].item() * jump_factor
+        s  = max(x[2].item() * (jump_factor ** 2), 1.0)   # inflate area
+        r  = x[3].item()
 
         w = np.sqrt(s * r)
         h = s / (w + 1e-6)
