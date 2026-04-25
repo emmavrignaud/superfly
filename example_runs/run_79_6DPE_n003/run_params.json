@@ -1,0 +1,107 @@
+{
+  "timestamp": "2026-04-25T23:28:41",
+  "git_commit": "6e63598",
+  "config": {
+    "video": "../2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m\\6 DPE\\003\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_6d_003-converted.mp4",
+    "output_dir": "..\\outputs\\run_79_6DPE_n003",
+    "short_name": "6DPE_n003",
+    "video_fps": 30.03894728647028,
+    "video_width": 1024,
+    "video_height": 768,
+    "video_frames": 872,
+    "tracker": {
+      "detection_confidence_rfdetr": 0.4,
+      "confidence": 0.55,
+      "lost_track_buffer": 180,
+      "min_matching_threshold": 0.2,
+      "min_consecutive_frames": 1,
+      "asso_func": "diou",
+      "brownian_pos_noise": 15
+    },
+    "stitching": {
+      "stop_mode": "converge",
+      "w_under": 15,
+      "w_over": 2.0,
+      "vial_count_cap": 7
+    },
+    "preprocessing": {
+      "bg_gain": 1.2,
+      "bg_white_level": 245,
+      "bg_percentile": 85.0,
+      "bg_sample_stride": 1
+    }
+  },
+  "preprocessing": {
+    "video_pp": "..\\outputs\\run_79_6DPE_n003\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_6d_003-converted_pp.mp4",
+    "crop_params": {
+      "x": 201,
+      "y": 98,
+      "w": 695,
+      "h": 465,
+      "start": 0,
+      "end": 872
+    }
+  },
+  "roi": {
+    "vial1": [
+      3,
+      2,
+      78,
+      454
+    ],
+    "vial2": [
+      122,
+      1,
+      197,
+      454
+    ],
+    "vial3": [
+      244,
+      0,
+      319,
+      454
+    ],
+    "vial4": [
+      366,
+      0,
+      446,
+      454
+    ],
+    "vial5": [
+      489,
+      2,
+      568,
+      454
+    ],
+    "vial6": [
+      611,
+      3,
+      688,
+      454
+    ]
+  },
+  "tracker_output": {
+    "wide_csv": "..\\outputs\\run_79_6DPE_n003\\tracks_wide_format.csv",
+    "frames": 872,
+    "track_count": 96
+  },
+  "stitching_output": {
+    "stitched_csv": "..\\outputs\\run_79_6DPE_n003\\tracks_xy_stitched_long.csv",
+    "stitched_ids": 96,
+    "original_ids": 96
+  },
+  "compact": {
+    "csv": "..\\outputs\\run_79_6DPE_n003\\compact_tracks.csv",
+    "rows": 22607
+  },
+  "stitching_objectives": {
+    "vial_count_error": 116.0,
+    "per_id_coverage_loss": 0.0,
+    "short_track_count": 0.0,
+    "per_frame_id_variance": 10.64200539009796
+  },
+  "outputs": {
+    "raw_overlay": "..\\outputs\\run_79_6DPE_n003\\6DPE_n003_overlay_raw_ocsort.mp4",
+    "overlay": "..\\outputs\\run_79_6DPE_n003\\6DPE_n003_overlay_vials_stitched.mp4"
+  }
+}

@@ -483,6 +483,7 @@ def gui_pick_roi_and_range(
 def preprocess_bgsub_gui(
     video_path: str,
     out_mp4: str | None = None,
+    out_raw_mp4: str | None = None,
     gain: float | None = None,
     white_level: float | None = None,
     codec: str | None = None,
@@ -510,7 +511,8 @@ def preprocess_bgsub_gui(
 
     Output path behaviour:
       - If out_mp4 is None:  "<same folder>/<stem>_pp.<ext>"
-      - Otherwise writes to the given path (parent dir created if needed).
+      - If out_raw_mp4 is given, also write the cropped raw clip there.
+      - Otherwise writes to the given path(s) (parent dir created if needed).
 
     Parameters
     ----------
@@ -579,13 +581,22 @@ def preprocess_bgsub_gui(
 
     bg_gray = np.percentile(np.stack(bg_frames, axis=0), bg_percentile, axis=0).astype(np.float32)
 
-    # 2) Write background-subtracted video
+    # 2) Write background-subtracted video and optional raw-cropped companion
     os.makedirs(os.path.dirname(out_mp4) or ".", exist_ok=True)
     fourcc = cv2.VideoWriter_fourcc(*codec)
     writer = cv2.VideoWriter(out_mp4, fourcc, fps, (w, h), isColor=True)
     if not writer.isOpened():
         cap.release()
         raise RuntimeError(f"Could not open VideoWriter for: {out_mp4}")
+
+    raw_writer = None
+    if out_raw_mp4 is not None:
+        os.makedirs(os.path.dirname(out_raw_mp4) or ".", exist_ok=True)
+        raw_writer = cv2.VideoWriter(out_raw_mp4, fourcc, fps, (w, h), isColor=True)
+        if not raw_writer.isOpened():
+            cap.release()
+            writer.release()
+            raise RuntimeError(f"Could not open VideoWriter for: {out_raw_mp4}")
 
     cap.release()
     cap = cv2.VideoCapture(video_path)
@@ -602,16 +613,23 @@ def preprocess_bgsub_gui(
         if roi_bgr.shape[0] != h or roi_bgr.shape[1] != w:
             cap.release()
             writer.release()
+            if raw_writer is not None:
+                raw_writer.release()
             raise ValueError("ROI out of bounds for this video/frame.")
 
         gray = _bgr_to_gray_float32(roi_bgr)
         diff = bg_gray - gray  # signed: positive where fly is darker than bg
         vis  = float(white_level) - diff * float(gain)
         vis_u8 = np.clip(vis, 0, 255).astype(np.uint8)
+        if raw_writer is not None:
+            raw_writer.write(roi_bgr)
         writer.write(cv2.cvtColor(vis_u8, cv2.COLOR_GRAY2BGR))
 
     cap.release()
     writer.release()
+    if raw_writer is not None:
+        raw_writer.release()
+        print("Saved raw cropped video:", out_raw_mp4)
     print("Saved bgsub video:", out_mp4)
     print(f"Background ({bg_percentile}th percentile) from {len(bg_frames)} frames (stride={bg_sample_stride}).")
     return out_mp4, {"x": x, "y": y, "w": w, "h": h, "start": start, "end": end_excl}

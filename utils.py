@@ -20,10 +20,13 @@ def resolve_overlay_video(
     Decision order:
       1. If ``override`` is given, return it as-is (caller's explicit --video).
       2. If ``overlay_source == "processed"``, return run_params.preprocessing.video_pp.
-      3. Otherwise (``raw_cropped`` or unknown), return run_params.config.video (raw).
+      3. If ``overlay_source == "raw_cropped"``, prefer
+         run_params.preprocessing.video_raw_cropped when present.
+      4. Otherwise (``raw_cropped`` fallback or unknown), return
+         run_params.config.video (raw).
 
-    The resolved path is searched under the run directory (where _pp lives and
-    where the raw is hardlinked) and under repo_root/notebooks/ (where config.video
+    The resolved path is searched under the run directory (where _pp, raw_cropped,
+    and the hardlinked raw live) and under repo_root/notebooks/ (where config.video
     is stored relative to the notebook cwd). Returns None if nothing exists on disk.
     """
     if override is not None:
@@ -40,6 +43,11 @@ def resolve_overlay_video(
     mode = (overlay_source or "raw_cropped").lower()
     if mode == "processed":
         vid = params.get("preprocessing", {}).get("video_pp")
+    elif mode == "raw_cropped":
+        vid = (
+            params.get("preprocessing", {}).get("video_raw_cropped")
+            or params.get("config", {}).get("video")
+        )
     else:
         vid = params.get("config", {}).get("video")
 

@@ -3,8 +3,7 @@ opencv-python>=4.8
 
 numpy>=1.24
 supervision>=0.18
-inference>=0.9
-boxmot>=10.0
+inference-sdk>=0.13   # lightweight HTTP client; full `inference` server not needed
 
 # Data / ML
 pandas>=2.0
@@ -13,7 +12,9 @@ scikit-learn>=1.3
 
 # Visualisation
 plotly>=5.18
-PyQt5>=5.15          # preprocessing GUI
+PyQt5>=5.15          # preprocessing / ROI GUIs
+PySide6>=6.6         # labeler GUI (QML)
+colorcet>=3.0        # Glasbey palette for track IDs
 kaleido>=0.2          # plotly static image export
 
 # Config

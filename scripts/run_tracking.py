@@ -167,9 +167,11 @@ def main():
     # Stage 1 (optional): background subtraction
     # ------------------------------------------------------------------
     crop_params = None
+    raw_cropped_path = None
     if args.preprocess:
         print("\n=== Stage 1: Background subtraction ===")
         pp_out = os.path.join(args.output_dir, Path(args.video).stem + "_pp.mp4")
+        raw_cropped_path = os.path.join(args.output_dir, Path(args.video).stem + "_raw_cropped.mp4")
 
         _stored_crop = _library.get(_video_key, {}).get("preprocessing")
         if use_saved_roi and _stored_crop is not None:
@@ -180,6 +182,7 @@ def main():
         video_path, crop_params = preprocess_bgsub_gui(
             video_path=video_path,
             out_mp4=pp_out,
+            out_raw_mp4=raw_cropped_path,
             gain=_p.get("bg_gain", 1.2),
             white_level=_p.get("bg_white_level", 245),
             bg_sample_stride=_p.get("bg_sample_stride", 1),
@@ -202,7 +205,7 @@ def main():
         print(f"Saved crop params: {crop_roi_json}")
 
     save_run_params(args.output_dir, "preprocessing",
-                    {"video_pp": video_path, "crop_params": crop_params})
+                    {"video_pp": video_path, "video_raw_cropped": raw_cropped_path, "crop_params": crop_params})
 
     # ------------------------------------------------------------------
     # Stage 2: draw vial ROIs

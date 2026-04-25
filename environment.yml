@@ -18,8 +18,8 @@ dependencies:
   - pip:
     - opencv-python>=4.8
     - supervision>=0.18
-    - inference>=0.9
-    - boxmot>=10.0
+    - inference-sdk>=0.13   # lightweight HTTP client; full `inference` server not needed
     - plotly>=5.18
     - PyQt5>=5.15
+    - PySide6>=6.6
     - kaleido>=0.2

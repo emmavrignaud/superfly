@@ -41,6 +41,7 @@ Builds two composite Plotly figures (interactive hover) and optionally writes:
 import base64
 import json
 import os
+import random
 from pathlib import Path
 
 import numpy as np
@@ -828,6 +829,108 @@ def _html_escape(text: str) -> str:
                 .replace(">", "&gt;"))
 
 
+def _image_data_uri(img_path: Path) -> str:
+    suffix = img_path.suffix.lower()
+    mime = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+    }.get(suffix, "application/octet-stream")
+    b64 = base64.b64encode(img_path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{b64}"
+
+
+def _html_scalar(value) -> str:
+    if value is None:
+        return '<span class="config-empty">null</span>'
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return _html_escape(str(value))
+
+
+def _config_type_label(value) -> str:
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return f"list[{len(value)}]"
+    if value is None:
+        return "null"
+    return type(value).__name__
+
+
+def _config_table_rows(value, depth=0, label=None) -> str:
+    rows = []
+    indent = 16 + depth * 18
+    label_html = _html_escape("" if label is None else str(label))
+
+    if isinstance(value, dict):
+        if label is not None:
+            rows.append(
+                f'<tr class="config-group-row"><td class="config-group" colspan="3" '
+                f'style="padding-left:{indent}px">{label_html}</td></tr>'
+            )
+        child_depth = depth + (1 if label is not None else 0)
+        for key, child in value.items():
+            rows.append(_config_table_rows(child, child_depth, key))
+        return "".join(rows)
+
+    if isinstance(value, list):
+        if value and any(isinstance(item, (dict, list)) for item in value):
+            rows.append(
+                f'<tr class="config-group-row"><td class="config-group" colspan="3" '
+                f'style="padding-left:{indent}px">{label_html}'
+                f'<span class="config-meta">{_config_type_label(value)}</span></td></tr>'
+            )
+            child_depth = depth + 1
+            child_indent = 16 + child_depth * 18
+            for idx, item in enumerate(value):
+                child_label = f"[{idx}]"
+                if isinstance(item, (dict, list)):
+                    rows.append(_config_table_rows(item, child_depth, child_label))
+                else:
+                    rows.append(
+                        "<tr>"
+                        f'<td class="config-key" style="padding-left:{child_indent}px">{_html_escape(child_label)}</td>'
+                        f'<td class="config-value">{_html_scalar(item)}</td>'
+                        f'<td class="config-type">{_config_type_label(item)}</td>'
+                        "</tr>"
+                    )
+            return "".join(rows)
+
+        scalar_items = ", ".join(_html_escape(str(item)) for item in value)
+        if not scalar_items:
+            scalar_items = '<span class="config-empty">empty</span>'
+        return (
+            "<tr>"
+            f'<td class="config-key" style="padding-left:{indent}px">{label_html}</td>'
+            f'<td class="config-value">{scalar_items}</td>'
+            f'<td class="config-type">{_config_type_label(value)}</td>'
+            "</tr>"
+        )
+
+    return (
+        "<tr>"
+        f'<td class="config-key" style="padding-left:{indent}px">{label_html}</td>'
+        f'<td class="config-value">{_html_scalar(value)}</td>'
+        f'<td class="config-type">{_config_type_label(value)}</td>'
+        "</tr>"
+    )
+
+
+def _config_table_html(config) -> str:
+    if config is None:
+        return ""
+    rows = _config_table_rows(config)
+    return (
+        '<details open><summary>Configuration</summary>'
+        '<table class="config-table">'
+        '<thead><tr><th>Section / Key</th><th>Value</th><th>Type</th></tr></thead>'
+        f"<tbody>{rows}</tbody></table></details>"
+    )
+
+
 def _dup_stats_html(dup_stats) -> str:
     if dup_stats is None:
         return "<p><em>Stitched output not provided — duplicate check skipped.</em></p>"
@@ -850,11 +953,38 @@ def _funny_image_html() -> str:
     img_path = Path(__file__).parent.parent / "data" / "media" / "ty4ids_flies.png"
     if not img_path.exists():
         return ""
-    b64 = base64.b64encode(img_path.read_bytes()).decode("ascii")
     return (
         '<hr><div style="text-align:center;margin-top:24px;">'
-        f'<img src="data:image/png;base64,{b64}" '
+        f'<img src="{_image_data_uri(img_path)}" '
         'style="max-width:480px;width:100%;height:auto;" alt="ty4ids flies"></div>'
+    )
+
+
+def _landing_page_image_html() -> str:
+    img_path = Path(__file__).parent.parent / "data" / "media" / "landing_page.png"
+    if not img_path.exists():
+        return ""
+    return (
+        '<div class="report-hero">'
+        f'<img src="{_image_data_uri(img_path)}" alt="Metrics report"></div>'
+    )
+
+
+def _random_funny_image_html() -> str:
+    funny_dir = Path(__file__).parent.parent / "data" / "media" / "funny"
+    if not funny_dir.exists():
+        return ""
+    candidates = [
+        path for path in funny_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+    ]
+    if not candidates:
+        return ""
+    img_path = random.choice(candidates)
+    alt = _html_escape(img_path.stem.replace("_", " "))
+    return (
+        '<div class="report-funny-image">'
+        f'<img src="{_image_data_uri(img_path)}" alt="{alt}"></div>'
     )
 
 
@@ -875,15 +1005,33 @@ _HTML_STYLE = """
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
          max-width: 1700px; margin: 2em auto; padding: 0 1em; color: #222; }
-  h1 { border-bottom: 2px solid #444; padding-bottom: 0.2em; }
   h2 { border-bottom: 1px solid #ccc; padding-bottom: 0.2em; margin-top: 2em; }
   pre { background: #f6f6f6; padding: 0.8em; border-radius: 4px; overflow-x: auto;
         font-size: 12px; line-height: 1.3; }
   details { margin: 0.8em 0; }
   summary { cursor: pointer; font-weight: 600; }
-  table { border-collapse: collapse; margin: 0.5em 0; }
+  table { border-collapse: collapse; margin: 0.5em 0; width: 100%; }
   th, td { border: 1px solid #ccc; padding: 4px 10px; font-size: 13px; text-align: left; }
   th { background: #eee; }
+  .report-hero { margin: 0 0 1.5em; }
+  .report-hero img { display: block; width: 100%; height: auto; border-radius: 8px; }
+  .report-two-col { width: 100%; border-collapse: collapse; table-layout: fixed; margin: 0.5em 0 1.5em; }
+  .report-two-col td, .report-two-col th { border: none; padding: 0; vertical-align: top; }
+  .report-two-col .report-left-col { width: 68%; padding-right: 24px; }
+  .report-two-col .report-right-col { width: 32%; }
+  .report-funny-image { width: 100%; padding-top: 2.3em; }
+  .report-funny-image img { display: block; width: 100%; height: auto; max-width: 420px; margin: 0 auto; }
+  .config-table { table-layout: fixed; }
+  .config-table th:nth-child(1) { width: 36%; }
+  .config-table th:nth-child(2) { width: 48%; }
+  .config-table th:nth-child(3) { width: 16%; }
+  .config-group-row td { background: #f4f6f8; font-weight: 600; border-top: 2px solid #d8dde3; }
+  .config-group { color: #1f2937; }
+  .config-key { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace; }
+  .config-value { word-break: break-word; }
+  .config-type { color: #5b6470; white-space: nowrap; }
+  .config-meta { margin-left: 8px; font-size: 12px; font-weight: 500; color: #5b6470; }
+  .config-empty { color: #7a7a7a; font-style: italic; }
 </style>
 """
 
@@ -917,19 +1065,18 @@ def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
     pipeline_div = fig_pipeline.to_html(include_plotlyjs=False, full_html=False,
                                         div_id="fig-pipeline")
 
-    config_block = (
-        f"<details open><summary>Configuration</summary>"
-        f"<pre>{_html_escape(json.dumps(config, indent=2, default=str))}</pre></details>"
-        if config is not None else ""
-    )
+    config_block = _config_table_html(config)
 
     html = f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Metrics Report</title>{_HTML_STYLE}</head>
 <body>
-<h1>Metrics Report</h1>
+{_landing_page_image_html()}
 
 {config_block}
 
+<table class="report-two-col" role="presentation">
+<tr>
+<td class="report-left-col">
 <h2>Summary</h2>
 <pre>{_html_escape(summary_text)}</pre>
 
@@ -938,6 +1085,12 @@ def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
 
 <h2>Stitching Quality Objectives</h2>
 {_objectives_html(objectives)}
+</td>
+<td class="report-right-col">
+{_random_funny_image_html()}
+</td>
+</tr>
+</table>
 
 <h2>XY Trajectories</h2>
 {xy_div}
