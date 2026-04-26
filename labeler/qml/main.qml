@@ -94,6 +94,23 @@ ApplicationWindow {
                 backend.toggle_playback()
                 event.accepted = true
                 break
+            case Qt.Key_T:
+                // Toggle Frame <-> Track Mode.
+                backend.toggle_track_mode()
+                event.accepted = true
+                break
+            case Qt.Key_Up:
+                if (backend.mode === "track") {
+                    backend.cycle_focused_track(-1)
+                    event.accepted = true
+                }
+                break
+            case Qt.Key_Down:
+                if (backend.mode === "track") {
+                    backend.cycle_focused_track(+1)
+                    event.accepted = true
+                }
+                break
             }
         }
     }
@@ -184,6 +201,18 @@ ApplicationWindow {
             anchors.leftMargin: 16
             anchors.verticalCenter: parent.verticalCenter
             spacing: 12
+
+            // Mode indicator (FRAME / TRACK #N).
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                color: backend.mode === "track" ? "#cba6f7" : "#a6adc8"
+                font.family: "JetBrains Mono, Consolas, Courier New"
+                font.pixelSize: 13
+                font.bold: true
+                text: backend.mode === "track"
+                      ? ("MODE: TRACK #" + backend.focusedTrackId)
+                      : "MODE: FRAME"
+            }
 
             // Tiny play/pause indicator (mauve when playing, dim when paused).
             Text {

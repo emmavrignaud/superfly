@@ -57,6 +57,8 @@ class LabelerBackend(QObject):
     autosavePulse = Signal()          # one-shot: fire on every successful autosave write
     displayFrameChanged = Signal()    # what frame the canvas should be showing changed
     isPlayingChanged = Signal()       # playback toggle
+    modeChanged = Signal()            # frame <-> track
+    focusedTrackChanged = Signal()    # which track is the Track Mode focus
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -89,6 +91,12 @@ class LabelerBackend(QObject):
         self._playback_frame: int = 0
         self._is_playing: bool = False
         self._playback_timer: Optional[QTimer] = None
+
+        # Track Mode state. mode ∈ {"frame", "track"}. In track mode, the
+        # canvas dims non-focused detections and overlays the focused track's
+        # trajectory; otherwise behaves like Frame Mode.
+        self._mode: str = "frame"
+        self._focused_track_id: int = -1
 
         # When a mutation happens, mark dirty.
         self.annotationsChanged.connect(self._mark_dirty)
@@ -204,6 +212,14 @@ class LabelerBackend(QObject):
     def isPlaying(self) -> bool:
         return self._is_playing
 
+    @Property(str, notify=modeChanged)
+    def mode(self) -> str:
+        return self._mode
+
+    @Property(int, notify=focusedTrackChanged)
+    def focusedTrackId(self) -> int:
+        return self._focused_track_id
+
     @Property(int, notify=frameChanged)
     def timelineStartFrame(self) -> int:
         """First frame in the ±1 s timeline window around currentFrame."""
@@ -300,6 +316,87 @@ class LabelerBackend(QObject):
             return
         self._playback_frame = nxt
         self.displayFrameChanged.emit()
+
+    # ── Track Mode ────────────────────────────────────────────────────────
+
+    @Slot()
+    def toggle_track_mode(self) -> None:
+        """Toggle Frame <-> Track Mode. Entering Track Mode focuses the first
+        available track if none is currently focused."""
+        if self._mode == "track":
+            self._set_mode("frame")
+            return
+        if self._focused_track_id <= 0:
+            tids = self._sorted_track_ids()
+            if not tids:
+                # Nothing to focus on — stay in frame mode.
+                self._set_status("no tracks yet — assign one first")
+                return
+            self._focused_track_id = tids[0]
+            self.focusedTrackChanged.emit()
+        self._set_mode("track")
+
+    @Slot(int)
+    def set_focused_track(self, track_id: int) -> None:
+        """Enter Track Mode focused on `track_id` (or stay in track mode and
+        switch focus). No-op if track_id <= 0 or doesn't exist."""
+        tid = int(track_id)
+        if tid <= 0:
+            return
+        if tid not in self._sorted_track_ids():
+            return
+        if tid != self._focused_track_id:
+            self._focused_track_id = tid
+            self.focusedTrackChanged.emit()
+        if self._mode != "track":
+            self._set_mode("track")
+
+    @Slot(int)
+    def cycle_focused_track(self, step: int) -> None:
+        """+1 = next track id; -1 = previous. Wraps. Track Mode only."""
+        if self._mode != "track":
+            return
+        tids = self._sorted_track_ids()
+        if not tids:
+            return
+        if self._focused_track_id in tids:
+            i = tids.index(self._focused_track_id)
+            new = tids[(i + int(step)) % len(tids)]
+        else:
+            new = tids[0]
+        if new != self._focused_track_id:
+            self._focused_track_id = new
+            self.focusedTrackChanged.emit()
+
+    @Slot(int, result=list)
+    def track_positions(self, track_id: int) -> list:
+        """Return [{frame, x, y}] for every annotated detection on this track,
+        sorted by frame. Used to draw the trajectory polyline."""
+        if self._store is None or int(track_id) <= 0:
+            return []
+        tid = int(track_id)
+        out = []
+        for (frame, det_idx), ann in self._store.all().items():
+            if ann.track_id != tid:
+                continue
+            try:
+                d = self._raw_by_frame[frame][det_idx]
+            except (KeyError, IndexError):
+                continue
+            out.append({"frame": frame, "x": d.x, "y": d.y})
+        out.sort(key=lambda r: r["frame"])
+        return out
+
+    def _set_mode(self, new_mode: str) -> None:
+        if new_mode == self._mode:
+            return
+        self._mode = new_mode
+        self.modeChanged.emit()
+
+    def _sorted_track_ids(self) -> list[int]:
+        if self._store is None:
+            return []
+        return sorted({a.track_id for a in self._store.all().values()})
 
     @Slot(int, result=list)
     def detections_for_frame(self, frame: int) -> list:

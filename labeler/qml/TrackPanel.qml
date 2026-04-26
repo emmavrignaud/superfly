@@ -60,8 +60,20 @@ Rectangle {
             delegate: Item {
                 width: ListView.view.width
                 height: 22
+                property bool isFocused: backend.mode === "track"
+                                         && modelData.track_id === backend.focusedTrackId
+
+                Rectangle {
+                    anchors.fill: parent
+                    color: parent.isFocused ? "#313244" : "transparent"
+                    border.color: parent.isFocused ? "#cba6f7" : "transparent"
+                    border.width: parent.isFocused ? 1 : 0
+                    radius: 3
+                }
+
                 Row {
                     anchors.fill: parent
+                    anchors.leftMargin: 4
                     spacing: 8
 
                     Rectangle {
@@ -85,6 +97,12 @@ Rectangle {
                         font.pixelSize: 11
                         anchors.verticalCenter: parent.verticalCenter
                     }
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: backend.set_focused_track(modelData.track_id)
                 }
             }
         }

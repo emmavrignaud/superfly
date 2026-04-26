@@ -6,6 +6,8 @@ Item {
 
     // detections list: array of dicts from backend.detections_for_frame()
     property var detections: []
+    // trajectory: array of {frame, x, y} for the focused track (Track Mode only)
+    property var trajectory: []
     property bool showBboxes: false
 
     // Pending track-id buffer typed by the user while a detection is selected.
@@ -33,6 +35,15 @@ Item {
 
     function refreshDetections() {
         root.detections = backend.detections_for_frame(backend.displayFrame)
+        overlay.requestPaint()
+    }
+
+    function refreshTrajectory() {
+        if (backend.mode === "track" && backend.focusedTrackId > 0) {
+            root.trajectory = backend.track_positions(backend.focusedTrackId)
+        } else {
+            root.trajectory = []
+        }
         overlay.requestPaint()
     }
 
@@ -90,6 +101,28 @@ Item {
             const tickInner = r * 1.3
             const tickOuter = r * 2.1
             const selIdx = backend.selectedDetIdx
+            const trackMode = backend.mode === "track"
+            const focusId = backend.focusedTrackId
+
+            // Trajectory polyline for focused track (drawn first, behind markers)
+            if (trackMode && root.trajectory.length > 1) {
+                ctx.lineWidth = 1.5
+                ctx.globalAlpha = 0.6
+                // Pull color from any detection that has the focused track,
+                // else fall back to mauve.
+                let trajColor = "#cba6f7"
+                for (let i = 0; i < dets.length; ++i) {
+                    if (dets[i].track_id === focusId) { trajColor = dets[i].color; break }
+                }
+                ctx.strokeStyle = trajColor
+                ctx.beginPath()
+                ctx.moveTo(root.trajectory[0].x * sx, root.trajectory[0].y * sx)
+                for (let i = 1; i < root.trajectory.length; ++i) {
+                    ctx.lineTo(root.trajectory[i].x * sx, root.trajectory[i].y * sx)
+                }
+                ctx.stroke()
+                ctx.globalAlpha = 1.0
+            }
 
             // Optional annotated-bbox layer (B toggle). Unannotated detections
             // get their own always-on red bbox below; this layer only adds
@@ -113,6 +146,9 @@ Item {
                 const cx = d.x * sx
                 const cy = d.y * sx
                 const isUnannotated = d.track_id < 0
+                // In Track Mode, dim everything that isn't the focused track.
+                // Unannotated red bboxes stay full-alpha (they're "needs attention").
+                ctx.globalAlpha = (trackMode && !isUnannotated && d.track_id !== focusId) ? 0.25 : 1.0
 
                 if (isUnannotated) {
                     // Distinct shape: solid red bbox + tiny hollow centroid dot.
@@ -157,17 +193,23 @@ Item {
                     ctx.lineWidth = 1.5
                 }
             }
+            ctx.globalAlpha = 1.0
         }
 
         Connections {
             target: backend
             // displayFrame fires for both static seeks and every playback tick.
             function onDisplayFrameChanged() { root.refreshDetections() }
-            function onAnnotationsChanged() { root.refreshDetections() }
+            function onAnnotationsChanged() {
+                root.refreshDetections()
+                root.refreshTrajectory()
+            }
             function onSelectionChanged() {
                 root.pendingInput = ""
                 overlay.requestPaint()
             }
+            function onModeChanged() { root.refreshTrajectory() }
+            function onFocusedTrackChanged() { root.refreshTrajectory() }
         }
 
         onWidthChanged: requestPaint()
