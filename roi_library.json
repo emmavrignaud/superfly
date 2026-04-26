@@ -341,5 +341,85 @@
         382
       ]
     }
+  },
+  "09.04.26 hFUS R495X 27DPE-converted": {
+    "preprocessing": {
+      "x": 170,
+      "y": 232,
+      "w": 550,
+      "h": 345,
+      "start": 0,
+      "end": 760
+    },
+    "video_path": "../generalisability_test\\09.04.26 hFUS R495X 27DPE-converted.mp4",
+    "vial_rois": {
+      "vial1": [
+        3,
+        4,
+        75,
+        344
+      ],
+      "vial2": [
+        119,
+        3,
+        191,
+        344
+      ],
+      "vial3": [
+        238,
+        2,
+        310,
+        344
+      ],
+      "vial4": [
+        357,
+        1,
+        429,
+        344
+      ],
+      "vial5": [
+        476,
+        0,
+        548,
+        344
+      ]
+    }
+  },
+  "2026-03-26_NEG-025_hTDP43-M337V_CTLa-2_EXP-2_CTLb-2-3_2026-03-19": {
+    "preprocessing": {
+      "x": 315,
+      "y": 235,
+      "w": 424,
+      "h": 342,
+      "start": 0,
+      "end": 669
+    },
+    "video_path": "../generalisability_test\\2026-03-26_NEG-025_hTDP43-M337V_CTLa-2_EXP-2_CTLb-2-3_2026-03-19.mp4",
+    "vial_rois": {
+      "vial1": [
+        2,
+        1,
+        72,
+        341
+      ],
+      "vial2": [
+        119,
+        4,
+        189,
+        341
+      ],
+      "vial3": [
+        233,
+        6,
+        308,
+        341
+      ],
+      "vial4": [
+        352,
+        6,
+        424,
+        341
+      ]
+    }
   }
 }

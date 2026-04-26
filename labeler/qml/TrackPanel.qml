@@ -23,12 +23,23 @@ Rectangle {
         anchors.margins: 10
         spacing: 8
 
-        Text {
-            text: "TRACKS"
-            color: "#a6adc8"
-            font.family: "Segoe UI, sans-serif"
-            font.pixelSize: 11
-            font.bold: true
+        Row {
+            spacing: 8
+            Text {
+                text: "TRACKS"
+                color: "#a6adc8"
+                font.family: "Segoe UI, sans-serif"
+                font.pixelSize: 11
+                font.bold: true
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            Text {
+                text: "next free: " + backend.nextFreeTrackId
+                color: "#a6e3a1"
+                font.family: "JetBrains Mono, Consolas, Courier New"
+                font.pixelSize: 10
+                anchors.verticalCenter: parent.verticalCenter
+            }
         }
 
         Text {

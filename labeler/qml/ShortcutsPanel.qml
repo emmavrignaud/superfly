@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 
 Rectangle {
     id: root
@@ -24,62 +25,91 @@ Rectangle {
         ["Del",         "clear annotation"],
         ["Ctrl+Z",      "undo"],
         ["",            "VIEW"],
-        ["B",           "toggle bboxes"]
+        ["Space",       "play/pause ±1s loop"],
+        ["B",           "toggle bboxes"],
+        ["",            "FILE"],
+        ["Ctrl+S",      "save session"],
+        ["Ctrl+E",      "export GT csv"]
     ]
 
-    Column {
-        anchors.fill: parent
-        anchors.margins: 10
-        spacing: 2
+    // Header is pinned to the top so users always see "SHORTCUTS" even after
+    // scrolling. The list itself is what scrolls.
+    Text {
+        id: header
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.topMargin: 10
+        anchors.leftMargin: 10
+        text: "SHORTCUTS"
+        color: "#a6adc8"
+        font.family: "Segoe UI, sans-serif"
+        font.pixelSize: 11
+        font.bold: true
+    }
 
-        Text {
-            text: "SHORTCUTS"
-            color: "#a6adc8"
-            font.family: "Segoe UI, sans-serif"
-            font.pixelSize: 11
-            font.bold: true
-            bottomPadding: 4
-        }
+    ScrollView {
+        id: scroller
+        anchors.top: header.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.topMargin: 6
+        anchors.leftMargin: 10
+        anchors.rightMargin: 10
+        anchors.bottomMargin: 10
+        clip: true
 
-        Repeater {
-            model: root.rows
-            delegate: Item {
-                width: parent.width
-                height: isHeader ? 18 : 16
+        // Wheel-scrolling still works; bars are hidden for a cleaner look.
+        ScrollBar.vertical.policy: ScrollBar.AlwaysOff
+        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
-                property bool isHeader: modelData[0] === ""
+        contentWidth: availableWidth
 
-                Text {
-                    visible: parent.isHeader
-                    anchors.left: parent.left
-                    anchors.bottom: parent.bottom
-                    text: modelData[1]
-                    color: "#cba6f7"
-                    font.family: "Segoe UI, sans-serif"
-                    font.pixelSize: 10
-                    font.bold: true
-                }
-                Text {
-                    visible: !parent.isHeader
-                    anchors.left: parent.left
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: 78
-                    text: modelData[0]
-                    color: "#cdd6f4"
-                    font.family: "JetBrains Mono, Consolas, Courier New"
-                    font.pixelSize: 11
-                }
-                Text {
-                    visible: !parent.isHeader
-                    anchors.left: parent.left
-                    anchors.leftMargin: 80
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: modelData[1]
-                    color: "#a6adc8"
-                    font.family: "Segoe UI, sans-serif"
-                    font.pixelSize: 11
-                    elide: Text.ElideRight
+        Column {
+            width: scroller.availableWidth
+            spacing: 2
+
+            Repeater {
+                model: root.rows
+                delegate: Item {
+                    width: parent.width
+                    height: isHeader ? 20 : 16
+
+                    property bool isHeader: modelData[0] === ""
+
+                    Text {
+                        visible: parent.isHeader
+                        anchors.left: parent.left
+                        anchors.bottom: parent.bottom
+                        text: modelData[1]
+                        color: "#cba6f7"
+                        font.family: "Segoe UI, sans-serif"
+                        font.pixelSize: 10
+                        font.bold: true
+                    }
+                    Text {
+                        visible: !parent.isHeader
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 86
+                        text: modelData[0]
+                        color: "#cdd6f4"
+                        font.family: "JetBrains Mono, Consolas, Courier New"
+                        font.pixelSize: 11
+                    }
+                    Text {
+                        visible: !parent.isHeader
+                        anchors.left: parent.left
+                        anchors.leftMargin: 88
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: modelData[1]
+                        color: "#a6adc8"
+                        font.family: "Segoe UI, sans-serif"
+                        font.pixelSize: 11
+                        elide: Text.ElideRight
+                    }
                 }
             }
         }

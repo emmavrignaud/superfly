@@ -32,7 +32,7 @@ Item {
     }
 
     function refreshDetections() {
-        root.detections = backend.detections_for_frame(backend.currentFrame)
+        root.detections = backend.detections_for_frame(backend.displayFrame)
         overlay.requestPaint()
     }
 
@@ -48,7 +48,7 @@ Item {
         anchors.centerIn: parent
         width:  root.videoDrawW
         height: root.videoDrawH
-        source: "image://videoframes/" + backend.currentFrame + "?v=" + backend.frameTick
+        source: "image://videoframes/" + backend.displayFrame + "?v=" + backend.frameTick
         cache: false
         fillMode: Image.Stretch
         smooth: true
@@ -84,7 +84,6 @@ Item {
         onPaint: {
             const ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
-            ctx.lineWidth = 1.5
 
             const dets = root.detections
             const r = 7
@@ -92,18 +91,20 @@ Item {
             const tickOuter = r * 2.1
             const selIdx = backend.selectedDetIdx
 
-            // Optional bbox layer (drawn first, behind markers)
+            // Optional annotated-bbox layer (B toggle). Unannotated detections
+            // get their own always-on red bbox below; this layer only adds
+            // bboxes for the annotated ones.
             if (root.showBboxes) {
                 ctx.lineWidth = 1.0
                 for (let i = 0; i < dets.length; ++i) {
                     const d = dets[i]
+                    if (d.track_id < 0) continue
                     ctx.strokeStyle = d.color
                     ctx.globalAlpha = 0.35
                     ctx.strokeRect(d.x1 * sx, d.y1 * sx,
                                    (d.x2 - d.x1) * sx, (d.y2 - d.y1) * sx)
                 }
                 ctx.globalAlpha = 1.0
-                ctx.lineWidth = 1.5
             }
 
             // Markers
@@ -111,25 +112,42 @@ Item {
                 const d = dets[i]
                 const cx = d.x * sx
                 const cy = d.y * sx
-                ctx.strokeStyle = d.color
-                ctx.fillStyle = d.color
+                const isUnannotated = d.track_id < 0
 
-                ctx.beginPath()
-                ctx.moveTo(cx + tickInner * 0.707, cy - tickInner * 0.707)
-                ctx.lineTo(cx + tickOuter * 0.707, cy - tickOuter * 0.707)
-                ctx.moveTo(cx - tickInner * 0.707, cy - tickInner * 0.707)
-                ctx.lineTo(cx - tickOuter * 0.707, cy - tickOuter * 0.707)
-                ctx.moveTo(cx + tickInner * 0.707, cy + tickInner * 0.707)
-                ctx.lineTo(cx + tickOuter * 0.707, cy + tickOuter * 0.707)
-                ctx.moveTo(cx - tickInner * 0.707, cy + tickInner * 0.707)
-                ctx.lineTo(cx - tickOuter * 0.707, cy + tickOuter * 0.707)
-                ctx.stroke()
+                if (isUnannotated) {
+                    // Distinct shape: solid red bbox + tiny hollow centroid dot.
+                    // No crosshair ticks — these visually scream "needs a label".
+                    ctx.strokeStyle = d.color   // red
+                    ctx.fillStyle = d.color
+                    ctx.lineWidth = 2.0
+                    ctx.strokeRect(d.x1 * sx, d.y1 * sx,
+                                   (d.x2 - d.x1) * sx, (d.y2 - d.y1) * sx)
+                    ctx.lineWidth = 1.5
+                    ctx.beginPath()
+                    ctx.arc(cx, cy, 3, 0, 2 * Math.PI)
+                    ctx.stroke()
+                } else {
+                    // Annotated: 4 diagonal ticks + central circle (filled if human).
+                    ctx.strokeStyle = d.color
+                    ctx.fillStyle = d.color
+                    ctx.lineWidth = 1.5
+                    ctx.beginPath()
+                    ctx.moveTo(cx + tickInner * 0.707, cy - tickInner * 0.707)
+                    ctx.lineTo(cx + tickOuter * 0.707, cy - tickOuter * 0.707)
+                    ctx.moveTo(cx - tickInner * 0.707, cy - tickInner * 0.707)
+                    ctx.lineTo(cx - tickOuter * 0.707, cy - tickOuter * 0.707)
+                    ctx.moveTo(cx + tickInner * 0.707, cy + tickInner * 0.707)
+                    ctx.lineTo(cx + tickOuter * 0.707, cy + tickOuter * 0.707)
+                    ctx.moveTo(cx - tickInner * 0.707, cy + tickInner * 0.707)
+                    ctx.lineTo(cx - tickOuter * 0.707, cy + tickOuter * 0.707)
+                    ctx.stroke()
 
-                ctx.beginPath()
-                ctx.arc(cx, cy, r, 0, 2 * Math.PI)
-                if (d.filled) ctx.fill(); else ctx.stroke()
+                    ctx.beginPath()
+                    ctx.arc(cx, cy, r, 0, 2 * Math.PI)
+                    if (d.filled) ctx.fill(); else ctx.stroke()
+                }
 
-                // Selection ring (white, 2px) on top
+                // Selection ring (white, 2px) on top of either shape.
                 if (d.det_idx === selIdx) {
                     ctx.strokeStyle = "#ffffff"
                     ctx.lineWidth = 2.0
@@ -143,7 +161,8 @@ Item {
 
         Connections {
             target: backend
-            function onFrameChanged(f) { root.refreshDetections() }
+            // displayFrame fires for both static seeks and every playback tick.
+            function onDisplayFrameChanged() { root.refreshDetections() }
             function onAnnotationsChanged() { root.refreshDetections() }
             function onSelectionChanged() {
                 root.pendingInput = ""
@@ -168,14 +187,25 @@ Item {
         id: inputBubble
         visible: backend.selectedDetIdx >= 0
         color: "#313244"
-        border.color: "#cba6f7"
+        border.color: wouldDuplicate ? "#ef4444" : "#cba6f7"
         border.width: 1
         radius: 4
-        width: bubbleText.implicitWidth + 16
-        height: bubbleText.implicitHeight + 10
+        width: Math.max(bubbleText.implicitWidth, warnText.visible ? warnText.implicitWidth : 0) + 16
+        height: bubbleText.implicitHeight + (warnText.visible ? warnText.implicitHeight + 4 : 0) + 10
 
-        // Position above the selected detection's centroid, clamped to canvas.
         property var sel: root.selectedDet()
+
+        // True when the ID currently typed would put the same track on two
+        // different detections in the current frame. Recomputes on every
+        // pendingInput change because of the binding.
+        readonly property bool wouldDuplicate: {
+            const buf = root.pendingInput
+            if (buf.length === 0) return false
+            const tid = parseInt(buf, 10)
+            if (isNaN(tid) || tid <= 0) return false
+            return backend.would_duplicate_in_current_frame(tid)
+        }
+
         x: {
             if (!sel) return 0
             const cx = videoImg.x + sel.x * root.fitScale
@@ -185,23 +215,39 @@ Item {
         y: {
             if (!sel) return 0
             const cy = videoImg.y + sel.y * root.fitScale
-            // 18px above the marker; flip below if too high
             const desired = cy - 18 - height
             return desired < videoImg.y ? cy + 18 : desired
         }
 
-        Text {
-            id: bubbleText
+        Column {
             anchors.centerIn: parent
-            color: "#cdd6f4"
-            font.family: "JetBrains Mono, Consolas, Courier New"
-            font.pixelSize: 12
-            text: {
-                const sel = inputBubble.sel
-                if (!sel) return ""
-                const cur = sel.track_id > 0 ? ("→" + sel.track_id) : "(unset)"
-                const buf = root.pendingInput.length > 0 ? root.pendingInput : "_"
-                return "ID " + buf + "   " + cur
+            spacing: 2
+
+            Text {
+                id: bubbleText
+                anchors.horizontalCenter: parent.horizontalCenter
+                color: "#cdd6f4"
+                font.family: "JetBrains Mono, Consolas, Courier New"
+                font.pixelSize: 12
+                text: {
+                    const sel = inputBubble.sel
+                    if (!sel) return ""
+                    const cur = sel.track_id > 0 ? ("->" + sel.track_id) : "(unset)"
+                    if (root.pendingInput.length === 0) {
+                        return "ID _   " + cur + "   next free: " + backend.nextFreeTrackId
+                    }
+                    return "ID " + root.pendingInput + "   " + cur
+                }
+            }
+
+            Text {
+                id: warnText
+                anchors.horizontalCenter: parent.horizontalCenter
+                visible: inputBubble.wouldDuplicate
+                color: "#ef4444"
+                font.family: "JetBrains Mono, Consolas, Courier New"
+                font.pixelSize: 11
+                text: "! same fly cannot be in two places at the same time"
             }
         }
     }

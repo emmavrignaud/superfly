@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 import cv2
-from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
 from .color_engine import track_color_hex
 from .data_model import (
@@ -22,10 +22,25 @@ from .data_model import (
     load_raw_detections,
     match_ocsort_to_raw,
 )
+from .session import (
+    annotations_from_payload,
+    load_session,
+    save_session,
+)
+from .assets import (
+    update_metadata_counts,
+    write_export_summary,
+)
 
 
-# Subtle grey for unannotated detections (Catppuccin Mocha overlay0).
-UNANNOTATED_COLOR = "#6c7086"
+# Auto-save runs this often, but only writes if there's been a mutation since
+# the last save. 60 s matches the roadmap.
+AUTOSAVE_INTERVAL_MS = 60_000
+
+
+# True red for unannotated detections (off-palette — Catppuccin Mocha's
+# "red" #f38ba8 is actually salmon-pink, too soft for a "needs attention" cue).
+UNANNOTATED_COLOR = "#ef4444"
 
 
 class LabelerBackend(QObject):
@@ -38,13 +53,26 @@ class LabelerBackend(QObject):
     selectionChanged = Signal()       # selected_det_idx changed
     annotationsChanged = Signal()     # any mutation to the store
     tracksChanged = Signal()          # set of track_ids changed (subset of annotationsChanged)
+    statusChanged = Signal()          # last save / export / autosave status text changed
+    autosavePulse = Signal()          # one-shot: fire on every successful autosave write
+    displayFrameChanged = Signal()    # what frame the canvas should be showing changed
+    isPlayingChanged = Signal()       # playback toggle
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._video_path: str = ""
+        self._raw_csv: str = ""
+        self._ocsort_csv: Optional[str] = None
+        self._session_path: str = ""
+        self._autosave_path: str = ""
+        self._export_path: str = ""
+        self._out_dir: str = ""
+        self._summary_path: str = ""
+
         self._frame_count: int = 0
         self._video_w: int = 0
         self._video_h: int = 0
+        self._fps: float = 0.0
         self._current_frame: int = 0
         self._frame_tick: int = 0  # bumped on every seek to invalidate QML image cache
         self._selected_det_idx: int = -1   # -1 means nothing selected
@@ -52,18 +80,52 @@ class LabelerBackend(QObject):
         self._raw_by_frame: dict[int, list[Detection]] = {}
         self._store: Optional[AnnotationStore] = None
 
+        self._dirty: bool = False        # has the store been mutated since last save?
+        self._status_text: str = ""      # shown in HUD; updated by save/export/autosave
+        self._autosave_timer: Optional[QTimer] = None
+
+        # Playback state — one canvas, one-shot forward play from currentFrame
+        # to (currentFrame + 1s), then snap back. Static otherwise.
+        self._playback_frame: int = 0
+        self._is_playing: bool = False
+        self._playback_timer: Optional[QTimer] = None
+
+        # When a mutation happens, mark dirty.
+        self.annotationsChanged.connect(self._mark_dirty)
+
     # ── loading (called from main.py before the QML engine starts) ────────
 
-    def load(self, video_path: str, raw_csv: str, ocsort_csv: Optional[str] = None) -> None:
+    def load(
+        self,
+        video_path: str,
+        raw_csv: str,
+        ocsort_csv: Optional[str] = None,
+        *,
+        session_path: str = "",
+        autosave_path: str = "",
+        export_path: str = "",
+        resume_from: str = "",
+        out_dir: str = "",
+        summary_path: str = "",
+    ) -> None:
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise RuntimeError(f"cannot open video: {video_path}")
         self._frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self._video_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self._video_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps_raw = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        self._fps = fps_raw if fps_raw > 1.0 else 30.0  # fallback for codecs that lie
         cap.release()
 
         self._video_path = str(Path(video_path).as_posix())
+        self._raw_csv = str(Path(raw_csv).as_posix())
+        self._ocsort_csv = str(Path(ocsort_csv).as_posix()) if ocsort_csv else None
+        self._session_path = session_path
+        self._autosave_path = autosave_path
+        self._export_path = export_path
+        self._out_dir = out_dir
+        self._summary_path = summary_path
 
         self._raw_by_frame = load_raw_detections(raw_csv)
 
@@ -71,7 +133,21 @@ class LabelerBackend(QObject):
         if ocsort_csv:
             ocs = load_ocsort_wide(ocsort_csv)
             seed = match_ocsort_to_raw(self._raw_by_frame, ocs)
+
+        # If resuming from a session file, that takes precedence over OC-SORT seed.
+        if resume_from:
+            payload = load_session(resume_from)
+            seed = annotations_from_payload(payload)
+            self._current_frame = int(payload.get("current_frame", 0))
+
         self._store = AnnotationStore(self._raw_by_frame, seed=seed)
+        self._dirty = False
+
+        if self._autosave_path:
+            self._autosave_timer = QTimer(self)
+            self._autosave_timer.setInterval(AUTOSAVE_INTERVAL_MS)
+            self._autosave_timer.timeout.connect(self._autosave_tick)
+            self._autosave_timer.start()
 
         # Notify QML once everything is loaded
         self.frameCountChanged.emit()
@@ -110,6 +186,51 @@ class LabelerBackend(QObject):
     def selectedDetIdx(self) -> int:
         return self._selected_det_idx
 
+    @Property(str, notify=statusChanged)
+    def statusText(self) -> str:
+        return self._status_text
+
+    @Property(float, notify=videoSizeChanged)
+    def fps(self) -> float:
+        return self._fps
+
+    @Property(int, notify=displayFrameChanged)
+    def displayFrame(self) -> int:
+        """Frame the canvas should currently render — playback frame if
+        looping, otherwise the static currentFrame."""
+        return self._playback_frame if self._is_playing else self._current_frame
+
+    @Property(bool, notify=isPlayingChanged)
+    def isPlaying(self) -> bool:
+        return self._is_playing
+
+    @Property(int, notify=frameChanged)
+    def timelineStartFrame(self) -> int:
+        """First frame in the ±1 s timeline window around currentFrame."""
+        if self._frame_count == 0:
+            return 0
+        span = max(1, int(round(self._fps)))
+        return max(0, self._current_frame - span)
+
+    @Property(int, notify=frameChanged)
+    def timelineEndFrame(self) -> int:
+        """Last frame (inclusive) in the ±1 s timeline window."""
+        if self._frame_count == 0:
+            return 0
+        span = max(1, int(round(self._fps)))
+        return min(self._frame_count - 1, self._current_frame + span)
+
+    @Property(int, notify=tracksChanged)
+    def nextFreeTrackId(self) -> int:
+        """Smallest positive integer not currently assigned to any annotation."""
+        if self._store is None:
+            return 1
+        used = {a.track_id for a in self._store.all().values()}
+        n = 1
+        while n in used:
+            n += 1
+        return n
+
     # ── slots (QML calls these) ────────────────────────────────────────────
 
     @Slot(int)
@@ -120,6 +241,7 @@ class LabelerBackend(QObject):
         if target == self._current_frame:
             return
         self._current_frame = target
+        self._playback_frame = target
         self._frame_tick += 1
         # selection is per-frame; clear on navigate
         if self._selected_det_idx != -1:
@@ -127,6 +249,57 @@ class LabelerBackend(QObject):
             self.selectionChanged.emit()
         self.frameTickChanged.emit()
         self.frameChanged.emit(target)
+        self.displayFrameChanged.emit()
+
+    # ── playback (one canvas, ±1s loop) ────────────────────────────────────
+
+    @Slot()
+    def toggle_playback(self) -> None:
+        if self._is_playing:
+            self.pause_playback()
+        else:
+            self.play_playback()
+
+    @Slot()
+    def play_playback(self) -> None:
+        if self._is_playing or self._frame_count == 0:
+            return
+        # Play the full ±1s window: start 1s before currentFrame, walk through
+        # to 1s after, then snap back. Single pass — no looping.
+        self._playback_frame = self.timelineStartFrame
+        self._is_playing = True
+        if self._playback_timer is None:
+            self._playback_timer = QTimer(self)
+            self._playback_timer.timeout.connect(self._playback_tick)
+        interval_ms = max(16, int(round(1000.0 / max(1.0, self._fps))))
+        self._playback_timer.setInterval(interval_ms)
+        self._playback_timer.start()
+        self.isPlayingChanged.emit()
+        self.displayFrameChanged.emit()
+
+    @Slot()
+    def pause_playback(self) -> None:
+        if not self._is_playing:
+            return
+        if self._playback_timer is not None:
+            self._playback_timer.stop()
+        self._is_playing = False
+        # displayFrame falls back to currentFrame automatically via the
+        # property; just notify QML.
+        self.isPlayingChanged.emit()
+        self.displayFrameChanged.emit()
+
+    def _playback_tick(self) -> None:
+        if not self._is_playing:
+            return
+        end = self.timelineEndFrame
+        nxt = self._playback_frame + 1
+        if nxt > end:
+            # Reached end of window: snap back to anchor and stop. No loop.
+            self.pause_playback()
+            return
+        self._playback_frame = nxt
+        self.displayFrameChanged.emit()
 
     @Slot(int, result=list)
     def detections_for_frame(self, frame: int) -> list:
@@ -170,12 +343,15 @@ class LabelerBackend(QObject):
     @Slot(float, float, result=int)
     def hit_test_bbox(self, x_video: float, y_video: float) -> int:
         """Return det_idx of the detection whose bbox contains (x, y) in
-        video-pixel space, or -1 if no bbox contains the point.
+        video-pixel space (in the *currently displayed* frame), or -1 if no
+        bbox contains the point.
 
         On overlap, the bbox with the smallest area wins (more specific
         match). Ties broken by closeness of click to bbox centroid.
         """
-        dets = self._raw_by_frame.get(self._current_frame, [])
+        # Hit-test against whichever frame is on screen (playback or static).
+        frame = self._playback_frame if self._is_playing else self._current_frame
+        dets = self._raw_by_frame.get(frame, [])
         best: Optional[tuple[float, float, int]] = None  # (area, centroid_dist, det_idx)
         for d in dets:
             if not (d.x1 <= x_video <= d.x2 and d.y1 <= y_video <= d.y2):
@@ -189,9 +365,21 @@ class LabelerBackend(QObject):
 
     @Slot(int)
     def select(self, det_idx: int) -> None:
+        # If a click lands on a fly during playback, pause and anchor the
+        # annotation context to the frame the user was actually looking at.
+        if self._is_playing and det_idx != -1:
+            anchor = self._playback_frame
+            self.pause_playback()
+            if anchor != self._current_frame:
+                self._current_frame = anchor
+                self._frame_tick += 1
+                self.frameTickChanged.emit()
+                self.frameChanged.emit(anchor)
+                self.displayFrameChanged.emit()
+
         if det_idx == self._selected_det_idx:
             return
-        # validate -1 or a real det_idx in current frame
+        # validate -1 or a real det_idx in the active (current/display) frame
         if det_idx != -1:
             dets = self._raw_by_frame.get(self._current_frame, [])
             if not any(d.det_idx == det_idx for d in dets):
@@ -264,6 +452,21 @@ class LabelerBackend(QObject):
 
     # ── track-panel data ───────────────────────────────────────────────────
 
+    @Slot(int, result=bool)
+    def would_duplicate_in_current_frame(self, track_id: int) -> bool:
+        """True if assigning `track_id` to the selected detection would put
+        the same ID on two different detections in the current frame.
+
+        Used by the typing bubble to warn the user, not to block the assign.
+        """
+        if self._store is None or self._selected_det_idx == -1 or int(track_id) <= 0:
+            return False
+        tid = int(track_id)
+        for (frame, det_idx), ann in self._store.all().items():
+            if frame == self._current_frame and det_idx != self._selected_det_idx and ann.track_id == tid:
+                return True
+        return False
+
     @Slot(result=list)
     def track_summary(self) -> list:
         """Return [{track_id, color, count, human_count}] for the right-side
@@ -287,3 +490,104 @@ class LabelerBackend(QObject):
                 "human_count": human,
             })
         return out
+
+    # ── save / export / autosave ───────────────────────────────────────────
+
+    def _set_status(self, text: str) -> None:
+        self._status_text = text
+        self.statusChanged.emit()
+
+    def _mark_dirty(self) -> None:
+        self._dirty = True
+
+    def _do_save(self, path: str) -> None:
+        if self._store is None or not path:
+            return
+        save_session(
+            path,
+            video_path=self._video_path,
+            raw_csv=self._raw_csv,
+            ocsort_csv=self._ocsort_csv,
+            current_frame=self._current_frame,
+            current_mode="frame",
+            store=self._store,
+        )
+
+    @Slot()
+    def save(self) -> None:
+        if not self._session_path:
+            self._set_status("save: no session path configured")
+            return
+        try:
+            self._do_save(self._session_path)
+        except Exception as e:
+            self._set_status(f"save failed: {e}")
+            return
+        self._dirty = False
+        self._update_metadata(saved=True)
+        self._set_status(f"saved -> {Path(self._session_path).name}")
+
+    @Slot()
+    def export_csv(self) -> None:
+        if self._store is None or not self._export_path:
+            self._set_status("export: no export path configured")
+            return
+        try:
+            n = self._store.export_long_csv(self._export_path)
+        except Exception as e:
+            self._set_status(f"export failed: {e}")
+            return
+
+        # Companion QC summary next to the CSV.
+        if self._summary_path:
+            try:
+                write_export_summary(
+                    Path(self._summary_path),
+                    annotations=self._store.all(),
+                    raw_by_frame=self._raw_by_frame,
+                    video_props={
+                        "frame_count": self._frame_count,
+                        "width": self._video_w,
+                        "height": self._video_h,
+                    },
+                    export_csv_name=Path(self._export_path).name,
+                )
+            except Exception as e:
+                # Don't fail the whole export over a summary glitch.
+                self._set_status(f"exported {n} rows (summary failed: {e})")
+                return
+
+        self._update_metadata(exported=True)
+        self._set_status(f"exported {n} rows -> {Path(self._export_path).name}")
+
+    def _autosave_tick(self) -> None:
+        if not self._dirty or not self._autosave_path:
+            return
+        try:
+            self._do_save(self._autosave_path)
+        except Exception as e:
+            self._set_status(f"autosave failed: {e}")
+            return
+        self._dirty = False
+        self._update_metadata(saved=True)
+        self._set_status(f"autosaved {_short_time()}")
+        self.autosavePulse.emit()
+
+    def _update_metadata(self, *, saved: bool = False, exported: bool = False) -> None:
+        if not self._out_dir or self._store is None:
+            return
+        anns = self._store.all()
+        total = len(anns)
+        human = sum(1 for a in anns.values() if a.source == SOURCE_HUMAN)
+        ocsort = total - human
+        tracks = len({a.track_id for a in anns.values()})
+        update_metadata_counts(
+            Path(self._out_dir),
+            total=total, human=human, ocsort=ocsort, tracks=tracks,
+            saved=saved, exported=exported,
+        )
+
+
+def _short_time() -> str:
+    from datetime import datetime
+    return datetime.now().strftime("%H:%M:%S")
