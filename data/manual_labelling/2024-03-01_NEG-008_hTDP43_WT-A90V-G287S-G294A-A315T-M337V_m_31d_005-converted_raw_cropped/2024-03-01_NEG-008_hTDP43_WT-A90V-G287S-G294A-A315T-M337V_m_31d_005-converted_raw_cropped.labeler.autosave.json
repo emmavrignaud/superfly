@@ -1,0 +1,384 @@
+{
+  "version": 2,
+  "video_path": "r../../outputs/run_88_31DPE_n005/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4",
+  "raw_csv": "r../../outputs/run_88_31DPE_n005/detections_raw.csv",
+  "ocsort_csv": "r../../outputs/run_88_31DPE_n005/compact_tracks.csv",
+  "current_frame": 149,
+  "current_mode": "frame",
+  "annotations": {
+    "0:0": {
+      "track_id": 1,
+      "source": "human"
+    },
+    "1:1": {
+      "track_id": 2,
+      "source": "human"
+    },
+    "53:1": {
+      "track_id": 3,
+      "source": "human"
+    },
+    "55:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "56:22": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "57:23": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "58:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "59:22": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "60:22": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "61:23": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "62:24": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "63:25": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "64:23": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "65:23": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "66:23": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "67:22": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "68:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "69:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "70:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "71:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "72:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "73:22": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "74:22": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "75:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "76:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "77:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "78:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "79:22": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "80:22": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "81:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "82:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "83:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "84:22": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "85:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "86:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "87:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "88:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "89:23": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "90:23": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "91:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "92:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "93:22": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "94:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "95:22": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "96:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "97:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "98:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "99:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "100:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "101:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "102:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "103:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "104:21": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "105:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "106:17": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "107:18": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "108:17": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "109:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "110:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "111:17": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "112:18": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "113:18": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "114:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "115:18": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "116:18": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "117:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "118:18": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "119:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "120:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "121:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "122:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "123:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "124:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "125:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "126:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "127:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "128:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "129:20": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "130:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "131:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "132:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "133:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "134:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "135:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "136:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "137:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "138:19": {
+      "track_id": 6,
+      "source": "human"
+    },
+    "139:22": {
+      "track_id": 20,
+      "source": "human"
+    }
+  },
+  "synthetic_detections": [
+    {
+      "frame": 47,
+      "det_idx": -3,
+      "x": 9.899592944369063,
+      "y": 400.43853459972865,
+      "x1": 6.899592944369063,
+      "y1": 397.3305328907443,
+      "x2": 12.899592944369063,
+      "y2": 403.54653630871303
+    },
+    {
+      "frame": 52,
+      "det_idx": -2,
+      "x": 9.404613297150613,
+      "y": 401.923473541384,
+      "x1": 6.404613297150613,
+      "y1": 398.81547183239957,
+      "x2": 12.404613297150613,
+      "y2": 405.03147525036843
+    }
+  ]
+}

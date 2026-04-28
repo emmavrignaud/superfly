@@ -8,6 +8,7 @@ Plots: cross-validation accuracy, feature importance, per-genotype boxes,
        WT-vs-mutant comparison with Cliff's delta.
 """
 
+import json
 import os
 import numpy as np
 import pandas as pd
@@ -29,20 +30,30 @@ from sklearn.svm import SVC
 # Genotype mapping
 # ---------------------------------------------------------------------------
 
-def map_vial_to_genotype(df_path: str) -> pd.DataFrame:
+def map_vial_to_genotype(run_dir: str) -> pd.DataFrame:
     """
-    Parse genotypes from the filename and add a "genotype" column.
+    Load compact_tracks.csv from a run directory and add a "genotype" column.
 
-    Expected filename format: <date>_<something>_hTDP43_<GT1>-<GT2>-..._<rest>.csv
+    The source video filename is read from run_params.json (config.video).
+    Expected filename format: <date>_<something>_hTDP43_<GT1>-<GT2>-..._<rest>.mp4
     """
-    filename = os.path.basename(df_path)
-    parts = filename.split("_")
-    assert parts[2] == "hTDP43", "Unexpected filename format"
+    params_path = os.path.join(run_dir, "run_params.json")
+    with open(params_path, "r") as f:
+        params = json.load(f)
+
+    video_path = params["config"]["video"]
+    # Handle both forward and backward slashes from Windows-recorded paths
+    video_name = os.path.basename(video_path.replace("\\", "/"))
+    parts = video_name.split("_")
+    assert len(parts) > 3 and parts[2] == "hTDP43", (
+        f"Unexpected video filename format: {video_name}"
+    )
 
     genotypes = parts[3].split("-")
     vial_to_genotype = {f"vial{i + 1}": genotypes[i] for i in range(len(genotypes))}
 
-    df = pd.read_csv(df_path)
+    csv_path = os.path.join(run_dir, "compact_tracks.csv")
+    df = pd.read_csv(csv_path)
     df["genotype"] = df["vial_id"].map(vial_to_genotype)
     return df
 

@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-04-27T09:37:11",
+  "last_opened_at": "2026-04-27T09:37:11",
+  "last_saved_at": "2026-04-27T09:41:12",
+  "last_exported_at": null,
+  "labeler_git_commit": "15b68f30e3ea08a9e0ff4fc9f3de1ffe24140e73",
+  "sources": {
+    "video": "outputs/run_82_41DPE_n006/2024-03-11_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_41d_006-converted_raw_cropped.mp4",
+    "raw_detections_csv": "outputs/run_82_41DPE_n006/detections_raw.csv",
+    "ocsort_wide_csv": "outputs/run_82_41DPE_n006/tracks_wide_format.csv",
+    "overlay_video": null
+  },
+  "video": {
+    "frame_count": 578,
+    "fps": 29.923,
+    "width": 742,
+    "height": 392
+  },
+  "copy_actions": {
+    "copied": [
+      "2024-03-11_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_41d_006-converted_raw_cropped.mp4",
+      "detections_raw.csv"
+    ],
+    "skipped": [],
+    "wrote": [
+      "tracks_long.csv"
+    ]
+  },
+  "annotation_counts": {
+    "total": 10517,
+    "human": 12,
+    "ocsort": 10505,
+    "tracks": 29
+  }
+}

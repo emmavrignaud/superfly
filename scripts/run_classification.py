@@ -2,11 +2,11 @@
 """
 scripts/run_classification.py
 
-CLI: compact_tracks.csv -> classifier results + Plotly figures.
+CLI: outputs/<run_dir> -> classifier results + Plotly figures.
 
 Stages
 ------
-1. Load compact_tracks, map genotypes from filename
+1. Load compact_tracks from run dir, map genotypes from run_params.json
 2. Extract behavioural features (kinematics, area, tortuosity)
 3. Aggregate per-fly features
 4. Run chosen classifier(s) with cross-validation
@@ -15,7 +15,7 @@ Stages
 Usage
 -----
 python scripts\\run_classification.py ^
-    --tracks     outputs\\my_run\\compact_tracks.csv ^
+    --run-dir    outputs\\my_run ^
     --output-dir outputs\\my_run\\classification
 
 Use --help for all options.
@@ -59,10 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Classification pipeline: compact_tracks.csv -> results + figures",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--tracks", required=True,
-                   help="Path to compact_tracks.csv")
-    p.add_argument("--output-dir", required=True,
-                   help="Directory for figures and outputs")
+    p.add_argument("--run-dir", required=True,
+                   help="Path to a run directory under outputs/ (must contain "
+                        "run_params.json and compact_tracks.csv)")
+    p.add_argument("--output-dir", default=None,
+                   help="Directory for figures and outputs "
+                        "(default: <run-dir>/classification)")
     p.add_argument("--models", nargs="+", default=["lda", "logistic", "svc"],
                    choices=["lda", "logistic", "svc"],
                    help="Classifiers to run")
@@ -89,8 +91,12 @@ def main():
     )
     from src.features import extract_behavioral_features, aggregate_per_fly_features
 
-    print(f"\nLoading tracks from: {args.tracks}")
-    df_raw = map_vial_to_genotype(args.tracks)
+    import os
+    output_dir = output_dir or os.path.join(args.run_dir, "classification")
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"\nLoading run from: {args.run_dir}")
+    df_raw = map_vial_to_genotype(args.run_dir)
 
     print("Extracting behavioural features...")
     df_feat = extract_behavioral_features(df_raw)
@@ -113,7 +119,7 @@ def main():
             print(f"\n=== {model_name.upper()} [{mode}] ===")
             run_classifier(
                 df=df_agg,
-                outdir=args.output_dir,
+                outdir=output_dir,
                 model_name=model_name,
                 classification_mode=mode,
                 cv=args.cv,
@@ -125,12 +131,12 @@ def main():
     # ------------------------------------------------------------------
     if not args.no_box_plots:
         print("\n=== Per-genotype box plots ===")
-        plot_by_genotype(df_agg, FEATURES, FEATURE_TITLES, hover_data, outdir=args.output_dir)
+        plot_by_genotype(df_agg, FEATURES, FEATURE_TITLES, hover_data, outdir=output_dir)
 
         print("=== WT vs Mutant box plots ===")
-        plot_wt_vs_mutant(df_agg, FEATURES, FEATURE_TITLES, hover_data, outdir=args.output_dir)
+        plot_wt_vs_mutant(df_agg, FEATURES, FEATURE_TITLES, hover_data, outdir=output_dir)
 
-    print("\nDone. Figures saved to:", args.output_dir)
+    print("\nDone. Figures saved to:", output_dir)
 
 
 if __name__ == "__main__":

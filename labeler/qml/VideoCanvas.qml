@@ -67,6 +67,8 @@ Item {
     }
 
     // Click capture: hit-test against bboxes. Empty-space click deselects.
+    // Shift+click on empty space: create a synthetic detection there
+    // (for flies the detector missed entirely).
     MouseArea {
         anchors.fill: videoImg
         acceptedButtons: Qt.LeftButton
@@ -77,6 +79,8 @@ Item {
             const idx = backend.hit_test_bbox(x_video, y_video)
             if (idx >= 0) {
                 backend.select(idx)
+            } else if (mouse.modifiers & Qt.ShiftModifier) {
+                backend.create_synthetic_at(x_video, y_video)
             } else {
                 backend.clear_selection()
             }
@@ -151,13 +155,15 @@ Item {
                 ctx.globalAlpha = (trackMode && !isUnannotated && d.track_id !== focusId) ? 0.25 : 1.0
 
                 if (isUnannotated) {
-                    // Distinct shape: solid red bbox + tiny hollow centroid dot.
-                    // No crosshair ticks — these visually scream "needs a label".
+                    // Distinct shape: red bbox + tiny hollow centroid dot.
+                    // Dashed border if synthetic (human-placed for detector miss).
                     ctx.strokeStyle = d.color   // red
                     ctx.fillStyle = d.color
                     ctx.lineWidth = 2.0
+                    ctx.setLineDash(d.is_synthetic ? [4, 3] : [])
                     ctx.strokeRect(d.x1 * sx, d.y1 * sx,
                                    (d.x2 - d.x1) * sx, (d.y2 - d.y1) * sx)
+                    ctx.setLineDash([])
                     ctx.lineWidth = 1.5
                     ctx.beginPath()
                     ctx.arc(cx, cy, 3, 0, 2 * Math.PI)
@@ -181,6 +187,19 @@ Item {
                     ctx.beginPath()
                     ctx.arc(cx, cy, r, 0, 2 * Math.PI)
                     if (d.filled) ctx.fill(); else ctx.stroke()
+
+                    // Annotated synthetic: dashed bbox outline so the
+                    // origin (human-drawn) stays visible after labeling.
+                    if (d.is_synthetic) {
+                        ctx.lineWidth = 1.0
+                        ctx.setLineDash([4, 3])
+                        ctx.globalAlpha = 0.5
+                        ctx.strokeRect(d.x1 * sx, d.y1 * sx,
+                                       (d.x2 - d.x1) * sx, (d.y2 - d.y1) * sx)
+                        ctx.globalAlpha = 1.0
+                        ctx.setLineDash([])
+                        ctx.lineWidth = 1.5
+                    }
                 }
 
                 // Selection ring (white, 2px) on top of either shape.
@@ -275,10 +294,18 @@ Item {
                     const sel = inputBubble.sel
                     if (!sel) return ""
                     const cur = sel.track_id > 0 ? ("->" + sel.track_id) : "(unset)"
+                    let line
                     if (root.pendingInput.length === 0) {
-                        return "ID _   " + cur + "   next free: " + backend.nextFreeTrackId
+                        line = "ID _   " + cur + "   next free: " + backend.nextFreeTrackId
+                    } else {
+                        line = "ID " + root.pendingInput + "   " + cur
                     }
-                    return "ID " + root.pendingInput + "   " + cur
+                    if (sel.is_synthetic) {
+                        const w = Math.round(sel.x2 - sel.x1)
+                        const h = Math.round(sel.y2 - sel.y1)
+                        line += "   [synth " + w + "x" + h + "  shift+arrows to resize]"
+                    }
+                    return line
                 }
             }
 

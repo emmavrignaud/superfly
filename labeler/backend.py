@@ -15,8 +15,10 @@ from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 from .color_engine import track_color_hex
 from .data_model import (
     AnnotationStore,
+    Annotation,
     Detection,
     SOURCE_HUMAN,
+    SOURCE_HUMAN_SYNTH,
     SOURCE_OCSORT,
     load_ocsort_wide,
     load_raw_detections,
@@ -26,6 +28,7 @@ from .session import (
     annotations_from_payload,
     load_session,
     save_session,
+    synthetics_from_payload,
 )
 from .assets import (
     update_metadata_counts,
@@ -41,6 +44,11 @@ AUTOSAVE_INTERVAL_MS = 60_000
 # True red for unannotated detections (off-palette — Catppuccin Mocha's
 # "red" #f38ba8 is actually salmon-pink, too soft for a "needs attention" cue).
 UNANNOTATED_COLOR = "#ef4444"
+
+# Pixels added to each bbox edge for hit-testing only (rendered bbox unchanged).
+# Forgives sloppy clicks on isolated flies; tight clusters still get
+# disambiguated by the smallest-area-wins tie-break.
+HIT_TEST_PAD = 5.0
 
 
 class LabelerBackend(QObject):
@@ -59,6 +67,7 @@ class LabelerBackend(QObject):
     isPlayingChanged = Signal()       # playback toggle
     modeChanged = Signal()            # frame <-> track
     focusedTrackChanged = Signal()    # which track is the Track Mode focus
+    prefillRequested = Signal(int)    # auto-follow: prefill the bubble with this track id
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -98,6 +107,18 @@ class LabelerBackend(QObject):
         self._mode: str = "frame"
         self._focused_track_id: int = -1
 
+        # Auto-follow trail: after each commit, ←/→ to a new frame auto-selects
+        # the nearest detection and pre-fills the bubble with the same ID.
+        # `_trail = (track_id, x, y)`. Cleared on Esc, mode change, big jumps.
+        self._trail: Optional[tuple[int, float, float]] = None
+
+        # Default bbox size for synthetic detections (median of real detections).
+        self._median_w: float = 12.0
+        self._median_h: float = 12.0
+        # Counter for synthetic det_idx (negative, decrements per synthetic added).
+        # Starts at -2 because -1 is reserved for "no selection".
+        self._next_synth_idx: int = -2
+
         # When a mutation happens, mark dirty.
         self.annotationsChanged.connect(self._mark_dirty)
 
@@ -136,6 +157,7 @@ class LabelerBackend(QObject):
         self._summary_path = summary_path
 
         self._raw_by_frame = load_raw_detections(raw_csv)
+        self._compute_median_bbox()
 
         seed = {}
         if ocsort_csv:
@@ -147,6 +169,12 @@ class LabelerBackend(QObject):
             payload = load_session(resume_from)
             seed = annotations_from_payload(payload)
             self._current_frame = int(payload.get("current_frame", 0))
+            # Re-add saved synthetic detections to raw_by_frame so annotations
+            # against them validate. Update synth-idx counter to avoid collisions.
+            for d in synthetics_from_payload(payload):
+                self._raw_by_frame.setdefault(d.frame, []).append(d)
+                if d.det_idx <= self._next_synth_idx:
+                    self._next_synth_idx = d.det_idx - 1
 
         self._store = AnnotationStore(self._raw_by_frame, seed=seed)
         self._dirty = False
@@ -251,6 +279,16 @@ class LabelerBackend(QObject):
 
     @Slot(int)
     def seek_frame(self, frame: int) -> None:
+        self._do_seek(frame, follow_trail=True)
+
+    @Slot(int)
+    def jump_frame(self, frame: int) -> None:
+        """Same as seek_frame but does NOT auto-follow the trail. Used for
+        Home/End/PgUp/PgDn — explicit jumps clear the follow-fly state."""
+        self._trail = None
+        self._do_seek(frame, follow_trail=False)
+
+    def _do_seek(self, frame: int, *, follow_trail: bool) -> None:
         if self._frame_count == 0:
             return
         target = max(0, min(self._frame_count - 1, int(frame)))
@@ -266,6 +304,29 @@ class LabelerBackend(QObject):
         self.frameTickChanged.emit()
         self.frameChanged.emit(target)
         self.displayFrameChanged.emit()
+
+        # Auto-follow: pick the nearest det in the new frame, pre-fill the
+        # bubble. Bypassed for explicit jumps and when no trail is active.
+        if follow_trail and self._trail is not None:
+            self._auto_follow()
+
+    def _auto_follow(self) -> None:
+        if self._trail is None:
+            return
+        track_id, last_x, last_y = self._trail
+        dets = self._raw_by_frame.get(self._current_frame, [])
+        if not dets:
+            return
+        best = None  # (dist2, det_idx)
+        for d in dets:
+            d2 = (d.x - last_x) ** 2 + (d.y - last_y) ** 2
+            if best is None or d2 < best[0]:
+                best = (d2, d.det_idx)
+        if best is None:
+            return
+        self._selected_det_idx = best[1]
+        self.selectionChanged.emit()
+        self.prefillRequested.emit(int(track_id))
 
     # ── playback (one canvas, ±1s loop) ────────────────────────────────────
 
@@ -391,12 +452,80 @@ class LabelerBackend(QObject):
         if new_mode == self._mode:
             return
         self._mode = new_mode
+        self._trail = None  # mode change ends any in-progress follow trail
         self.modeChanged.emit()
 
     def _sorted_track_ids(self) -> list[int]:
         if self._store is None:
             return []
         return sorted({a.track_id for a in self._store.all().values()})
+
+    def _lookup_det(self, frame: int, det_idx: int) -> Optional[Detection]:
+        """Find a Detection by its `det_idx` field (not list position)."""
+        for d in self._raw_by_frame.get(frame, []):
+            if d.det_idx == det_idx:
+                return d
+        return None
+
+    def _compute_median_bbox(self) -> None:
+        """Median width/height of real detections — default size for synthetics."""
+        ws, hs = [], []
+        for dets in self._raw_by_frame.values():
+            for d in dets:
+                if d.is_synthetic:
+                    continue
+                ws.append(d.x2 - d.x1)
+                hs.append(d.y2 - d.y1)
+        if ws and hs:
+            ws.sort(); hs.sort()
+            self._median_w = max(6.0, float(ws[len(ws) // 2]))
+            self._median_h = max(6.0, float(hs[len(hs) // 2]))
+
+    # ── synthetic detections (Shift+Click) ─────────────────────────────────
+
+    @Slot(float, float, result=int)
+    def create_synthetic_at(self, x_video: float, y_video: float) -> int:
+        """Add a synthetic detection at (x, y) in the current frame and
+        auto-select it. Bbox sized to the median of real detections.
+        Returns the new det_idx (negative)."""
+        if self._frame_count == 0:
+            return -1
+        frame = self._current_frame
+        w = self._median_w
+        h = self._median_h
+        det_idx = self._next_synth_idx
+        self._next_synth_idx -= 1
+        d = Detection(
+            frame=frame, det_idx=det_idx,
+            x=float(x_video), y=float(y_video),
+            x1=float(x_video) - w / 2, y1=float(y_video) - h / 2,
+            x2=float(x_video) + w / 2, y2=float(y_video) + h / 2,
+            conf=float("nan"),
+            is_synthetic=True,
+        )
+        self._raw_by_frame.setdefault(frame, []).append(d)
+        # Trigger redraw + auto-select
+        self.annotationsChanged.emit()  # repaints overlay
+        self._selected_det_idx = det_idx
+        self.selectionChanged.emit()
+        return det_idx
+
+    @Slot(int, int)
+    def resize_selected_synthetic(self, dw: int, dh: int) -> None:
+        """Grow/shrink the selected synthetic's bbox by (dw, dh) pixels total
+        (split evenly across each side). No-op for real detections."""
+        if self._selected_det_idx == -1:
+            return
+        d = self._lookup_det(self._current_frame, self._selected_det_idx)
+        if d is None or not d.is_synthetic:
+            return
+        new_w = max(6.0, (d.x2 - d.x1) + float(dw))
+        new_h = max(6.0, (d.y2 - d.y1) + float(dh))
+        d.x1 = d.x - new_w / 2
+        d.x2 = d.x + new_w / 2
+        d.y1 = d.y - new_h / 2
+        d.y2 = d.y + new_h / 2
+        self.annotationsChanged.emit()
 
     @Slot(int, result=list)
     def detections_for_frame(self, frame: int) -> list:
@@ -432,6 +561,7 @@ class LabelerBackend(QObject):
                 "source": src,
                 "color": color,
                 "filled": filled,
+                "is_synthetic": d.is_synthetic,
             })
         return out
 
@@ -450,9 +580,11 @@ class LabelerBackend(QObject):
         frame = self._playback_frame if self._is_playing else self._current_frame
         dets = self._raw_by_frame.get(frame, [])
         best: Optional[tuple[float, float, int]] = None  # (area, centroid_dist, det_idx)
+        pad = HIT_TEST_PAD
         for d in dets:
-            if not (d.x1 <= x_video <= d.x2 and d.y1 <= y_video <= d.y2):
+            if not (d.x1 - pad <= x_video <= d.x2 + pad and d.y1 - pad <= y_video <= d.y2 + pad):
                 continue
+            # Tie-break by the *true* (unpadded) area so tight bboxes still win.
             area = max(0.0, (d.x2 - d.x1)) * max(0.0, (d.y2 - d.y1))
             cdist = (d.x - x_video) ** 2 + (d.y - y_video) ** 2
             cand = (area, cdist, d.det_idx)
@@ -486,6 +618,8 @@ class LabelerBackend(QObject):
 
     @Slot()
     def clear_selection(self) -> None:
+        # Esc clears the auto-follow trail too — explicit "I'm done with that fly".
+        self._trail = None
         if self._selected_det_idx != -1:
             self._selected_det_idx = -1
             self.selectionChanged.emit()
@@ -524,7 +658,13 @@ class LabelerBackend(QObject):
             return
         if track_id <= 0:
             return
-        self._store.assign(self._current_frame, self._selected_det_idx, int(track_id))
+        # Remember where we just committed so the next ←/→ can auto-follow.
+        d = self._lookup_det(self._current_frame, self._selected_det_idx)
+        if d is not None:
+            self._trail = (int(track_id), d.x, d.y)
+
+        source = SOURCE_HUMAN_SYNTH if (d is not None and d.is_synthetic) else SOURCE_HUMAN
+        self._store.assign(self._current_frame, self._selected_det_idx, int(track_id), source=source)
         self.annotationsChanged.emit()
         self.tracksChanged.emit()
 
@@ -600,14 +740,19 @@ class LabelerBackend(QObject):
     def _do_save(self, path: str) -> None:
         if self._store is None or not path:
             return
+        synths = [
+            d for dets in self._raw_by_frame.values()
+            for d in dets if d.is_synthetic
+        ]
         save_session(
             path,
             video_path=self._video_path,
             raw_csv=self._raw_csv,
             ocsort_csv=self._ocsort_csv,
             current_frame=self._current_frame,
-            current_mode="frame",
+            current_mode=self._mode,
             store=self._store,
+            synthetic_detections=synths,
         )
 
     @Slot()

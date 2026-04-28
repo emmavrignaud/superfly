@@ -18,6 +18,15 @@ ApplicationWindow {
         anchors.fill: parent
         focus: true
 
+        // Auto-follow: backend asks the bubble to prefill an ID after a
+        // ←/→ that landed on a nearest-fly auto-selection.
+        Connections {
+            target: backend
+            function onPrefillRequested(trackId) {
+                canvas.pendingInput = String(trackId)
+            }
+        }
+
         function isDigitKey(k) { return k >= Qt.Key_0 && k <= Qt.Key_9 }
 
         Keys.onPressed: (event) => {
@@ -30,19 +39,30 @@ ApplicationWindow {
                 return
             }
 
+            // Shift+arrow keys resize the selected synthetic detection's bbox.
+            // Only fires for synthetics (backend slot is a no-op otherwise).
+            if (event.modifiers & Qt.ShiftModifier) {
+                switch (event.key) {
+                case Qt.Key_Right: backend.resize_selected_synthetic(+4, 0); event.accepted = true; return
+                case Qt.Key_Left:  backend.resize_selected_synthetic(-4, 0); event.accepted = true; return
+                case Qt.Key_Down:  backend.resize_selected_synthetic(0, +4); event.accepted = true; return
+                case Qt.Key_Up:    backend.resize_selected_synthetic(0, -4); event.accepted = true; return
+                }
+            }
+
             switch (event.key) {
             case Qt.Key_Left:
                 backend.seek_frame(backend.currentFrame - 1); event.accepted = true; break
             case Qt.Key_Right:
                 backend.seek_frame(backend.currentFrame + 1); event.accepted = true; break
             case Qt.Key_PageUp:
-                backend.seek_frame(backend.currentFrame - 10); event.accepted = true; break
+                backend.jump_frame(backend.currentFrame - 10); event.accepted = true; break
             case Qt.Key_PageDown:
-                backend.seek_frame(backend.currentFrame + 10); event.accepted = true; break
+                backend.jump_frame(backend.currentFrame + 10); event.accepted = true; break
             case Qt.Key_Home:
-                backend.seek_frame(0); event.accepted = true; break
+                backend.jump_frame(0); event.accepted = true; break
             case Qt.Key_End:
-                backend.seek_frame(backend.frameCount - 1); event.accepted = true; break
+                backend.jump_frame(backend.frameCount - 1); event.accepted = true; break
             case Qt.Key_B:
                 canvas.showBboxes = !canvas.showBboxes; event.accepted = true; break
             case Qt.Key_Tab:

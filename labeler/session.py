@@ -1,4 +1,5 @@
-"""Session save/load — JSON file with annotations, paths, and view state.
+"""Session save/load — JSON file with annotations, paths, view state, and
+synthetic detections (human-placed dets the detector missed).
 
 Sessions are portable across machines as long as the referenced video and
 CSV files exist at the same paths.
@@ -9,10 +10,17 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from .data_model import Annotation, AnnotationStore, SOURCE_HUMAN, SOURCE_OCSORT
+from .data_model import (
+    Annotation,
+    AnnotationStore,
+    Detection,
+    SOURCE_HUMAN,
+    SOURCE_HUMAN_SYNTH,
+    SOURCE_OCSORT,
+)
 
 
-SESSION_VERSION = 1
+SESSION_VERSION = 2  # bumped from 1 to add synthetic_detections
 
 
 def _key_to_str(frame: int, det_idx: int) -> str:
@@ -33,6 +41,7 @@ def save_session(
     current_frame: int,
     current_mode: str,
     store: AnnotationStore,
+    synthetic_detections: Optional[list[Detection]] = None,
 ) -> None:
     payload = {
         "version": SESSION_VERSION,
@@ -45,6 +54,14 @@ def save_session(
             _key_to_str(f, d): {"track_id": ann.track_id, "source": ann.source}
             for (f, d), ann in store.all().items()
         },
+        "synthetic_detections": [
+            {
+                "frame": d.frame, "det_idx": d.det_idx,
+                "x": d.x, "y": d.y,
+                "x1": d.x1, "y1": d.y1, "x2": d.x2, "y2": d.y2,
+            }
+            for d in (synthetic_detections or [])
+        ],
     }
     Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -55,19 +72,33 @@ def load_session(path: str) -> dict:
     via `annotations_from_payload`.
     """
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    if payload.get("version") != SESSION_VERSION:
-        raise ValueError(
-            f"unsupported session version: {payload.get('version')!r} "
-            f"(expected {SESSION_VERSION})"
-        )
+    v = payload.get("version")
+    if v not in (1, 2):
+        raise ValueError(f"unsupported session version: {v!r} (expected 1 or 2)")
+    # v1 sessions just lack synthetic_detections — that's fine, fill in empty.
+    payload.setdefault("synthetic_detections", [])
     return payload
 
 
 def annotations_from_payload(payload: dict) -> dict[tuple[int, int], Annotation]:
+    valid_sources = (SOURCE_HUMAN, SOURCE_OCSORT, SOURCE_HUMAN_SYNTH)
     out: dict[tuple[int, int], Annotation] = {}
     for k, v in payload.get("annotations", {}).items():
         src = v.get("source", SOURCE_HUMAN)
-        if src not in (SOURCE_HUMAN, SOURCE_OCSORT):
+        if src not in valid_sources:
             src = SOURCE_HUMAN
         out[_str_to_key(k)] = Annotation(track_id=int(v["track_id"]), source=src)
+    return out
+
+
+def synthetics_from_payload(payload: dict) -> list[Detection]:
+    out: list[Detection] = []
+    for r in payload.get("synthetic_detections", []):
+        out.append(Detection(
+            frame=int(r["frame"]), det_idx=int(r["det_idx"]),
+            x=float(r["x"]), y=float(r["y"]),
+            x1=float(r["x1"]), y1=float(r["y1"]),
+            x2=float(r["x2"]), y2=float(r["y2"]),
+            conf=float("nan"), is_synthetic=True,
+        ))
     return out

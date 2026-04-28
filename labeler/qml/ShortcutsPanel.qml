@@ -15,15 +15,17 @@ Rectangle {
         ["PgUp / PgDn", "± 10 frames"],
         ["Home / End",  "first / last frame"],
         ["",            "SELECTION"],
-        ["click",       "select fly (inside bbox)"],
+        ["click",       "select fly (inside bbox, +5px tolerance)"],
+        ["⇧+click",     "create synthetic detection at click (detector miss)"],
         ["Tab / ⇧Tab",  "cycle dets in frame"],
-        ["Esc",         "clear input / deselect"],
+        ["Esc",         "clear input / deselect / end follow trail"],
         ["",            "ANNOTATE"],
         ["digits",      "type track ID"],
-        ["Enter",       "commit ID"],
+        ["Enter",       "commit ID (auto-prefilled when following a fly)"],
         ["Backspace",   "erase last digit"],
         ["Del",         "clear annotation"],
         ["Ctrl+Z",      "undo"],
+        ["⇧+arrows",    "resize selected synthetic bbox"],
         ["",            "MODE"],
         ["T",           "toggle frame/track mode"],
         ["↑ / ↓",       "cycle focused track (track mode)"],
@@ -78,7 +80,8 @@ Rectangle {
                 model: root.rows
                 delegate: Item {
                     width: parent.width
-                    height: isHeader ? 20 : 16
+                    // Headers are fixed-height; rows grow to fit wrapped action text.
+                    height: isHeader ? 20 : Math.max(16, actionText.implicitHeight + 4)
 
                     property bool isHeader: modelData[0] === ""
 
@@ -95,7 +98,8 @@ Rectangle {
                     Text {
                         visible: !parent.isHeader
                         anchors.left: parent.left
-                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.top: parent.top
+                        anchors.topMargin: 1
                         width: 86
                         text: modelData[0]
                         color: "#cdd6f4"
@@ -103,16 +107,18 @@ Rectangle {
                         font.pixelSize: 11
                     }
                     Text {
+                        id: actionText
                         visible: !parent.isHeader
                         anchors.left: parent.left
                         anchors.leftMargin: 88
                         anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.top: parent.top
+                        anchors.topMargin: 1
                         text: modelData[1]
                         color: "#a6adc8"
                         font.family: "Segoe UI, sans-serif"
                         font.pixelSize: 11
-                        elide: Text.ElideRight
+                        wrapMode: Text.WordWrap
                     }
                 }
             }

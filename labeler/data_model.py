@@ -25,6 +25,7 @@ import pandas as pd
 
 SOURCE_OCSORT = "ocsort"
 SOURCE_HUMAN = "human"
+SOURCE_HUMAN_SYNTH = "human_synth"   # human placed a synthetic detection (detector miss)
 
 NN_MATCH_TOLERANCE_PX = 5.0
 
@@ -35,10 +36,11 @@ NN_MATCH_TOLERANCE_PX = 5.0
 
 @dataclass
 class Detection:
-    """A single raw detection in a single frame.
+    """A single detection in a single frame.
 
-    `det_idx` is the position of this detection inside its frame's detection
-    list (sorted by x then y for stable ordering across reloads).
+    `det_idx` is the position inside its frame's detection list (sorted by
+    x then y for stable ordering across reloads). Synthetic detections use
+    *negative* det_idx so they never collide with real ones.
     """
     frame: int
     det_idx: int
@@ -49,6 +51,7 @@ class Detection:
     x2: float
     y2: float
     conf: float
+    is_synthetic: bool = False   # human-placed (detector miss); affects export source
 
 
 @dataclass
@@ -296,7 +299,12 @@ class AnnotationStore:
     # ---- internals ----
 
     def _lookup(self, frame: int, det_idx: int) -> Detection:
-        return self.raw_by_frame[frame][det_idx]
+        # Search by det_idx field, not list position — synthetics have
+        # negative det_idx and aren't at their nominal index.
+        for d in self.raw_by_frame.get(frame, []):
+            if d.det_idx == det_idx:
+                return d
+        raise KeyError(f"no detection at frame={frame}, det_idx={det_idx}")
 
     def _index_set(self) -> set[tuple[int, int]]:
         return {(f, d.det_idx) for f, dets in self.raw_by_frame.items() for d in dets}

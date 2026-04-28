@@ -3,6 +3,9 @@
 Usage (from repo root):
     python -m labeler.main --video PATH --raw RAW_CSV [--ocsort OCSORT_CSV]
                            [--overlay-video PATH] [--out-dir DIR] [--fresh]
+                           
+    example: 
+        python -m labeler.main --video r"..\..\outputs\run_88_31DPE_n005\2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4" --raw r"..\..\outputs\run_88_31DPE_n005\detections_raw.csv" --ocsort r"..\..\outputs\run_88_31DPE_n005\tracks_wide_format.csv" --fresh
 
 Default out-dir: <repo>/data/manual_labelling/<videostem>/  (auto-created).
 Override with --out-dir for one-off runs outside this layout.
