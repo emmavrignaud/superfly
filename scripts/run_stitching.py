@@ -86,14 +86,11 @@ def main():
         show_ids=v_cfg.get("show_ids", True),
         tick_len=args.overlay_tick_len,
         tick_thick=v_cfg.get("tick_thick", 1),
-        chip_font_scale=v_cfg.get("chip_font_scale", 0.4),
+        chip_font_scale=v_cfg.get("chip_font_scale", 0.32),
         label_offset_x=v_cfg.get("label_offset_x", 10),
         label_offset_y=v_cfg.get("label_offset_y", -10),
-        chip_pad=v_cfg.get("chip_pad", 2),
+        chip_pad=v_cfg.get("chip_pad", 1),
         leader_thick=v_cfg.get("leader_thick", 1),
-        show_border=v_cfg.get("show_border", True),
-        shadow_text=v_cfg.get("shadow_text", True),
-        anchor_radius=v_cfg.get("anchor_radius", 0),
     )
 
     wide_csv     = os.path.join(args.output_dir, "tracks_wide_format.csv")

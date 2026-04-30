@@ -70,9 +70,6 @@ visualization:
   label_offset_y: -10      # chip offset from centroid, y (px, −up)
   chip_pad: 1              # padding inside the chip (px)
   leader_thick: 1          # leader line stroke (px)
-  show_border: true        # 1px white border around the chip
-  shadow_text: true        # drop-shadow behind the ID text for legibility
-  anchor_radius: 0         # small dot at the fly centroid; 0 disables (ticks already mark it)
   show_unmatched_detections: true   # red box around RF-DETR detections no track covered
   unmatched_tolerance_k: 2.0         # bbox padding = k × std of detection-box sides
 
