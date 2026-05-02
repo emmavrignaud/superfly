@@ -439,7 +439,7 @@ def behavioral_consistency_batch(detections, trk_profiles, trk_last_centers, beh
 
 def simulate_position(
     cx: float, cy: float,
-    vx: float, vy: float,
+    direction: float,
     speed: float,
     acceleration: float,
     gap: int,
@@ -447,17 +447,14 @@ def simulate_position(
 ) -> Tuple[float, float]:
     """
     Simulate a tracker's centre position frame-by-frame over `gap` frames,
-    with wall-bounce reflection when a vial_roi is provided.
-
-    Ported from stitching.simulate_position so the same physics model is
-    available during live tracking (used in link_cost_batch below).
+    with left/right wall-bounce reflection when a vial_roi is provided.
 
     Parameters
     ----------
     cx, cy       : starting centre position (px)
-    vx, vy       : unit velocity direction vector (from tracker.velocity)
-    speed        : initial speed (px/frame), e.g. tracker profile median_speed
-    acceleration : signed speed change per frame (profile mean_acceleration)
+    direction    : heading in degrees (0 = right, 90 = down)
+    speed        : initial speed (px/frame)
+    acceleration : signed speed change per frame
     gap          : number of frames to simulate forward
     vial_roi     : (x0, y0, x1, y1) bounding box; None = no reflection
 
@@ -467,7 +464,9 @@ def simulate_position(
     """
     x, y = float(cx), float(cy)
     spd  = float(speed)
-    dvx, dvy = float(vx), float(vy)   # unit direction
+    rad  = np.radians(direction)
+    dvx  = float(np.cos(rad))
+    dvy  = float(np.sin(rad))
 
     for _ in range(gap):
         nx = x + dvx * spd
@@ -479,10 +478,6 @@ def simulate_position(
                 dvx = -dvx;  nx = x0 + (x0 - nx)
             elif nx > x1:
                 dvx = -dvx;  nx = x1 - (nx - x1)
-            if ny < y0:
-                dvy = -dvy;  ny = y0 + (y0 - ny)
-            elif ny > y1:
-                dvy = -dvy;  ny = y1 - (ny - y1)
 
         x, y  = nx, ny
         spd   = max(spd + acceleration, 0.0)
@@ -551,21 +546,44 @@ def link_cost_batch(
     det_areas = (detections[:, 2] - detections[:, 0]) * (detections[:, 3] - detections[:, 1])
 
     for j, ts in enumerate(trackers_state):
-        tcx   = ts["last_cx"]
-        tcy   = ts["last_cy"]
-        vel   = ts.get("velocity")     # (vy, vx) unit vector or None
-        prof  = ts.get("profile")
-        gap   = max(int(ts.get("gap", 1)), 1)
-        roi   = ts.get("vial_roi")
+        tcx     = ts["last_cx"]
+        tcy     = ts["last_cy"]
+        vel     = ts.get("velocity")     # (vy, vx) unit vector — fallback only
+        prof    = ts.get("profile")
+        gap     = max(int(ts.get("gap", 1)), 1)
+        roi     = ts.get("vial_roi")
+        history = ts.get("history", [])
 
-        speed    = prof["median_speed"]    if prof else 0.0
-        accel    = prof.get("mean_acceleration", 0.0) if prof else 0.0
+        # Derive final heading and median speed from the full observation history
+        # (same approach as stitching.link_score). Falls back to tracker.velocity
+        # + behavioral profile if history is too short.
+        if len(history) >= 2:
+            centers = np.array([
+                ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0) for b in history
+            ])
+            diffs  = np.diff(centers, axis=0)          # (N-1, 2)
+            speeds = np.sqrt((diffs ** 2).sum(axis=1))  # px/frame
+            pos_speeds = speeds[speeds > 0]
+            median_speed = float(np.median(pos_speeds)) if len(pos_speeds) > 0 else 0.0
+            last_dx, last_dy = float(diffs[-1, 0]), float(diffs[-1, 1])
+            final_direction  = float(np.degrees(np.arctan2(last_dy, last_dx)))
+            has_direction    = True
+        elif vel is not None and (vel[0] != 0 or vel[1] != 0):
+            vy_unit, vx_unit = float(vel[0]), float(vel[1])
+            final_direction  = float(np.degrees(np.arctan2(vy_unit, vx_unit)))
+            median_speed     = prof["median_speed"] if prof else 0.0
+            has_direction    = True
+        else:
+            final_direction  = 0.0
+            median_speed     = prof["median_speed"] if prof else 0.0
+            has_direction    = False
+
+        accel = prof.get("mean_acceleration", 0.0) if prof else 0.0
 
         # --- Term 1: extrapolated position error ---
-        if vel is not None and (vel[0] != 0 or vel[1] != 0):
-            vy_unit, vx_unit = float(vel[0]), float(vel[1])
-            ex, ey = simulate_position(tcx, tcy, vx_unit, vy_unit,
-                                       speed, accel, gap, roi)
+        if has_direction and median_speed > 0:
+            ex, ey = simulate_position(tcx, tcy, final_direction,
+                                       median_speed, accel, gap, roi)
         else:
             ex, ey = tcx, tcy
 
@@ -575,9 +593,11 @@ def link_cost_batch(
         dx = det_cx - tcx
         dy = det_cy - tcy
         gap_norm = np.sqrt(dx ** 2 + dy ** 2) + 1e-6
-        if vel is not None:
-            vy_unit, vx_unit = float(vel[0]), float(vel[1])
-            dot = (dx / gap_norm) * vx_unit + (dy / gap_norm) * vy_unit
+        if has_direction:
+            rad     = np.radians(final_direction)
+            vx_unit = float(np.cos(rad))
+            vy_unit = float(np.sin(rad))
+            dot     = (dx / gap_norm) * vx_unit + (dy / gap_norm) * vy_unit
             direction_term = (1.0 - np.clip(dot, -1.0, 1.0)) / 2.0     # [0,1]
         else:
             direction_term = np.zeros(n_det)

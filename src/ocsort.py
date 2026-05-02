@@ -580,6 +580,23 @@ class OCSort(object):
             for trk in self.trackers
         ])
 
+        # Build tracker state dicts for link_cost_batch — built once here and
+        # reused in both round 1 and the jump round (jump round subsets by index).
+        all_trk_states = []
+        for trk in self.trackers:
+            lo  = trk.last_observation
+            tcx = (lo[0] + lo[2]) / 2.0 if lo.sum() >= 0 else 0.0
+            tcy = (lo[1] + lo[3]) / 2.0 if lo.sum() >= 0 else 0.0
+            all_trk_states.append({
+                "last_cx":  tcx,
+                "last_cy":  tcy,
+                "velocity": trk.velocity,
+                "profile":  trk.behavioral_profile,
+                "gap":      trk.time_since_update,
+                "vial_roi": trk.vial_roi,
+                "history":  trk.history_observations,
+            })
+
         """
             First round of association
         """
@@ -613,7 +630,8 @@ class OCSort(object):
             dets, trks, self.iou_threshold, velocities, k_observations, self.inertia, self.asso_func, self.aspect_weight,
             vial_mask=vial_mask,
             trk_profiles=trk_profiles, trk_last_centers=trk_last_centers,
-            behavioral_weight=self.behavioral_weight)
+            behavioral_weight=self.behavioral_weight,
+            link_trk_states=all_trk_states)
         for m in matched:
             self.trackers[m[1]].update(dets[m[0], :])
 
@@ -663,22 +681,8 @@ class OCSort(object):
             jump_velocities   = velocities[unmatched_trks]
             jump_k_obs        = k_observations[unmatched_trks]
 
-            # Build tracker state dicts for link_cost_batch (richer cost signal
-            # during the jump round, where IoU is already inflated / unreliable).
-            jump_trk_states = []
-            for t in unmatched_trks:
-                trk  = self.trackers[t]
-                lo   = trk.last_observation
-                tcx  = (lo[0] + lo[2]) / 2.0 if lo.sum() >= 0 else 0.0
-                tcy  = (lo[1] + lo[3]) / 2.0 if lo.sum() >= 0 else 0.0
-                jump_trk_states.append({
-                    "last_cx":  tcx,
-                    "last_cy":  tcy,
-                    "velocity": trk.velocity,
-                    "profile":  trk.behavioral_profile,
-                    "gap":      trk.time_since_update,
-                    "vial_roi": trk.vial_roi,
-                })
+            # Subset all_trk_states for the unmatched trackers only.
+            jump_trk_states = [all_trk_states[t] for t in unmatched_trks]
 
             jump_matched, jump_ud, jump_ut = associate(
                 left_dets, jump_boxes,

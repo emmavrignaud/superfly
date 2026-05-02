@@ -14,7 +14,7 @@ Usage (from repo root):
     --ocsort   (deprecated alias for --tracks)
 
     example: (run from repo root! hhhhhhh don't be like me and cd into labeler/ )
-            python -m labeler.main --video outputs/run_93_31DPE_n005/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4 --raw outputs/run_93_31DPE_n005/detections_raw.csv --tracks outputs/run_93_31DPE_n005/compact_tracks.csv --fresh
+            python -m labeler.main --video outputs/run_84_31DPE_n005/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4 --raw outputs/run_84_31DPE_n005/detections_raw.csv --tracks outputs/run_84_31DPE_n005/compact_tracks.csv --fresh
 
 The --tracks CSV may be either:
   - long-format  (e.g. compact_tracks.csv: frame, x, y, compact_id, ...)

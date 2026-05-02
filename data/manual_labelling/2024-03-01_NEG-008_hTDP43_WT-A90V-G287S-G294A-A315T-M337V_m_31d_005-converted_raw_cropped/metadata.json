@@ -1,15 +1,14 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "created_at": "2026-04-27T21:53:38",
-  "last_opened_at": "2026-04-27T22:12:45",
+  "last_opened_at": "2026-05-02T19:23:28",
   "last_saved_at": "2026-04-27T22:18:35",
   "last_exported_at": null,
-  "labeler_git_commit": "15b68f30e3ea08a9e0ff4fc9f3de1ffe24140e73",
+  "labeler_git_commit": "c2d0b6583d2468f6af1c575b938a831aa867ba18",
   "sources": {
-    "video": "r../../outputs/run_88_31DPE_n005/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4",
-    "raw_detections_csv": "r../../outputs/run_88_31DPE_n005/detections_raw.csv",
-    "ocsort_wide_csv": "r../../outputs/run_88_31DPE_n005/compact_tracks.csv",
-    "overlay_video": null
+    "video": "outputs/run_84_31DPE_n005/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4",
+    "raw_detections_csv": "outputs/run_84_31DPE_n005/detections_raw.csv",
+    "tracks_csv": "outputs/run_84_31DPE_n005/compact_tracks.csv"
   },
   "video": {
     "frame_count": 363,
