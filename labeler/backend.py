@@ -51,6 +51,9 @@ UNANNOTATED_COLOR = "#ef4444"
 # disambiguated by the smallest-area-wins tie-break.
 HIT_TEST_PAD = 5.0
 
+# Minimum synthetic bbox side (video px). Shift+arrows shrink until this floor.
+SYNTHETIC_MIN_SIDE_PX = 2.0
+
 
 # ── Unified undo system ────────────────────────────────────────────────────
 # One stack of ops, in chronological order, covering everything reversible:
@@ -504,8 +507,8 @@ class LabelerBackend(QObject):
                 hs.append(d.y2 - d.y1)
         if ws and hs:
             ws.sort(); hs.sort()
-            self._median_w = max(6.0, float(ws[len(ws) // 2]))
-            self._median_h = max(6.0, float(hs[len(hs) // 2]))
+            self._median_w = max(SYNTHETIC_MIN_SIDE_PX, float(ws[len(ws) // 2]))
+            self._median_h = max(SYNTHETIC_MIN_SIDE_PX, float(hs[len(hs) // 2]))
 
     # ── synthetic detections (Shift+Click) ─────────────────────────────────
 
@@ -549,8 +552,8 @@ class LabelerBackend(QObject):
         if d is None or not d.is_synthetic:
             return
         prev_bbox = (d.x1, d.y1, d.x2, d.y2)
-        new_w = max(6.0, (d.x2 - d.x1) + float(dw))
-        new_h = max(6.0, (d.y2 - d.y1) + float(dh))
+        new_w = max(SYNTHETIC_MIN_SIDE_PX, (d.x2 - d.x1) + float(dw))
+        new_h = max(SYNTHETIC_MIN_SIDE_PX, (d.y2 - d.y1) + float(dh))
         d.x1 = d.x - new_w / 2
         d.x2 = d.x + new_w / 2
         d.y1 = d.y - new_h / 2
