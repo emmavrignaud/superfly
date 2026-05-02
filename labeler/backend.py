@@ -6,8 +6,9 @@ when state changes.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import cv2
 from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
@@ -20,8 +21,8 @@ from .data_model import (
     SOURCE_HUMAN,
     SOURCE_HUMAN_SYNTH,
     SOURCE_OCSORT,
-    load_ocsort_wide,
     load_raw_detections,
+    load_tracks_any,
     match_ocsort_to_raw,
 )
 from .session import (
@@ -49,6 +50,20 @@ UNANNOTATED_COLOR = "#ef4444"
 # Forgives sloppy clicks on isolated flies; tight clusters still get
 # disambiguated by the smallest-area-wins tie-break.
 HIT_TEST_PAD = 5.0
+
+
+# ── Unified undo system ────────────────────────────────────────────────────
+# One stack of ops, in chronological order, covering everything reversible:
+# annotations (assign/clear) AND synthetic detections (create/resize/delete).
+# Ctrl+Z pops the latest op and runs its reverse.
+
+@dataclass
+class _Op:
+    """A reversible action. `kind` selects the reversal logic; `payload`
+    carries kind-specific state needed to undo it."""
+    kind: str           # "ann_assign" | "ann_clear" | "synth_create"
+                        # | "synth_resize" | "synth_delete"
+    payload: dict = field(default_factory=dict)
 
 
 class LabelerBackend(QObject):
@@ -119,6 +134,11 @@ class LabelerBackend(QObject):
         # Starts at -2 because -1 is reserved for "no selection".
         self._next_synth_idx: int = -2
 
+        # Unified undo stack — every reversible action pushes one _Op.
+        # See `undo()` for the reversal dispatch.
+        self._ops: list[_Op] = []
+        self._OPS_CAP: int = 500
+
         # When a mutation happens, mark dirty.
         self.annotationsChanged.connect(self._mark_dirty)
 
@@ -161,7 +181,7 @@ class LabelerBackend(QObject):
 
         seed = {}
         if ocsort_csv:
-            ocs = load_ocsort_wide(ocsort_csv)
+            ocs = load_tracks_any(ocsort_csv)  # auto-detects wide vs long format
             seed = match_ocsort_to_raw(self._raw_by_frame, ocs)
 
         # If resuming from a session file, that takes precedence over OC-SORT seed.
@@ -504,8 +524,10 @@ class LabelerBackend(QObject):
             is_synthetic=True,
         )
         self._raw_by_frame.setdefault(frame, []).append(d)
+        self._push_op(_Op(kind="synth_create",
+                          payload={"frame": frame, "det": d}))
         # Trigger redraw + auto-select
-        self.annotationsChanged.emit()  # repaints overlay
+        self.annotationsChanged.emit()
         self._selected_det_idx = det_idx
         self.selectionChanged.emit()
         return det_idx
@@ -519,13 +541,47 @@ class LabelerBackend(QObject):
         d = self._lookup_det(self._current_frame, self._selected_det_idx)
         if d is None or not d.is_synthetic:
             return
+        prev_bbox = (d.x1, d.y1, d.x2, d.y2)
         new_w = max(6.0, (d.x2 - d.x1) + float(dw))
         new_h = max(6.0, (d.y2 - d.y1) + float(dh))
         d.x1 = d.x - new_w / 2
         d.x2 = d.x + new_w / 2
         d.y1 = d.y - new_h / 2
         d.y2 = d.y + new_h / 2
+        self._push_op(_Op(kind="synth_resize",
+                          payload={"frame": self._current_frame,
+                                   "det_idx": d.det_idx,
+                                   "prev_bbox": prev_bbox}))
         self.annotationsChanged.emit()
+
+    @Slot()
+    def delete_selected_synthetic(self) -> None:
+        """Remove the selected synthetic detection (and any annotation on it).
+        No-op for real detections — they come from the input CSV and aren't
+        ours to delete. Reversible via Ctrl+Z."""
+        if self._selected_det_idx == -1 or self._store is None:
+            return
+        d = self._lookup_det(self._current_frame, self._selected_det_idx)
+        if d is None or not d.is_synthetic:
+            return
+        frame = self._current_frame
+        prev_ann = self._store.get(frame, d.det_idx)
+        # Remove any annotation on the synth, then remove the synth itself.
+        if prev_ann is not None:
+            self._store.remove_annotation_silent(frame, d.det_idx)
+        dets = self._raw_by_frame.get(frame, [])
+        for i, x in enumerate(dets):
+            if x.det_idx == d.det_idx:
+                dets.pop(i)
+                break
+        # Deselect (the det no longer exists).
+        self._selected_det_idx = -1
+        self.selectionChanged.emit()
+        self._push_op(_Op(kind="synth_delete",
+                          payload={"frame": frame, "det": d, "prev_ann": prev_ann}))
+        self.annotationsChanged.emit()
+        if prev_ann is not None:
+            self.tracksChanged.emit()
 
     @Slot(int, result=list)
     def detections_for_frame(self, frame: int) -> list:
@@ -658,13 +714,20 @@ class LabelerBackend(QObject):
             return
         if track_id <= 0:
             return
-        # Remember where we just committed so the next ←/→ can auto-follow.
         d = self._lookup_det(self._current_frame, self._selected_det_idx)
         if d is not None:
+            # Remember where we just committed so the next ←/→ can auto-follow.
             self._trail = (int(track_id), d.x, d.y)
 
+        frame, det_idx = self._current_frame, self._selected_det_idx
+        prev_ann = self._store.get(frame, det_idx)
+
         source = SOURCE_HUMAN_SYNTH if (d is not None and d.is_synthetic) else SOURCE_HUMAN
-        self._store.assign(self._current_frame, self._selected_det_idx, int(track_id), source=source)
+        # Use silent setter; we record the op ourselves (no double-bookkeeping).
+        self._store.restore_annotation(frame, det_idx,
+                                       Annotation(track_id=int(track_id), source=source))
+        self._push_op(_Op(kind="ann_assign",
+                          payload={"frame": frame, "det_idx": det_idx, "prev_ann": prev_ann}))
         self.annotationsChanged.emit()
         self.tracksChanged.emit()
 
@@ -673,19 +736,89 @@ class LabelerBackend(QObject):
         """Remove the annotation on the selected detection (if any)."""
         if self._store is None or self._selected_det_idx == -1:
             return
-        self._store.clear(self._current_frame, self._selected_det_idx)
+        frame, det_idx = self._current_frame, self._selected_det_idx
+        prev_ann = self._store.get(frame, det_idx)
+        if prev_ann is None:
+            return  # nothing to clear; don't dirty the undo stack
+        self._store.remove_annotation_silent(frame, det_idx)
+        self._push_op(_Op(kind="ann_clear",
+                          payload={"frame": frame, "det_idx": det_idx, "prev_ann": prev_ann}))
         self.annotationsChanged.emit()
         self.tracksChanged.emit()
 
+    # ── unified undo ──────────────────────────────────────────────────────
+
+    def _push_op(self, op: _Op) -> None:
+        self._ops.append(op)
+        if len(self._ops) > self._OPS_CAP:
+            # Drop oldest; a 500-action history is plenty for human pace.
+            self._ops.pop(0)
+
     @Slot()
     def undo(self) -> bool:
+        """Reverse the most recent reversible action — annotations AND
+        synthetic-detection ops, all in one chronological stack."""
+        if not self._ops:
+            return False
+        op = self._ops.pop()
+        ok = self._apply_reverse(op)
+        return bool(ok)
+
+    def _apply_reverse(self, op: _Op) -> bool:
+        kind = op.kind
+        p = op.payload
         if self._store is None:
             return False
-        ok = self._store.undo()
-        if ok:
+
+        if kind == "ann_assign":
+            frame, det_idx = p["frame"], p["det_idx"]
+            prev = p["prev_ann"]
+            if prev is None:
+                self._store.remove_annotation_silent(frame, det_idx)
+            else:
+                self._store.restore_annotation(frame, det_idx, prev)
             self.annotationsChanged.emit()
             self.tracksChanged.emit()
-        return bool(ok)
+            return True
+
+        if kind == "ann_clear":
+            frame, det_idx = p["frame"], p["det_idx"]
+            self._store.restore_annotation(frame, det_idx, p["prev_ann"])
+            self.annotationsChanged.emit()
+            self.tracksChanged.emit()
+            return True
+
+        if kind == "synth_create":
+            frame, d = p["frame"], p["det"]
+            dets = self._raw_by_frame.get(frame, [])
+            for i, x in enumerate(dets):
+                if x.det_idx == d.det_idx:
+                    dets.pop(i)
+                    break
+            if self._selected_det_idx == d.det_idx:
+                self._selected_det_idx = -1
+                self.selectionChanged.emit()
+            self.annotationsChanged.emit()
+            return True
+
+        if kind == "synth_resize":
+            d = self._lookup_det(p["frame"], p["det_idx"])
+            if d is None:
+                return False
+            d.x1, d.y1, d.x2, d.y2 = p["prev_bbox"]
+            self.annotationsChanged.emit()
+            return True
+
+        if kind == "synth_delete":
+            frame, d, prev_ann = p["frame"], p["det"], p["prev_ann"]
+            self._raw_by_frame.setdefault(frame, []).append(d)
+            if prev_ann is not None:
+                self._store.restore_annotation(frame, d.det_idx, prev_ann)
+                self.tracksChanged.emit()
+            self.annotationsChanged.emit()
+            return True
+
+        return False
 
     # ── track-panel data ───────────────────────────────────────────────────
 

@@ -1,11 +1,27 @@
 """Entry point for the Superfly labeling tool.
 
 Usage (from repo root):
-    python -m labeler.main --video PATH --raw RAW_CSV [--ocsort OCSORT_CSV]
-                           [--overlay-video PATH] [--out-dir DIR] [--fresh]
-                           
-    example: 
-        python -m labeler.main --video r"..\..\outputs\run_88_31DPE_n005\2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4" --raw r"..\..\outputs\run_88_31DPE_n005\detections_raw.csv" --ocsort r"..\..\outputs\run_88_31DPE_n005\tracks_wide_format.csv" --fresh
+    python -m labeler.main --video PATH --raw RAW_CSV [--tracks TRACKS_CSV]
+                           [--out-dir DIR] [--fresh]
+
+    args explained:
+    --video    path to the video file to label (use the same one you ran the tracker on)
+    --raw      path to the raw detections CSV (frame,x1,y1,x2,y2,conf) from RF-DETR
+    --tracks   tracks CSV for seeded suggestions (compact_tracks.csv long-format
+               or legacy tracks_wide_format.csv — auto-detected)
+    --out-dir  override the default per-video labeling folder
+    --fresh    ignore any existing session and start clean
+    --ocsort   (deprecated alias for --tracks)
+
+    example: (run from repo root! hhhhhhh don't be like me and cd into labeler/ )
+            python -m labeler.main --video outputs/run_93_31DPE_n005/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4 --raw outputs/run_93_31DPE_n005/detections_raw.csv --tracks outputs/run_93_31DPE_n005/compact_tracks.csv --fresh
+
+The --tracks CSV may be either:
+  - long-format  (e.g. compact_tracks.csv: frame, x, y, compact_id, ...)
+  - wide-format  (legacy tracks_wide_format.csv: frame, id1, id2, ...)
+The format is auto-detected from the column header.
+
+`--ocsort` is kept as a deprecated alias for `--tracks`.
 
 Default out-dir: <repo>/data/manual_labelling/<videostem>/  (auto-created).
 Override with --out-dir for one-off runs outside this layout.
@@ -13,9 +29,8 @@ Override with --out-dir for one-off runs outside this layout.
 On startup the labeler populates the folder with:
     <video filename>            copied from --video (idempotent)
     detections_raw.csv          copied from --raw (idempotent)
-    tracks_long.csv             melted long-format from --ocsort wide
+    tracks_long.csv             long-format melt of --tracks (or copy if already long)
     metadata.json               session/source/git provenance + live counts
-    [overlay video]             only if --overlay-video given
 
 Working files written by the labeler:
     <videostem>.labeler.json           session (Ctrl+S writes here)
@@ -25,7 +40,7 @@ Working files written by the labeler:
 
 By default, the labeler auto-resumes the newer of .labeler.json /
 .labeler.autosave.json if either exists. Pass --fresh to start fresh
-(useful when you want to re-seed from a freshly-rerun OC-SORT).
+(useful when you want to re-seed from a freshly-rerun tracker).
 """
 from __future__ import annotations
 
@@ -45,10 +60,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Superfly ground-truth labeler")
     p.add_argument("--video", required=True, help="path to video file")
     p.add_argument("--raw", required=True, help="raw detection bbox CSV (frame,x1,y1,x2,y2,conf)")
+    p.add_argument("--tracks", default=None,
+                   help="optional tracks CSV for OC-SORT-style suggestions. "
+                        "Long-format (compact_tracks.csv) or legacy wide-format "
+                        "(tracks_wide_format.csv) — auto-detected.")
     p.add_argument("--ocsort", default=None,
-                   help="optional OC-SORT wide-format CSV (frame,id1,id2,...) for suggestions")
-    p.add_argument("--overlay-video", default=None,
-                   help="optional reference video (e.g. OC-SORT overlay) to copy into the folder")
+                   help="(deprecated alias for --tracks)")
     p.add_argument("--out-dir", default=None,
                    help="where to read/write session + ground-truth CSV "
                         "(default: <repo>/data/manual_labelling/<videostem>/)")
@@ -99,17 +116,21 @@ def main(argv: list[str] | None = None) -> int:
     import cv2
 
     args = parse_args(sys.argv[1:] if argv is None else argv)
+
+    # Resolve --ocsort alias into args.tracks. --tracks wins if both given.
+    if args.tracks is None and args.ocsort is not None:
+        print("warning: --ocsort is deprecated; use --tracks instead.", file=sys.stderr)
+        args.tracks = args.ocsort
+
     paths = derive_paths(args)
 
     # Populate the per-video folder with copied assets + melted long CSV.
     out_dir = Path(paths["out_dir"])
-    overlay = Path(args.overlay_video) if args.overlay_video else None
     copy_actions = populate_folder(
         out_dir,
         video_path=Path(args.video),
         raw_csv=Path(args.raw),
-        ocsort_wide_csv=Path(args.ocsort) if args.ocsort else None,
-        overlay_video=overlay,
+        tracks_csv=Path(args.tracks) if args.tracks else None,
     )
 
     # Snapshot video properties for metadata.json (cheap; same call as backend.load).
@@ -130,8 +151,7 @@ def main(argv: list[str] | None = None) -> int:
         repo_root=_repo_root(),
         video_path=Path(args.video),
         raw_csv=Path(args.raw),
-        ocsort_wide_csv=Path(args.ocsort) if args.ocsort else None,
-        overlay_video=overlay,
+        tracks_csv=Path(args.tracks) if args.tracks else None,
         video_props=video_props,
         copy_actions=copy_actions,
     )
@@ -142,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
 
     backend = LabelerBackend()
     backend.load(
-        args.video, args.raw, args.ocsort,
+        args.video, args.raw, args.tracks,
         session_path=paths["session_path"],
         autosave_path=paths["autosave_path"],
         export_path=paths["export_path"],

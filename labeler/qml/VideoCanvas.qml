@@ -24,9 +24,10 @@ Item {
     readonly property real videoDrawH: backend.videoHeight * fitScale
 
     // Find the detection record matching the currently-selected det_idx.
+    // -1 = no selection. Synthetic dets use -2, -3, ...; they're real selections.
     function selectedDet() {
         const idx = backend.selectedDetIdx
-        if (idx < 0) return null
+        if (idx === -1) return null
         for (let i = 0; i < detections.length; ++i) {
             if (detections[i].det_idx === idx) return detections[i]
         }
@@ -107,6 +108,9 @@ Item {
             const selIdx = backend.selectedDetIdx
             const trackMode = backend.mode === "track"
             const focusId = backend.focusedTrackId
+            // Selection ring is meaningless during playback (det_idx is per-frame
+            // so the ring would jitter across unrelated flies as the loop walks).
+            const showSelRing = !backend.isPlaying
 
             // Trajectory polyline for focused track (drawn first, behind markers)
             if (trackMode && root.trajectory.length > 1) {
@@ -203,7 +207,8 @@ Item {
                 }
 
                 // Selection ring (white, 2px) on top of either shape.
-                if (d.det_idx === selIdx) {
+                // Skipped during playback to avoid jitter across frames.
+                if (showSelRing && d.det_idx === selIdx) {
                     ctx.strokeStyle = "#ffffff"
                     ctx.lineWidth = 2.0
                     ctx.beginPath()
@@ -229,6 +234,7 @@ Item {
             }
             function onModeChanged() { root.refreshTrajectory() }
             function onFocusedTrackChanged() { root.refreshTrajectory() }
+            function onIsPlayingChanged() { overlay.requestPaint() }
         }
 
         onWidthChanged: requestPaint()
@@ -246,7 +252,7 @@ Item {
     // Display-only; key handling for digits/Enter/Esc lives in main.qml.
     Rectangle {
         id: inputBubble
-        visible: backend.selectedDetIdx >= 0
+        visible: backend.selectedDetIdx !== -1
         color: "#313244"
         border.color: wouldDuplicate ? "#ef4444" : "#cba6f7"
         border.width: 1

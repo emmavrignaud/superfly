@@ -30,7 +30,8 @@ ApplicationWindow {
         function isDigitKey(k) { return k >= Qt.Key_0 && k <= Qt.Key_9 }
 
         Keys.onPressed: (event) => {
-            const hasSelection = backend.selectedDetIdx >= 0
+            // -1 = no selection. Negative IDs other than -1 are synthetic dets.
+            const hasSelection = backend.selectedDetIdx !== -1
 
             // While a detection is selected, digits accumulate into the buffer.
             if (hasSelection && isDigitKey(event.key)) {
@@ -86,7 +87,14 @@ ApplicationWindow {
                 break
             case Qt.Key_Delete:
                 if (hasSelection) {
-                    backend.clear_selection_annotation()
+                    if (event.modifiers & Qt.ShiftModifier) {
+                        // Shift+Del removes the selected synthetic detection
+                        // entirely (and any annotation on it). Backend no-ops
+                        // for real dets — they're not ours to delete.
+                        backend.delete_selected_synthetic()
+                    } else {
+                        backend.clear_selection_annotation()
+                    }
                     event.accepted = true
                 }
                 break
@@ -252,8 +260,9 @@ ApplicationWindow {
                     const sel = backend.selectedDetIdx
                     const showFrame = backend.isPlaying ? backend.displayFrame : backend.currentFrame
                     const base = "frame " + (showFrame + 1) + " / " + backend.frameCount
-                    if (sel < 0) return base
-                    return base + "    selected: det #" + sel
+                    if (sel === -1) return base
+                    // Synthetic dets have negative idx (-2, -3, ...); show "synth" label.
+                    return base + "    selected: " + (sel < 0 ? "synth " + sel : "det #" + sel)
                 }
             }
         }
@@ -273,10 +282,10 @@ ApplicationWindow {
             anchors.right: parent.right
             anchors.rightMargin: 16
             anchors.verticalCenter: parent.verticalCenter
-            color: backend.selectedDetIdx < 0 ? "#6c7086" : "#cba6f7"
+            color: backend.selectedDetIdx === -1 ? "#6c7086" : "#cba6f7"
             font.family: "Segoe UI, sans-serif"
             font.pixelSize: 12
-            text: backend.selectedDetIdx < 0
+            text: backend.selectedDetIdx === -1
                 ? "click a fly to start"
                 : "type digits → Enter to commit"
         }

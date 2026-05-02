@@ -145,6 +145,60 @@ def load_ocsort_wide(csv_path: str) -> dict[int, list[tuple[int, float, float]]]
     return out
 
 
+# ID column candidates for long-format CSVs, in priority order.
+# `compact_id` wins because compact_tracks.csv (post-stitching) is the
+# preferred GT-suggestion source and uses that name.
+LONG_ID_COL_CANDIDATES = ("compact_id", "ID", "id", "stitched_id", "orig_id")
+
+
+def load_tracks_long(csv_path: str) -> dict[int, list[tuple[int, float, float]]]:
+    """Read a long-format tracks CSV `frame, x, y, <some-id-column>` and
+    return {frame: [(track_id, x, y), ...]}.
+
+    Auto-detects the ID column from LONG_ID_COL_CANDIDATES. Other columns
+    (vial_id, fps, conf, ...) are ignored.
+    """
+    df = pd.read_csv(csv_path)
+    required = {"frame", "x", "y"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"long-format tracks CSV missing columns: {sorted(missing)}")
+
+    id_col = next((c for c in LONG_ID_COL_CANDIDATES if c in df.columns), None)
+    if id_col is None:
+        raise ValueError(
+            f"long-format tracks CSV needs one of {LONG_ID_COL_CANDIDATES} "
+            f"as the track-id column; got {list(df.columns)}"
+        )
+
+    out: dict[int, list[tuple[int, float, float]]] = {}
+    for _, row in df.iterrows():
+        if pd.isna(row[id_col]) or pd.isna(row["x"]) or pd.isna(row["y"]):
+            continue
+        f = int(row["frame"])
+        out.setdefault(f, []).append((int(row[id_col]), float(row["x"]), float(row["y"])))
+    return out
+
+
+def load_tracks_any(csv_path: str) -> dict[int, list[tuple[int, float, float]]]:
+    """Auto-detect wide vs long and route to the right loader.
+
+    Wide  = columns include `id1`, `id2`, ... with `(x, y)` string cells.
+    Long  = columns include `frame, x, y` plus an id column.
+    """
+    df = pd.read_csv(csv_path, nrows=1)
+    cols = set(df.columns)
+    if {"x", "y"}.issubset(cols):
+        return load_tracks_long(csv_path)
+    if any(re.match(r"id\d+$", c) for c in cols):
+        return load_ocsort_wide(csv_path)
+    raise ValueError(
+        f"could not auto-detect tracks format in {csv_path!r}. "
+        f"Columns: {list(cols)}. Expected long-format (`frame, x, y, <id>`) "
+        f"or wide-format (`frame, id1, id2, ...`)."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Matching OC-SORT suggestions to raw detections
 # ---------------------------------------------------------------------------
@@ -263,6 +317,9 @@ class AnnotationStore:
                 self._anns[key] = Annotation(track_id=new_track_id, source=SOURCE_HUMAN)
 
     def undo(self) -> bool:
+        """Undo the most recent annotation mutation. Used by the store's own
+        unit tests; the live app routes undo through Backend (which keeps a
+        unified stack across annotation + synthetic-detection ops)."""
         if not self._undo:
             return False
         op = self._undo.pop()
@@ -271,6 +328,16 @@ class AnnotationStore:
         else:
             self._anns[op.key] = op.prev
         return True
+
+    # ---- silent setters for an external undo manager ----
+    # These bypass the internal undo stack so an outer undo system (Backend)
+    # can manage the full op log without double-recording.
+
+    def restore_annotation(self, frame: int, det_idx: int, ann: Annotation) -> None:
+        self._anns[(frame, det_idx)] = ann
+
+    def remove_annotation_silent(self, frame: int, det_idx: int) -> None:
+        self._anns.pop((frame, det_idx), None)
 
     # ---- export ----
 

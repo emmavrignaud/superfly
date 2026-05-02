@@ -20,7 +20,7 @@ import pandas as pd
 from .data_model import (
     SOURCE_HUMAN,
     SOURCE_OCSORT,
-    load_ocsort_wide,
+    load_tracks_any,
 )
 
 METADATA_FILENAME = "metadata.json"
@@ -49,10 +49,10 @@ def populate_folder(
     *,
     video_path: Path,
     raw_csv: Path,
-    ocsort_wide_csv: Optional[Path],
-    overlay_video: Optional[Path],
+    tracks_csv: Optional[Path],
 ) -> dict:
-    """Copy source assets into out_dir and melt the wide tracks CSV.
+    """Copy source assets into out_dir and produce a canonical long-format
+    `tracks_long.csv` from the input tracks CSV (wide or long, auto-detected).
 
     Returns a dict describing what was copied/written, used by metadata.json.
     """
@@ -71,18 +71,11 @@ def populate_folder(
         raw_dst.name
     )
 
-    # 3. Optional OC-SORT overlay video (opt-in; usually big)
-    if overlay_video is not None:
-        ov_dst = out_dir / overlay_video.name
-        (actions["copied"] if _copy_if_missing(overlay_video, ov_dst) else actions["skipped"]).append(
-            ov_dst.name
-        )
-
-    # 4. tracks_long.csv: melt the wide CSV into (frame, ID, x, y)
-    if ocsort_wide_csv is not None:
+    # 3. tracks_long.csv: canonical long-format version of the input tracks CSV
+    if tracks_csv is not None:
         long_dst = out_dir / TRACKS_LONG_FILENAME
         if not (long_dst.exists() and long_dst.stat().st_size > 0):
-            _write_tracks_long(ocsort_wide_csv, long_dst)
+            _write_tracks_long(tracks_csv, long_dst)
             actions["wrote"].append(long_dst.name)
         else:
             actions["skipped"].append(long_dst.name)
@@ -90,9 +83,10 @@ def populate_folder(
     return actions
 
 
-def _write_tracks_long(wide_csv: Path, long_dst: Path) -> None:
-    """Melt OC-SORT wide format → long (frame, ID, x, y)."""
-    by_frame = load_ocsort_wide(str(wide_csv))
+def _write_tracks_long(src_csv: Path, long_dst: Path) -> None:
+    """Convert a tracks CSV (wide or long) to canonical long-format
+    `frame, ID, x, y`. Format is auto-detected from the source columns."""
+    by_frame = load_tracks_any(str(src_csv))
     rows = []
     for frame in sorted(by_frame.keys()):
         for tid, x, y in by_frame[frame]:
@@ -124,8 +118,7 @@ def init_metadata(
     repo_root: Path,
     video_path: Path,
     raw_csv: Path,
-    ocsort_wide_csv: Optional[Path],
-    overlay_video: Optional[Path],
+    tracks_csv: Optional[Path],
     video_props: dict,
     copy_actions: dict,
 ) -> Path:
@@ -143,7 +136,7 @@ def init_metadata(
             existing = {}
 
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": existing.get("created_at", now),
         "last_opened_at": now,
         "last_saved_at": existing.get("last_saved_at"),
@@ -152,8 +145,7 @@ def init_metadata(
         "sources": {
             "video": str(video_path.as_posix()),
             "raw_detections_csv": str(raw_csv.as_posix()),
-            "ocsort_wide_csv": str(ocsort_wide_csv.as_posix()) if ocsort_wide_csv else None,
-            "overlay_video": str(overlay_video.as_posix()) if overlay_video else None,
+            "tracks_csv": str(tracks_csv.as_posix()) if tracks_csv else None,
         },
         "video": video_props,  # {frame_count, fps, width, height}
         "copy_actions": copy_actions,
