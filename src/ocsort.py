@@ -471,17 +471,22 @@ class OCSort(object):
         iou_threshold=0.3, delta_t=3, asso_func="iou", inertia=0.2, use_byte=False,
         brownian_pos_noise=1.0, vial_rois=None, aspect_weight=0.0, behavioral_weight=0.0,
         jump_factor=2.0, jump_iou_threshold=0.05, jump_inertia=0.05,
-        expected_count=None, w_under=15.0, w_over=2.0):
+        expected_count=None, w_under=15.0, w_over=2.0,
+        overlap_iou_scale=0.1, edge_fraction=0.1):
         """
         Sets key parameters for SORT
 
-        expected_count : total expected number of flies across all vials. When set,
+        expected_count    : total expected number of flies across all vials. When set,
             _select_prefix is applied when spawning new trackers so the active
             tracker count is steered toward this target. None = disabled (spawn all).
-        w_under : penalty per tracker below expected_count (fragmentation cost).
-            Higher = more aggressive merging / less spawning when over-counted.
-        w_over  : penalty per tracker above expected_count (false-positive cost).
-            Kept low so we prefer over-spawning slightly rather than missing flies.
+        w_under           : penalty per tracker below expected_count (fragmentation cost).
+        w_over            : penalty per tracker above expected_count (false-positive cost).
+        overlap_iou_scale : when two detections in the same vial overlap (IoU > 0),
+            their IoU contribution to the association cost matrix is multiplied by
+            this factor. 0.1 = trust IoU 10x less, letting link_cost_batch
+            (trajectory extrapolation) dominate instead.
+        edge_fraction     : detections within this fraction of the vial width/height
+            from a wall are excluded from overlap handling (wall-adjacent flies).
         """
         self.max_age = max_age
         self.min_hits = min_hits
@@ -503,6 +508,8 @@ class OCSort(object):
         self.expected_count = expected_count
         self.w_under = w_under
         self.w_over  = w_over
+        self.overlap_iou_scale = overlap_iou_scale
+        self.edge_fraction = edge_fraction
         KalmanBoxTracker.count = 0
 
         # --- Diagnostics ---
@@ -600,20 +607,52 @@ class OCSort(object):
         """
             First round of association
         """
+        # Vial membership for detections — computed once, reused for vial_mask
+        # and overlap detection below.
+        def _vial_of(cx, cy):
+            if self.vial_rois is None:
+                return None
+            for vid, (x0, y0, x1, y1) in self.vial_rois.items():
+                if x0 <= cx <= x1 and y0 <= cy <= y1:
+                    return vid
+            return None
+
+        det_vials = [
+            _vial_of((d[0] + d[2]) / 2.0, (d[1] + d[3]) / 2.0)
+            for d in dets
+        ] if len(dets) > 0 else []
+
+        # Overlap detection: flag detections that touch another detection in the
+        # same vial (IoU > 0), excluding detections near the vial wall.
+        # For flagged detections, IoU is scaled down in associate() so that
+        # link_cost_batch (trajectory extrapolation) dominates instead.
+        overlap_det_mask = np.zeros(len(dets), dtype=bool)
+        if self.vial_rois is not None and len(dets) > 1:
+            det_iou_matrix = iou_batch(dets[:, :4], dets[:, :4])
+            np.fill_diagonal(det_iou_matrix, 0.0)
+            for i in range(len(dets)):
+                for j in range(i + 1, len(dets)):
+                    if det_iou_matrix[i, j] <= 0:
+                        continue
+                    if det_vials[i] is None or det_vials[i] != det_vials[j]:
+                        continue
+                    # Exclude wall-adjacent detections
+                    x0, y0, x1, y1 = self.vial_rois[det_vials[i]]
+                    ef = self.edge_fraction
+                    w, h = x1 - x0, y1 - y0
+                    def _near_edge(d):
+                        cx = (d[0] + d[2]) / 2.0
+                        cy = (d[1] + d[3]) / 2.0
+                        return (cx - x0 < ef * w or x1 - cx < ef * w or
+                                cy - y0 < ef * h or y1 - cy < ef * h)
+                    if not _near_edge(dets[i]) and not _near_edge(dets[j]):
+                        overlap_det_mask[i] = True
+                        overlap_det_mask[j] = True
+
         # Vial-aware mask: True where detection i and tracker j are in the same vial
         # (or either is outside all vials — we don't constrain those).
         vial_mask = None
         if self.vial_rois is not None and len(dets) > 0 and len(self.trackers) > 0:
-            def _vial_of(cx, cy):
-                for vid, (x0, y0, x1, y1) in self.vial_rois.items():
-                    if x0 <= cx <= x1 and y0 <= cy <= y1:
-                        return vid
-                return None
-
-            det_vials = [
-                _vial_of((d[0] + d[2]) / 2.0, (d[1] + d[3]) / 2.0)
-                for d in dets
-            ]
             trk_vials = [
                 _vial_of(
                     (trk.last_observation[0] + trk.last_observation[2]) / 2.0,
@@ -631,7 +670,9 @@ class OCSort(object):
             vial_mask=vial_mask,
             trk_profiles=trk_profiles, trk_last_centers=trk_last_centers,
             behavioral_weight=self.behavioral_weight,
-            link_trk_states=all_trk_states)
+            link_trk_states=all_trk_states,
+            overlap_det_mask=overlap_det_mask,
+            overlap_iou_scale=self.overlap_iou_scale)
         for m in matched:
             self.trackers[m[1]].update(dets[m[0], :])
 
@@ -676,6 +717,8 @@ class OCSort(object):
             if vial_mask is not None:
                 jump_vial_mask = vial_mask[np.ix_(unmatched_dets, unmatched_trks)]
 
+            jump_overlap_mask = overlap_det_mask[unmatched_dets] if overlap_det_mask.any() else None
+
             jump_profiles     = [trk_profiles[t]     for t in unmatched_trks]
             jump_last_centers = trk_last_centers[unmatched_trks]
             jump_velocities   = velocities[unmatched_trks]
@@ -694,6 +737,8 @@ class OCSort(object):
                 trk_last_centers=jump_last_centers,
                 behavioral_weight=self.behavioral_weight,
                 link_trk_states=jump_trk_states,
+                overlap_det_mask=jump_overlap_mask,
+                overlap_iou_scale=self.overlap_iou_scale,
             )
 
             for m in jump_matched:

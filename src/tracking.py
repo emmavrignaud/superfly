@@ -45,6 +45,8 @@ def export_tracks_xy_tuple_csv_one_config(
     expected_count: int | None = None,
     w_under: float = 15.0,
     w_over: float = 2.0,
+    overlap_iou_scale: float = 0.1,
+    edge_fraction: float = 0.1,
 ) -> tuple[pd.DataFrame, object]:
     """
     Run RF-DETR + OC-SORT for one configuration and write a wide CSV where:
@@ -115,6 +117,8 @@ def export_tracks_xy_tuple_csv_one_config(
         expected_count=expected_count,
         w_under=w_under,
         w_over=w_over,
+        overlap_iou_scale=overlap_iou_scale,
+        edge_fraction=edge_fraction,
     )
 
     rows = []

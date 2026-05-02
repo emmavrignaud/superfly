@@ -21,6 +21,8 @@ tracker:
   jump_factor: 2.0                  # round-2 velocity scale + bbox inflation (how far/wide to search)
   jump_iou_threshold: 0.05          # looser IoU threshold for jump round
   jump_inertia: 0.05                # reduced OCM weight for jump round (direction less reliable after a jump)
+  overlap_iou_scale: 0.1            # IoU scale for detections touching another det in same vial; 0 = ignore IoU entirely
+  edge_fraction: 0.1                # detections within this fraction of vial w/h from a wall are excluded from overlap handling
 
 stitching:
   # Iterative Hungarian linking. Each round, candidate matches are accepted as a
