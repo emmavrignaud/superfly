@@ -1,5 +1,10 @@
 # Default pipeline parameters — override via CLI or notebook.
 
+roboflow:
+  # Roboflow hosted model id: ``<workspace>/<version>`` (same string Roboflow shows for the model).
+  # Optional override: set MODEL_ID in creds_config.yaml (same format).
+  model_id: "flies-123/1"
+
 tracker:
   # RF-DETR detections + OC-SORT association into tracklets.
   detection_confidence_rfdetr: 0.4   # RF-DETR output threshold

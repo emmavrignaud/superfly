@@ -778,7 +778,7 @@ def _build_pipeline_figure(tracker, df_wide, df_stitched, fps):
 def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
                     n_expected=None, fps=30, vial_rois=None,
                     config=None, output_dir=None,
-                    stitching_objectives=None):
+                    stitching_objectives=None, show_plots=True):
     """
     Run all diagnostics, display interactive Plotly figures, and optionally save a report.
 
@@ -794,6 +794,7 @@ def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
     config      : optional dict — the full config used for this run
     output_dir  : optional path — if given, saves HTML + markdown + PNGs inside that directory
     stitching_objectives : optional dict from compute_stitching_objectives()
+    show_plots  : bool, default True — if False, skip Plotly ``.show()`` (unattended batch).
     """
     if config is not None:
         print("=" * 55)
@@ -815,8 +816,9 @@ def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
         _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
                      dup_stats, stitching_objectives)
 
-    fig_xy.show()
-    fig_pipeline.show()
+    if show_plots:
+        fig_xy.show()
+        fig_pipeline.show()
 
 
 # ---------------------------------------------------------------------------

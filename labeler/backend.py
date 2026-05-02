@@ -139,6 +139,10 @@ class LabelerBackend(QObject):
         self._ops: list[_Op] = []
         self._OPS_CAP: int = 500
 
+        # After a click on overlapping bboxes, Tab cycles within this ordered
+        # list (smallest-area-first); cleared on frame change / global cycle.
+        self._overlap_stack: list[int] = []
+
         # When a mutation happens, mark dirty.
         self.annotationsChanged.connect(self._mark_dirty)
 
@@ -314,6 +318,7 @@ class LabelerBackend(QObject):
         target = max(0, min(self._frame_count - 1, int(frame)))
         if target == self._current_frame:
             return
+        self._overlap_stack = []
         self._current_frame = target
         self._playback_frame = target
         self._frame_tick += 1
@@ -344,6 +349,7 @@ class LabelerBackend(QObject):
                 best = (d2, d.det_idx)
         if best is None:
             return
+        self._overlap_stack = []
         self._selected_det_idx = best[1]
         self.selectionChanged.emit()
         self.prefillRequested.emit(int(track_id))
@@ -526,6 +532,7 @@ class LabelerBackend(QObject):
         self._raw_by_frame.setdefault(frame, []).append(d)
         self._push_op(_Op(kind="synth_create",
                           payload={"frame": frame, "det": d}))
+        self._overlap_stack = []
         # Trigger redraw + auto-select
         self.annotationsChanged.emit()
         self._selected_det_idx = det_idx
@@ -623,6 +630,21 @@ class LabelerBackend(QObject):
 
     # ── selection ──────────────────────────────────────────────────────────
 
+    def _hits_at_point(self, frame: int, x_video: float, y_video: float) -> list[int]:
+        """All detections whose padded bbox contains (x,y), sorted like
+        hit_test_bbox: ascending area, then centroid distance, then det_idx."""
+        dets = self._raw_by_frame.get(frame, [])
+        pad = HIT_TEST_PAD
+        scored: list[tuple[float, float, int]] = []
+        for d in dets:
+            if not (d.x1 - pad <= x_video <= d.x2 + pad and d.y1 - pad <= y_video <= d.y2 + pad):
+                continue
+            area = max(0.0, (d.x2 - d.x1)) * max(0.0, (d.y2 - d.y1))
+            cdist = (d.x - x_video) ** 2 + (d.y - y_video) ** 2
+            scored.append((area, cdist, d.det_idx))
+        scored.sort()
+        return [t[2] for t in scored]
+
     @Slot(float, float, result=int)
     def hit_test_bbox(self, x_video: float, y_video: float) -> int:
         """Return det_idx of the detection whose bbox contains (x, y) in
@@ -632,21 +654,38 @@ class LabelerBackend(QObject):
         On overlap, the bbox with the smallest area wins (more specific
         match). Ties broken by closeness of click to bbox centroid.
         """
-        # Hit-test against whichever frame is on screen (playback or static).
         frame = self._playback_frame if self._is_playing else self._current_frame
-        dets = self._raw_by_frame.get(frame, [])
-        best: Optional[tuple[float, float, int]] = None  # (area, centroid_dist, det_idx)
-        pad = HIT_TEST_PAD
-        for d in dets:
-            if not (d.x1 - pad <= x_video <= d.x2 + pad and d.y1 - pad <= y_video <= d.y2 + pad):
-                continue
-            # Tie-break by the *true* (unpadded) area so tight bboxes still win.
-            area = max(0.0, (d.x2 - d.x1)) * max(0.0, (d.y2 - d.y1))
-            cdist = (d.x - x_video) ** 2 + (d.y - y_video) ** 2
-            cand = (area, cdist, d.det_idx)
-            if best is None or cand < best:
-                best = cand
-        return -1 if best is None else best[2]
+        hits = self._hits_at_point(frame, x_video, y_video)
+        return -1 if not hits else hits[0]
+
+    @Slot(float, float)
+    def select_at_video_point(self, x_video: float, y_video: float) -> None:
+        """Select best detection under (x,y); if multiple overlap, Tab cycles
+        that pile only. Empty patch clears selection."""
+        frame = self._playback_frame if self._is_playing else self._current_frame
+        hits = self._hits_at_point(frame, x_video, y_video)
+
+        if hits:
+            if self._is_playing:
+                anchor = self._playback_frame
+                self.pause_playback()
+                if anchor != self._current_frame:
+                    self._current_frame = anchor
+                    self._frame_tick += 1
+                    self.frameTickChanged.emit()
+                    self.frameChanged.emit(anchor)
+                    self.displayFrameChanged.emit()
+
+            best = hits[0]
+            self._overlap_stack = hits if len(hits) >= 2 else []
+            if best == self._selected_det_idx:
+                return
+            self._selected_det_idx = best
+            self.selectionChanged.emit()
+            return
+
+        self._overlap_stack = []
+        self.clear_selection()
 
     @Slot(int)
     def select(self, det_idx: int) -> None:
@@ -662,6 +701,7 @@ class LabelerBackend(QObject):
                 self.frameChanged.emit(anchor)
                 self.displayFrameChanged.emit()
 
+        self._overlap_stack = []
         if det_idx == self._selected_det_idx:
             return
         # validate -1 or a real det_idx in the active (current/display) frame
@@ -676,6 +716,7 @@ class LabelerBackend(QObject):
     def clear_selection(self) -> None:
         # Esc clears the auto-follow trail too — explicit "I'm done with that fly".
         self._trail = None
+        self._overlap_stack = []
         if self._selected_det_idx != -1:
             self._selected_det_idx = -1
             self.selectionChanged.emit()
@@ -692,6 +733,19 @@ class LabelerBackend(QObject):
         dets = self._raw_by_frame.get(self._current_frame, [])
         if not dets:
             return
+        stack = self._overlap_stack
+        if (
+            len(stack) >= 2
+            and self._selected_det_idx in stack
+        ):
+            pos = stack.index(self._selected_det_idx)
+            new = stack[(pos + step) % len(stack)]
+            if new != self._selected_det_idx:
+                self._selected_det_idx = new
+                self.selectionChanged.emit()
+            return
+
+        self._overlap_stack = []
         idxs = [d.det_idx for d in dets]
         if self._selected_det_idx == -1:
             new = idxs[0] if step > 0 else idxs[-1]

@@ -66,6 +66,32 @@ ApplicationWindow {
                 backend.jump_frame(backend.frameCount - 1); event.accepted = true; break
             case Qt.Key_B:
                 canvas.showBboxes = !canvas.showBboxes; event.accepted = true; break
+            case Qt.Key_Plus:
+            case Qt.Key_Equal:
+                canvas.zoomIn()
+                event.accepted = true
+                break
+            case Qt.Key_Minus:
+            case Qt.Key_Underscore:
+                canvas.zoomOut()
+                event.accepted = true
+                break
+            case Qt.Key_0:
+                canvas.resetZoomAndPan()
+                event.accepted = true
+                break
+            case Qt.Key_L:
+                canvas.loupeVisible = !canvas.loupeVisible
+                event.accepted = true
+                break
+            case Qt.Key_QuoteLeft:
+                canvas.loupeFrozen = !canvas.loupeFrozen
+                event.accepted = true
+                break
+            // Shift+Tab is often delivered as Key_Backtab (not Tab+Shift) on Windows/Qt.
+            case Qt.Key_Backtab:
+                backend.select_prev()
+                event.accepted = true; break
             case Qt.Key_Tab:
                 if (event.modifiers & Qt.ShiftModifier) backend.select_prev()
                 else backend.select_next()
@@ -209,7 +235,7 @@ ApplicationWindow {
     ShortcutsPanel {
         id: shortcutsPanel
         width: 220
-        height: 340
+        height: 420
         anchors.right: parent.right
         anchors.bottom: hud.top
         anchors.rightMargin: 12
