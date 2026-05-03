@@ -114,6 +114,8 @@ def main():
     _t = cfg.get("tracker", {})
     _p = cfg.get("preprocessing", {})
     _r = cfg.get("roi", {})
+    _rf = cfg.get("roboflow", {})
+    inference_api_url = _rf.get("inference_api_url", "https://detect.roboflow.com")
     detection_confidence_rfdetr = _t.get("detection_confidence_rfdetr", 0.4)
     use_saved_roi = _r.get("use_saved_roi", True)
 
@@ -250,6 +252,7 @@ def main():
         output_csv=wide_csv,
         api_key=args.api_key,
         model_id=args.model_id,
+        inference_api_url=inference_api_url,
         detection_confidence_rfdetr=detection_confidence_rfdetr,
         confidence=args.confidence,
         lost_track_buffer=args.lost_track_buffer,

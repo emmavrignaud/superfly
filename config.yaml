@@ -4,6 +4,11 @@ roboflow:
   # Roboflow hosted model id: ``<workspace>/<version>`` (same string Roboflow shows for the model).
   # Optional override: set MODEL_ID in creds_config.yaml (same format).
   model_id: "flies-123/2"
+  # Base URL for InferenceHTTPClient (must match Roboflow's deploy snippet for YOUR project):
+  #   - https://serverless.roboflow.com  → Serverless Hosted API (Roboflow docs / deploy UI often show this host).
+  #   - https://detect.roboflow.com      → Older hosted inference host; only use if YOUR Roboflow example code still uses detect.roboflow.com.
+  # Rule: copy the hostname from the official inference example Roboflow gives you after deploy — do not guess.
+  inference_api_url: "https://serverless.roboflow.com"
 
 tracker:
   # RF-DETR detections + OC-SORT association into tracklets.
@@ -21,8 +26,6 @@ tracker:
   jump_factor: 2.0                  # round-2 velocity scale + bbox inflation (how far/wide to search)
   jump_iou_threshold: 0.05          # looser IoU threshold for jump round
   jump_inertia: 0.05                # reduced OCM weight for jump round (direction less reliable after a jump)
-  overlap_iou_scale: 0.1            # IoU scale for detections touching another det in same vial; 0 = ignore IoU entirely
-  edge_fraction: 0.1                # detections within this fraction of vial w/h from a wall are excluded from overlap handling
 
 stitching:
   # Iterative Hungarian linking. Each round, candidate matches are accepted as a
@@ -70,8 +73,8 @@ visualization:
   overlay_source: raw_cropped  # raw_cropped | processed — substrate for the overlay
   fps_out: 30              # output video fps
   show_ids: true           # false = crosshair only
-  tick_len: 2              # half-length of crosshair arm (px)
-  tick_thick: 0.3          # crosshair stroke (px)
+  tick_len: 2              # half-length of crosshair arm (px); integer — OpenCV stroke width
+  tick_thick: 1            # crosshair stroke (px); must be int for cv2.line
   chip_font_scale: 0.32    # OpenCV font scale for the ID
   label_offset_x: 10       # chip offset from centroid, x (px, +right)
   label_offset_y: -10      # chip offset from centroid, y (px, −up)

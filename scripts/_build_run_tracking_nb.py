@@ -76,6 +76,8 @@ with open("../config.yaml") as _f:
 _t = _cfg.get("tracker", {})
 _s = _cfg.get("stitching", {})
 _p = _cfg.get("preprocessing", {})
+_rf = _cfg.get("roboflow", {})
+inference_api_url = _rf.get("inference_api_url", "https://detect.roboflow.com")
 
 detection_confidence_rfdetr = _t.get("detection_confidence_rfdetr", 0.4)
 confidence              = _t.get("confidence", 0.1)
@@ -93,7 +95,6 @@ bg_gain                 = _p.get("bg_gain", 1.2)
 bg_white_level          = _p.get("bg_white_level", 245)
 bg_percentile           = _p.get("bg_percentile", 85.0)
 bg_sample_stride        = _p.get("bg_sample_stride", 1)
-default_end             = _p.get("default_end", 700)
 
 # Extract short label from the "N DPE/NNN" directory convention in the video path.
 _m = re.search(r'(\\d+)\\s+DPE[/\\\\](\\d+)', RAW_VIDEO)
@@ -123,6 +124,7 @@ print("Short name:", short_name)
 print(f"detection_confidence_rfdetr={detection_confidence_rfdetr}, asso_func={asso_func}")
 print(f"aspect_weight={aspect_weight}, behavioral_weight={behavioral_weight}")
 print(f"jump_factor={jump_factor}, jump_iou_threshold={jump_iou_threshold}, jump_inertia={jump_inertia}")
+print(f"Roboflow model_id: {MODEL_ID}")
 _cap = cv2.VideoCapture(RAW_VIDEO)
 save_run_params(OUTPUT_PATH, "config", {
     "video": RAW_VIDEO, "output_dir": OUTPUT_PATH, "short_name": short_name,
@@ -140,6 +142,7 @@ save_run_params(OUTPUT_PATH, "config", {
                  "jump_inertia": jump_inertia},
     "preprocessing": {"bg_gain": bg_gain, "bg_white_level": bg_white_level,
                        "bg_percentile": bg_percentile, "bg_sample_stride": bg_sample_stride},
+    "roboflow": {"model_id": MODEL_ID},
 })
 _cap.release()"""
 
@@ -164,6 +167,7 @@ df_wide, tracker = export_tracks_xy_tuple_csv_one_config(
     output_csv=WIDE_CSV,
     api_key=API_KEY,
     model_id=MODEL_ID,
+    inference_api_url=inference_api_url,
     detection_confidence_rfdetr=detection_confidence_rfdetr,
     confidence=confidence,
     lost_track_buffer=lost_track_buffer,

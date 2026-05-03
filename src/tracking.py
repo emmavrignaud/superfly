@@ -25,6 +25,7 @@ def export_tracks_xy_tuple_csv_one_config(
     output_csv: str,
     api_key: str,
     model_id: str,
+    inference_api_url: str = "https://detect.roboflow.com",
     detection_confidence_rfdetr: float = 0.4,
     confidence: float = 0.10,
     lost_track_buffer: int = 90,
@@ -45,8 +46,6 @@ def export_tracks_xy_tuple_csv_one_config(
     expected_count: int | None = None,
     w_under: float = 15.0,
     w_over: float = 2.0,
-    overlap_iou_scale: float = 0.1,
-    edge_fraction: float = 0.1,
 ) -> tuple[pd.DataFrame, object]:
     """
     Run RF-DETR + OC-SORT for one configuration and write a wide CSV where:
@@ -90,7 +89,7 @@ def export_tracks_xy_tuple_csv_one_config(
         from inference_sdk import InferenceHTTPClient
         from inference_sdk.http.entities import InferenceConfiguration
         client = InferenceHTTPClient(
-            api_url="https://serverless.roboflow.com",
+            api_url=inference_api_url.rstrip("/"),
             api_key=api_key,
         )
         client.configure(InferenceConfiguration(confidence_threshold=detection_confidence_rfdetr))
@@ -117,8 +116,6 @@ def export_tracks_xy_tuple_csv_one_config(
         expected_count=expected_count,
         w_under=w_under,
         w_over=w_over,
-        overlap_iou_scale=overlap_iou_scale,
-        edge_fraction=edge_fraction,
     )
 
     rows = []

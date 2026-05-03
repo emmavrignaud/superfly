@@ -17,7 +17,7 @@ Item {
         height / Math.max(1, backend.videoHeight)
     )
 
-    // User zoom on top of fit (1 = fit, >1 = magnify). Pinch / +/- adjust this.
+    // User zoom on top of fit (1 = fit, >1 = magnify). Wheel / +/- adjust this.
     property real zoomLevel: 1.0
 
     readonly property real screenScale: fitScale * zoomLevel
@@ -29,8 +29,9 @@ Item {
     readonly property real loupeMag: 2.5
     property real loupeVX: backend.videoWidth > 0 ? backend.videoWidth / 2 : 0
     property real loupeVY: backend.videoHeight > 0 ? backend.videoHeight / 2 : 0
-
-    property real _pinchBaseZoom: 1.0
+    // Loupe window top-left in VideoCanvas coords (follows hover).
+    property real loupePanelX: 24
+    property real loupePanelY: 24
 
     function clampZoom(z) {
         return Math.max(1.0, Math.min(8.0, z))
@@ -348,6 +349,7 @@ Item {
             }
 
             MouseArea {
+                id: videoMouse
                 anchors.fill: videoImg
                 hoverEnabled: true
                 acceptedButtons: Qt.LeftButton
@@ -372,6 +374,9 @@ Item {
                     if (!root.loupeFrozen) {
                         root.loupeVX = mouse.x / root.screenScale
                         root.loupeVY = mouse.y / root.screenScale
+                        const pr = videoMouse.mapToItem(root, mouse.x, mouse.y)
+                        root.loupePanelX = pr.x + 8
+                        root.loupePanelY = pr.y + 8
                     }
                     if (mouse.buttons & Qt.LeftButton) {
                         const dx = mouse.x - _pressX
@@ -413,32 +418,36 @@ Item {
                         backend.select_at_video_point(x_video, y_video)
                     }
                 }
-            }
-
-            // PinchHandler is not an Item (no width/height): wrap an Item for the hit region.
-            Item {
-                id: pinchCapture
-                x: videoImg.x
-                y: videoImg.y
-                width: videoImg.width
-                height: videoImg.height
-
-                PinchHandler {
-                    id: pinch
-                    target: null
-                    minimumScale: 0.25
-                    maximumScale: 8.0
-                    onActiveChanged: {
-                        if (active)
-                            root._pinchBaseZoom = root.zoomLevel
+                // Wheel over video: zoom when fitted or when Ctrl/Alt held (pinch emulation).
+                // When zoomed without modifiers, we must pan here — MouseArea sits above the
+                // Flickable content, so wheel never reaches Flickable for scrolling.
+                onWheel: (wheel) => {
+                    let dx = wheel.angleDelta.x
+                    let dy = wheel.angleDelta.y
+                    if (wheel.pixelDelta !== undefined && Math.abs(dy) < 1 && Math.abs(dx) < 1) {
+                        dx = wheel.pixelDelta.x
+                        dy = wheel.pixelDelta.y
                     }
-                    onUpdated: {
-                        const cx = pinch.centroid.position.x + pinchCapture.x
-                        const cy = pinch.centroid.position.y + pinchCapture.y
-                        const ax = flick.contentX + cx
-                        const ay = flick.contentY + cy
-                        root.zoomTowardViewportPoint(root._pinchBaseZoom * pinch.scale, ax, ay)
+                    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5)
+                        return
+
+                    const ctrl = (wheel.modifiers & Qt.ControlModifier) !== 0
+                    const alt = (wheel.modifiers & Qt.AltModifier) !== 0
+                    const fitted = root.zoomLevel <= 1.001
+
+                    if (ctrl || alt || fitted) {
+                        wheel.accepted = true
+                        const zDir = Math.abs(dy) >= Math.abs(dx) ? dy : dx
+                        const factor = zDir > 0 ? 1.1 : 1.0 / 1.1
+                        const p = videoMouse.mapToItem(flick, wheel.x, wheel.y)
+                        root.zoomTowardViewportPoint(root.zoomLevel * factor, p.x, p.y)
+                        return
                     }
+
+                    wheel.accepted = true
+                    flick.contentX -= dx / 8
+                    flick.contentY -= dy / 8
+                    flick.returnToBounds()
                 }
             }
         }
@@ -462,19 +471,18 @@ Item {
         }
     }
 
-    // Floating magnifier: follows cursor (video coords); freeze with ` key from main.qml
+    // Floating magnifier beside cursor (~40% of original 200px — 60% smaller).
     Rectangle {
         id: loupe
         visible: root.loupeVisible && backend.videoWidth > 0
-        width: 200
-        height: 200
-        radius: 6
+        width: 80
+        height: 80
+        radius: 4
         color: "#11111b"
         border.color: "#cba6f7"
         border.width: 1
-        anchors.top: parent.top
-        anchors.right: parent.right
-        anchors.margins: 10
+        x: Math.min(Math.max(8, root.loupePanelX), root.width - width - 8)
+        y: Math.min(Math.max(8, root.loupePanelY), root.height - height - 8)
         clip: true
         z: 10
 
@@ -496,11 +504,11 @@ Item {
         Text {
             anchors.left: parent.left
             anchors.bottom: parent.bottom
-            anchors.margins: 6
-            text: root.loupeFrozen ? "frozen (' key)" : "live"
+            anchors.margins: 3
+            text: root.loupeFrozen ? "off" : "on"
             color: "#6c7086"
             font.family: "JetBrains Mono, Consolas, Courier New"
-            font.pixelSize: 9
+            font.pixelSize: 7
         }
     }
 

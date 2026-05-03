@@ -24,8 +24,10 @@ Plotly ``.show()`` is OFF unless ``--show-plots`` (batch-friendly).
 
 Usage (from repo root)::
 
-    python scripts/run_batch_tracking_pipeline.py --dpe-root "path/to/24 DPE"
-
+    if you want to run on all videos from one of the DPE folders, with automatic discovery:
+    python scripts/run_batch_tracking_pipeline.py --dpe-root "2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m/24 DPE"
+    
+    else if you want to specify videos explicitly: (repeat --video for multiple)
     python scripts/run_batch_tracking_pipeline.py \\
         --video "rel/a-converted.mp4" --video "rel/b-converted.mp4"
 """
@@ -213,11 +215,13 @@ def main() -> None:
     if not api_key:
         raise SystemExit("No API_KEY in creds file and no --api-key")
 
-    model_id = creds.get("MODEL_ID") or cfg.get("roboflow", {}).get("model_id")
+    _rf = cfg.get("roboflow", {})
+    model_id = creds.get("MODEL_ID") or _rf.get("model_id")
     if not model_id:
         raise SystemExit(
             "No model id: set roboflow.model_id in config.yaml or MODEL_ID in creds_config.yaml"
         )
+    inference_api_url = _rf.get("inference_api_url", "https://detect.roboflow.com")
 
     outputs_root = (REPO_ROOT / args.outputs_root).resolve()
     jobs = allocate_jobs(raw_list, outputs_root)
@@ -310,6 +314,7 @@ def main() -> None:
                 "bg_percentile": bg_percentile,
                 "bg_sample_stride": bg_sample_stride,
             },
+            "roboflow": {"model_id": model_id},
         })
         cap.release()
 
@@ -385,17 +390,6 @@ def main() -> None:
         save_run_params(str(j.output_dir), "roi", {k: list(v) for k, v in vials.items()})
 
     v_cfg = cfg.get("visualization", {})
-    overlay_kwargs = dict(
-        fps_out=v_cfg.get("fps_out", 30),
-        show_ids=v_cfg.get("show_ids", True),
-        tick_len=v_cfg.get("tick_len", 4),
-        tick_thick=v_cfg.get("tick_thick", 1),
-        chip_font_scale=v_cfg.get("chip_font_scale", 0.32),
-        label_offset_x=v_cfg.get("label_offset_x", 10),
-        label_offset_y=v_cfg.get("label_offset_y", -10),
-        chip_pad=v_cfg.get("chip_pad", 1),
-        leader_thick=v_cfg.get("leader_thick", 1),
-    )
 
     # ── Phase B: per video — track → stitch → compact/metrics → overlays ────
     for j in jobs:
@@ -409,6 +403,7 @@ def main() -> None:
             output_csv=str(wide_csv),
             api_key=api_key,
             model_id=model_id,
+            inference_api_url=inference_api_url,
             detection_confidence_rfdetr=detection_confidence_rfdetr,
             confidence=confidence,
             lost_track_buffer=lost_track_buffer,
@@ -437,7 +432,6 @@ def main() -> None:
             video_path=str(ptv),
             det_log_csv=str(det_log_csv),
             out_mp4=str(j.output_dir / f"{j.short_name}_detections_RF-DETR.mp4"),
-            fps_out=v_cfg.get("fps_out", 30),
         )
 
         run_diagnostics(
@@ -539,7 +533,6 @@ def main() -> None:
             out_mp4=str(raw_overlay_mp4),
             vial_rois=vial_rois,
             det_log_csv=str(det_log_csv) if det_log_csv.exists() else None,
-            **overlay_kwargs,
         )
         render_vial_overlay_video(
             video_path=overlay_video,
@@ -547,7 +540,6 @@ def main() -> None:
             out_mp4=str(overlay_mp4),
             vial_rois=vial_rois,
             det_log_csv=str(det_log_csv) if det_log_csv.exists() else None,
-            **overlay_kwargs,
         )
         save_run_params(str(j.output_dir), "outputs", {
             "raw_overlay": str(raw_overlay_mp4),
