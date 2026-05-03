@@ -3,7 +3,7 @@
   "video_path": "outputs/run_84_31DPE_n005/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4",
   "raw_csv": "outputs/run_84_31DPE_n005/detections_raw.csv",
   "ocsort_csv": "outputs/run_84_31DPE_n005/compact_tracks.csv",
-  "current_frame": 91,
+  "current_frame": 84,
   "current_mode": "track",
   "annotations": {
     "0:26": {
@@ -10750,10 +10750,6 @@
       "track_id": 9,
       "source": "ocsort"
     },
-    "84:35": {
-      "track_id": 63,
-      "source": "ocsort"
-    },
     "84:16": {
       "track_id": 35,
       "source": "ocsort"
@@ -10972,10 +10968,6 @@
     },
     "86:12": {
       "track_id": 35,
-      "source": "ocsort"
-    },
-    "86:29": {
-      "track_id": 62,
       "source": "ocsort"
     },
     "86:20": {
@@ -11274,10 +11266,6 @@
       "track_id": 55,
       "source": "ocsort"
     },
-    "88:32": {
-      "track_id": 62,
-      "source": "ocsort"
-    },
     "88:19": {
       "track_id": 40,
       "source": "ocsort"
@@ -11360,10 +11348,6 @@
     },
     "89:21": {
       "track_id": 40,
-      "source": "ocsort"
-    },
-    "89:34": {
-      "track_id": 62,
       "source": "ocsort"
     },
     "89:5": {
@@ -11536,10 +11520,6 @@
     },
     "90:16": {
       "track_id": 35,
-      "source": "ocsort"
-    },
-    "90:34": {
-      "track_id": 62,
       "source": "ocsort"
     },
     "90:5": {
