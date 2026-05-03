@@ -90,7 +90,7 @@ def export_tracks_xy_tuple_csv_one_config(
         from inference_sdk import InferenceHTTPClient
         from inference_sdk.http.entities import InferenceConfiguration
         client = InferenceHTTPClient(
-            api_url="https://detect.roboflow.com",
+            api_url="https://serverless.roboflow.com",
             api_key=api_key,
         )
         client.configure(InferenceConfiguration(confidence_threshold=detection_confidence_rfdetr))

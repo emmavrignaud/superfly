@@ -103,11 +103,13 @@ Item {
     }
 
     function refreshTrajectory() {
-        if (backend.mode === "track" && backend.focusedTrackId > 0) {
-            root.trajectory = backend.track_positions(backend.focusedTrackId)
-        } else {
-            root.trajectory = []
-        }
+        const newTraj = (backend.mode === "track" && backend.focusedTrackId > 0)
+                        ? backend.track_positions(backend.focusedTrackId)
+                        : []
+        // Only reassign + repaint if something actually changed (length or
+        // any coordinate differs). This avoids flicker on unrelated signals.
+        // But always repaint if the arrays differ in length.
+        root.trajectory = newTraj
         overlay.requestPaint()
     }
 
@@ -167,8 +169,6 @@ Item {
                     const showSelRing = !backend.isPlaying
 
                     if (trackMode && root.trajectory.length > 1) {
-                        ctx.lineWidth = 1.5
-                        ctx.globalAlpha = 0.6
                         let trajColor = "#cba6f7"
                         for (let i = 0; i < dets.length; ++i) {
                             if (dets[i].track_id === focusId) {
@@ -176,12 +176,47 @@ Item {
                                 break
                             }
                         }
-                        ctx.strokeStyle = trajColor
-                        ctx.beginPath()
-                        ctx.moveTo(root.trajectory[0].x * sx, root.trajectory[0].y * sx)
-                        for (let i = 1; i < root.trajectory.length; ++i)
-                            ctx.lineTo(root.trajectory[i].x * sx, root.trajectory[i].y * sx)
-                        ctx.stroke()
+
+                        const segS = backend.segStart
+                        const segE = backend.segEnd
+                        const hasSegRange = segS >= 0 && segE >= 0
+                        const segLo = hasSegRange ? Math.min(segS, segE) : -1
+                        const segHi = hasSegRange ? Math.max(segS, segE) : -1
+
+                        // Draw trajectory segment-by-segment so highlighted
+                        // range can use a distinct colour.
+                        ctx.lineWidth = 1.5
+                        for (let i = 0; i < root.trajectory.length - 1; ++i) {
+                            const f1 = root.trajectory[i].frame
+                            const f2 = root.trajectory[i + 1].frame
+                            const inSeg = hasSegRange &&
+                                          f1 >= segLo && f2 <= segHi
+                            ctx.strokeStyle = inSeg ? "#a6e3a1" : trajColor
+                            ctx.globalAlpha  = inSeg ? 0.9 : 0.6
+                            ctx.beginPath()
+                            ctx.moveTo(root.trajectory[i].x * sx,
+                                       root.trajectory[i].y * sx)
+                            ctx.lineTo(root.trajectory[i + 1].x * sx,
+                                       root.trajectory[i + 1].y * sx)
+                            ctx.stroke()
+                        }
+
+                        // Segment endpoint markers (green filled circles).
+                        if (segS >= 0) {
+                            for (let i = 0; i < root.trajectory.length; ++i) {
+                                const f = root.trajectory[i].frame
+                                if (f === segS || (segE >= 0 && f === segE)) {
+                                    ctx.fillStyle = "#a6e3a1"
+                                    ctx.globalAlpha = 1.0
+                                    ctx.beginPath()
+                                    ctx.arc(root.trajectory[i].x * sx,
+                                            root.trajectory[i].y * sx,
+                                            5, 0, 2 * Math.PI)
+                                    ctx.fill()
+                                }
+                            }
+                        }
+
                         ctx.globalAlpha = 1.0
                     }
 
@@ -286,6 +321,12 @@ Item {
                     function onIsPlayingChanged() {
                         overlay.requestPaint()
                     }
+                    function onSegmentChanged() {
+                        overlay.requestPaint()
+                    }
+                    function onCropModeChanged() {
+                        overlay.requestPaint()
+                    }
                 }
 
                 onWidthChanged: requestPaint()
@@ -311,17 +352,63 @@ Item {
                 hoverEnabled: true
                 acceptedButtons: Qt.LeftButton
                 preventStealing: false
+                cursorShape: backend.cropMode ? Qt.CrossCursor : Qt.ArrowCursor
+
+                // Drag tracking state (managed purely in QML; backend notified
+                // only once a real drag exceeds the threshold).
+                property bool _dragActive: false
+                property real _pressX: 0
+                property real _pressY: 0
+                // Threshold in screen-pixels before we commit to a drag.
+                readonly property real _dragThreshold: 5
+
+                onPressed: (mouse) => {
+                    _pressX = mouse.x
+                    _pressY = mouse.y
+                    _dragActive = false
+                }
+
                 onPositionChanged: (mouse) => {
                     if (!root.loupeFrozen) {
                         root.loupeVX = mouse.x / root.screenScale
                         root.loupeVY = mouse.y / root.screenScale
                     }
+                    if (mouse.buttons & Qt.LeftButton) {
+                        const dx = mouse.x - _pressX
+                        const dy = mouse.y - _pressY
+                        if (!_dragActive && Math.sqrt(dx*dx + dy*dy) > _dragThreshold) {
+                            const pvx = _pressX / root.screenScale
+                            const pvy = _pressY / root.screenScale
+                            if (backend.start_drag(pvx, pvy))
+                                _dragActive = true
+                        }
+                        if (_dragActive)
+                            backend.update_drag(mouse.x / root.screenScale,
+                                                mouse.y / root.screenScale)
+                    }
                 }
-                onClicked: (mouse) => {
+
+                onReleased: (mouse) => {
                     const x_video = mouse.x / root.screenScale
                     const y_video = mouse.y / root.screenScale
+
+                    if (_dragActive) {
+                        backend.finish_drag(x_video, y_video)
+                        _dragActive = false
+                        return
+                    }
+
+                    // It was a click — handle normally.
                     if (mouse.modifiers & Qt.ShiftModifier) {
                         backend.create_synthetic_at(x_video, y_video)
+                    } else if (backend.cropMode) {
+                        // Crop mode: every click sets a segment endpoint.
+                        // Use a generous threshold (15 px) since that's the
+                        // only thing clicks do in this mode.
+                        const nearFrame = backend.nearest_trajectory_frame(
+                                              x_video, y_video, 15)
+                        if (nearFrame >= 0)
+                            backend.add_segment_point(nearFrame)
                     } else {
                         backend.select_at_video_point(x_video, y_video)
                     }
@@ -364,6 +451,14 @@ Item {
         target: backend
         function onVideoSizeChanged() {
             overlay.requestPaint()
+        }
+        // Also refresh trajectory at root level — belt-and-suspenders against
+        // any case where the nested Canvas Connections block misses the signal.
+        function onAnnotationsChanged() {
+            root.refreshTrajectory()
+        }
+        function onTracksChanged() {
+            root.refreshTrajectory()
         }
     }
 

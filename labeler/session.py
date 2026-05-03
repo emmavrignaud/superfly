@@ -20,7 +20,7 @@ from .data_model import (
 )
 
 
-SESSION_VERSION = 2  # bumped from 1 to add synthetic_detections
+SESSION_VERSION = 3  # bumped from 2 to add confirmed_tracks
 
 
 def _key_to_str(frame: int, det_idx: int) -> str:
@@ -42,6 +42,7 @@ def save_session(
     current_mode: str,
     store: AnnotationStore,
     synthetic_detections: Optional[list[Detection]] = None,
+    confirmed_tracks: Optional[list[int]] = None,
 ) -> None:
     payload = {
         "version": SESSION_VERSION,
@@ -62,6 +63,7 @@ def save_session(
             }
             for d in (synthetic_detections or [])
         ],
+        "confirmed_tracks": list(confirmed_tracks or []),
     }
     Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -73,10 +75,11 @@ def load_session(path: str) -> dict:
     """
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     v = payload.get("version")
-    if v not in (1, 2):
-        raise ValueError(f"unsupported session version: {v!r} (expected 1 or 2)")
-    # v1 sessions just lack synthetic_detections — that's fine, fill in empty.
+    if v not in (1, 2, 3):
+        raise ValueError(f"unsupported session version: {v!r} (expected 1, 2, or 3)")
+    # Older sessions just lack these keys — fill in defaults.
     payload.setdefault("synthetic_detections", [])
+    payload.setdefault("confirmed_tracks", [])
     return payload
 
 

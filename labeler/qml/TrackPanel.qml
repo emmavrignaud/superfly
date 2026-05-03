@@ -14,6 +14,7 @@ Rectangle {
     Connections {
         target: backend
         function onTracksChanged() { root.refresh() }
+        function onConfirmedTracksChanged() { root.refresh() }
         function onFrameChanged(_) { /* counts are global, no refresh needed */ }
     }
     Component.onCompleted: refresh()
@@ -65,9 +66,11 @@ Rectangle {
 
                 Rectangle {
                     anchors.fill: parent
-                    color: parent.isFocused ? "#313244" : "transparent"
-                    border.color: parent.isFocused ? "#cba6f7" : "transparent"
-                    border.width: parent.isFocused ? 1 : 0
+                    color: modelData.confirmed ? "#1a2e1a"
+                           : (parent.isFocused ? "#313244" : "transparent")
+                    border.color: modelData.confirmed ? "#a6e3a1"
+                                  : (parent.isFocused ? "#cba6f7" : "transparent")
+                    border.width: (modelData.confirmed || parent.isFocused) ? 1 : 0
                     radius: 3
                 }
 

@@ -3,7 +3,7 @@
 roboflow:
   # Roboflow hosted model id: ``<workspace>/<version>`` (same string Roboflow shows for the model).
   # Optional override: set MODEL_ID in creds_config.yaml (same format).
-  model_id: "flies-123/1"
+  model_id: "flies-123/2"
 
 tracker:
   # RF-DETR detections + OC-SORT association into tracklets.

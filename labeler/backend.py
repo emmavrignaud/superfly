@@ -63,6 +63,7 @@ class _Op:
     carries kind-specific state needed to undo it."""
     kind: str           # "ann_assign" | "ann_clear" | "synth_create"
                         # | "synth_resize" | "synth_delete"
+                        # | "det_move" | "bulk_assign"
     payload: dict = field(default_factory=dict)
 
 
@@ -83,6 +84,9 @@ class LabelerBackend(QObject):
     modeChanged = Signal()            # frame <-> track
     focusedTrackChanged = Signal()    # which track is the Track Mode focus
     prefillRequested = Signal(int)    # auto-follow: prefill the bubble with this track id
+    segmentChanged = Signal()          # seg_start / seg_end changed
+    cropModeChanged = Signal()         # segment-crop mode toggled
+    confirmedTracksChanged = Signal()  # confirmed set changed
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -143,6 +147,24 @@ class LabelerBackend(QObject):
         # list (smallest-area-first); cleared on frame change / global cycle.
         self._overlap_stack: list[int] = []
 
+        # Drag state: moving a detection centroid by click+drag.
+        # `_drag_orig` holds (x, y, x1, y1, x2, y2) from before the drag so
+        # finish_drag can push a reversible undo op.
+        self._drag_det_idx: int = -1
+        self._drag_orig: Optional[tuple] = None
+
+        # Segment selection (track mode only): two clicked trajectory frames
+        # define a range; bulk_assign_segment re-IDs all detections in the range.
+        self._seg_start: Optional[int] = None
+        self._seg_end: Optional[int] = None
+
+        # Segment-crop mode: while active, canvas clicks set segment endpoints
+        # instead of selecting detections. Activated by Ctrl+Shift+C.
+        self._crop_mode: bool = False
+
+        # Confirmed tracks: user has reviewed and locked in this fly.
+        self._confirmed_tracks: set[int] = set()
+
         # When a mutation happens, mark dirty.
         self.annotationsChanged.connect(self._mark_dirty)
 
@@ -199,6 +221,9 @@ class LabelerBackend(QObject):
                 self._raw_by_frame.setdefault(d.frame, []).append(d)
                 if d.det_idx <= self._next_synth_idx:
                     self._next_synth_idx = d.det_idx - 1
+            self._confirmed_tracks = set(
+                int(t) for t in payload.get("confirmed_tracks", [])
+            )
 
         self._store = AnnotationStore(self._raw_by_frame, seed=seed)
         self._dirty = False
@@ -287,6 +312,21 @@ class LabelerBackend(QObject):
             return 0
         span = max(1, int(round(self._fps)))
         return min(self._frame_count - 1, self._current_frame + span)
+
+    @Property(int, notify=segmentChanged)
+    def segStart(self) -> int:
+        """First selected trajectory frame, or -1 if no segment is active."""
+        return self._seg_start if self._seg_start is not None else -1
+
+    @Property(int, notify=segmentChanged)
+    def segEnd(self) -> int:
+        """Second selected trajectory frame, or -1 if segment not yet complete."""
+        return self._seg_end if self._seg_end is not None else -1
+
+    @Property(bool, notify=cropModeChanged)
+    def cropMode(self) -> bool:
+        """True while segment-crop mode is active (Ctrl+Shift+C in track mode)."""
+        return self._crop_mode
 
     @Property(int, notify=tracksChanged)
     def nextFreeTrackId(self) -> int:
@@ -466,9 +506,8 @@ class LabelerBackend(QObject):
         for (frame, det_idx), ann in self._store.all().items():
             if ann.track_id != tid:
                 continue
-            try:
-                d = self._raw_by_frame[frame][det_idx]
-            except (KeyError, IndexError):
+            d = self._lookup_det(frame, det_idx)
+            if d is None:
                 continue
             out.append({"frame": frame, "x": d.x, "y": d.y})
         out.sort(key=lambda r: r["frame"])
@@ -479,6 +518,10 @@ class LabelerBackend(QObject):
             return
         self._mode = new_mode
         self._trail = None  # mode change ends any in-progress follow trail
+        self.clear_segment()
+        if self._crop_mode:
+            self._crop_mode = False
+            self.cropModeChanged.emit()
         self.modeChanged.emit()
 
     def _sorted_track_ids(self) -> list[int]:
@@ -506,6 +549,191 @@ class LabelerBackend(QObject):
             ws.sort(); hs.sort()
             self._median_w = max(6.0, float(ws[len(ws) // 2]))
             self._median_h = max(6.0, float(hs[len(hs) // 2]))
+
+    # ── drag to reposition centroid ───────────────────────────────────────
+
+    @Slot(float, float, result=bool)
+    def start_drag(self, x_video: float, y_video: float) -> bool:
+        """Hit-test (x, y); if a detection is found start tracking it for drag.
+        Selects the detection. Returns True if drag will proceed."""
+        frame = self._playback_frame if self._is_playing else self._current_frame
+        hits = self._hits_at_point(frame, x_video, y_video)
+        if not hits:
+            self._drag_det_idx = -1
+            self._drag_orig = None
+            return False
+        det_idx = hits[0]
+        d = self._lookup_det(frame, det_idx)
+        if d is None:
+            self._drag_det_idx = -1
+            self._drag_orig = None
+            return False
+        self._drag_det_idx = det_idx
+        self._drag_orig = (d.x, d.y, d.x1, d.y1, d.x2, d.y2)
+        if det_idx != self._selected_det_idx:
+            self._selected_det_idx = det_idx
+            self.selectionChanged.emit()
+        return True
+
+    @Slot(float, float)
+    def update_drag(self, x_video: float, y_video: float) -> None:
+        """Move the dragged detection centroid to (x_video, y_video).
+        Bbox size is preserved; only position shifts."""
+        if self._drag_det_idx == -1:
+            return
+        frame = self._current_frame
+        d = self._lookup_det(frame, self._drag_det_idx)
+        if d is None:
+            self._drag_det_idx = -1
+            return
+        dx = x_video - d.x
+        dy = y_video - d.y
+        d.x = float(x_video)
+        d.y = float(y_video)
+        d.x1 += dx
+        d.x2 += dx
+        d.y1 += dy
+        d.y2 += dy
+        self.annotationsChanged.emit()
+
+    @Slot(float, float)
+    def finish_drag(self, x_video: float, y_video: float) -> None:
+        """Finalize a drag: apply final position and push a reversible undo op."""
+        if self._drag_det_idx == -1 or self._drag_orig is None:
+            self._drag_det_idx = -1
+            self._drag_orig = None
+            return
+        self.update_drag(x_video, y_video)
+        self._push_op(_Op(kind="det_move", payload={
+            "frame": self._current_frame,
+            "det_idx": self._drag_det_idx,
+            "prev": self._drag_orig,
+        }))
+        self._drag_det_idx = -1
+        self._drag_orig = None
+
+    # ── segment selection (track mode) ────────────────────────────────────
+
+    @Slot(float, float, float, result=int)
+    def nearest_trajectory_frame(self, x_video: float, y_video: float,
+                                  threshold: float) -> int:
+        """Return the frame of the trajectory point on the focused track that
+        is closest to (x_video, y_video) and within `threshold` px, or -1.
+
+        Two hard gates are applied before picking a winner:
+        1. Temporal window — only points within ±1 s of current_frame are
+           eligible. This prevents snapping to the same spatial position
+           occupied at a completely different time (back-and-forth paths or
+           overlapping trajectory segments).
+        2. Spatial threshold — points further than `threshold` px are excluded.
+
+        Among survivors the spatially closest point wins.
+        """
+        if self._focused_track_id <= 0:
+            return -1
+        positions = self.track_positions(self._focused_track_id)
+        threshold_sq = float(threshold) ** 2
+        current = self._current_frame
+        # ±1 s temporal window — mirrors the existing playback context loop.
+        half_window = max(15, int(round(self._fps)))
+        best_frame = -1
+        best_dist2 = float("inf")
+        for p in positions:
+            if abs(p["frame"] - current) > half_window:
+                continue                          # outside time window
+            d2 = (p["x"] - x_video) ** 2 + (p["y"] - y_video) ** 2
+            if d2 > threshold_sq:
+                continue                          # too far spatially
+            if d2 < best_dist2:
+                best_dist2 = d2
+                best_frame = p["frame"]
+        return best_frame
+
+    @Slot(int)
+    def add_segment_point(self, frame: int) -> None:
+        """Click-select a segment endpoint on the focused track's trajectory.
+        First call sets seg_start; second sets seg_end (values auto-ordered).
+        Third call restarts the selection."""
+        if frame < 0:
+            return
+        if self._seg_start is None:
+            self._seg_start = frame
+        elif self._seg_end is None:
+            self._seg_end = frame
+            # keep lo/hi order for canvas logic convenience
+            if self._seg_start > self._seg_end:
+                self._seg_start, self._seg_end = self._seg_end, self._seg_start
+        else:
+            # Third click restarts
+            self._seg_start = frame
+            self._seg_end = None
+        self.segmentChanged.emit()
+
+    @Slot()
+    def clear_segment(self) -> None:
+        if self._seg_start is not None or self._seg_end is not None:
+            self._seg_start = None
+            self._seg_end = None
+            self.segmentChanged.emit()
+
+    @Slot()
+    def toggle_crop_mode(self) -> None:
+        """Enter / exit segment-crop mode. Only works in track mode.
+        Exiting also clears any in-progress segment selection."""
+        if self._mode != "track":
+            return
+        self._crop_mode = not self._crop_mode
+        if not self._crop_mode:
+            self.clear_segment()
+        self.cropModeChanged.emit()
+
+    @Slot(int)
+    def bulk_assign_segment(self, track_id: int) -> None:
+        """Re-ID every detection in [seg_start, seg_end] on the focused track
+        to `track_id`. Reversible via Ctrl+Z. Clears the segment after."""
+        if self._store is None or self._seg_start is None or self._seg_end is None:
+            return
+        if track_id <= 0 or self._focused_track_id <= 0:
+            return
+        lo = min(self._seg_start, self._seg_end)
+        hi = max(self._seg_start, self._seg_end)
+        tid = int(track_id)
+        focused = self._focused_track_id
+        ops_payload: list[dict] = []
+        for (frame, det_idx), ann in list(self._store.all().items()):
+            if not (lo <= frame <= hi):
+                continue
+            if ann.track_id != focused:
+                continue
+            d = self._lookup_det(frame, det_idx)
+            source = SOURCE_HUMAN_SYNTH if (d is not None and d.is_synthetic) else SOURCE_HUMAN
+            ops_payload.append({"frame": frame, "det_idx": det_idx, "prev_ann": ann})
+            self._store.restore_annotation(frame, det_idx,
+                                           Annotation(track_id=tid, source=source))
+        if ops_payload:
+            self._push_op(_Op(kind="bulk_assign", payload={"ops": ops_payload}))
+            self.annotationsChanged.emit()
+            self.tracksChanged.emit()
+        self.clear_segment()
+        if self._crop_mode:
+            self._crop_mode = False
+            self.cropModeChanged.emit()
+
+    # ── confirm / lock ────────────────────────────────────────────────────
+
+    @Slot(int)
+    def toggle_confirm_track(self, track_id: int) -> None:
+        """Toggle the 'confirmed' state for a track. Confirmed tracks get a
+        green highlight in the TRACKS panel and are saved in the session."""
+        tid = int(track_id)
+        if tid <= 0:
+            return
+        if tid in self._confirmed_tracks:
+            self._confirmed_tracks.discard(tid)
+        else:
+            self._confirmed_tracks.add(tid)
+        self.confirmedTracksChanged.emit()
+        self.tracksChanged.emit()
 
     # ── synthetic detections (Shift+Click) ─────────────────────────────────
 
@@ -872,6 +1100,24 @@ class LabelerBackend(QObject):
             self.annotationsChanged.emit()
             return True
 
+        if kind == "det_move":
+            d = self._lookup_det(p["frame"], p["det_idx"])
+            if d is None:
+                return False
+            x, y, x1, y1, x2, y2 = p["prev"]
+            d.x, d.y = x, y
+            d.x1, d.y1, d.x2, d.y2 = x1, y1, x2, y2
+            self.annotationsChanged.emit()
+            return True
+
+        if kind == "bulk_assign":
+            for item in p["ops"]:
+                frame, det_idx, prev_ann = item["frame"], item["det_idx"], item["prev_ann"]
+                self._store.restore_annotation(frame, det_idx, prev_ann)
+            self.annotationsChanged.emit()
+            self.tracksChanged.emit()
+            return True
+
         return False
 
     # ── track-panel data ───────────────────────────────────────────────────
@@ -912,6 +1158,7 @@ class LabelerBackend(QObject):
                 "color": track_color_hex(tid),
                 "count": total,
                 "human_count": human,
+                "confirmed": tid in self._confirmed_tracks,
             })
         return out
 
@@ -940,6 +1187,7 @@ class LabelerBackend(QObject):
             current_mode=self._mode,
             store=self._store,
             synthetic_detections=synths,
+            confirmed_tracks=list(self._confirmed_tracks),
         )
 
     @Slot()

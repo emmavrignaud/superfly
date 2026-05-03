@@ -33,8 +33,11 @@ ApplicationWindow {
             // -1 = no selection. Negative IDs other than -1 are synthetic dets.
             const hasSelection = backend.selectedDetIdx !== -1
 
-            // While a detection is selected, digits accumulate into the buffer.
-            if (hasSelection && isDigitKey(event.key)) {
+            // Digits accumulate when a detection is selected OR when a segment
+            // range is active (ready for bulk-assign).
+            const hasSegment = backend.mode === "track"
+                               && backend.segStart >= 0 && backend.segEnd >= 0
+            if ((hasSelection || hasSegment) && isDigitKey(event.key)) {
                 canvas.pendingInput += String.fromCharCode(event.key)
                 event.accepted = true
                 return
@@ -97,16 +100,23 @@ ApplicationWindow {
                 else backend.select_next()
                 event.accepted = true; break
             case Qt.Key_Backspace:
-                if (hasSelection && canvas.pendingInput.length > 0) {
+                if (canvas.pendingInput.length > 0) {
                     canvas.pendingInput = canvas.pendingInput.slice(0, -1)
                     event.accepted = true
                 }
                 break
             case Qt.Key_Return:
             case Qt.Key_Enter:
-                if (hasSelection && canvas.pendingInput.length > 0) {
-                    const tid = parseInt(canvas.pendingInput, 10)
-                    if (!isNaN(tid) && tid > 0) backend.assign_to_selection(tid)
+                if (canvas.pendingInput.length > 0) {
+                    const tid2 = parseInt(canvas.pendingInput, 10)
+                    if (!isNaN(tid2) && tid2 > 0) {
+                        if (backend.mode === "track"
+                                && backend.segStart >= 0 && backend.segEnd >= 0) {
+                            backend.bulk_assign_segment(tid2)
+                        } else if (hasSelection) {
+                            backend.assign_to_selection(tid2)
+                        }
+                    }
                     canvas.pendingInput = ""
                     event.accepted = true
                 }
@@ -126,6 +136,8 @@ ApplicationWindow {
                 break
             case Qt.Key_Escape:
                 if (canvas.pendingInput.length > 0) canvas.pendingInput = ""
+                else if (backend.cropMode) backend.toggle_crop_mode()
+                else if (backend.segStart >= 0) backend.clear_segment()
                 else backend.clear_selection()
                 event.accepted = true; break
             case Qt.Key_Z:
@@ -152,6 +164,20 @@ ApplicationWindow {
                 // Toggle Frame <-> Track Mode.
                 backend.toggle_track_mode()
                 event.accepted = true
+                break
+            case Qt.Key_C:
+                if ((event.modifiers & Qt.ControlModifier)
+                        && (event.modifiers & Qt.ShiftModifier)) {
+                    // Ctrl+Shift+C — toggle segment-crop mode (track mode only).
+                    if (backend.mode === "track") {
+                        backend.toggle_crop_mode()
+                        event.accepted = true
+                    }
+                } else if (backend.mode === "track" && backend.focusedTrackId > 0) {
+                    // C alone — confirm / lock the focused track.
+                    backend.toggle_confirm_track(backend.focusedTrackId)
+                    event.accepted = true
+                }
                 break
             case Qt.Key_Up:
                 if (backend.mode === "track") {
@@ -256,16 +282,29 @@ ApplicationWindow {
             anchors.verticalCenter: parent.verticalCenter
             spacing: 12
 
-            // Mode indicator (FRAME / TRACK #N).
+            // Mode indicator (FRAME / TRACK #N [confirmed]).
             Text {
                 anchors.verticalCenter: parent.verticalCenter
-                color: backend.mode === "track" ? "#cba6f7" : "#a6adc8"
+                color: backend.cropMode ? "#a6e3a1"
+                       : (backend.mode === "track" ? "#cba6f7" : "#a6adc8")
                 font.family: "JetBrains Mono, Consolas, Courier New"
                 font.pixelSize: 13
                 font.bold: true
-                text: backend.mode === "track"
-                      ? ("MODE: TRACK #" + backend.focusedTrackId)
-                      : "MODE: FRAME"
+                text: {
+                    if (backend.mode !== "track") return "MODE: FRAME"
+                    let s = "MODE: TRACK #" + backend.focusedTrackId
+                    if (backend.cropMode) {
+                        s += "  CROP"
+                        if (backend.segStart >= 0) {
+                            s += " [" + (backend.segStart + 1)
+                            if (backend.segEnd >= 0) s += "→" + (backend.segEnd + 1)
+                            s += "]"
+                        } else {
+                            s += " — click start point"
+                        }
+                    }
+                    return s
+                }
             }
 
             // Tiny play/pause indicator (mauve when playing, dim when paused).
