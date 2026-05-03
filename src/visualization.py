@@ -35,9 +35,12 @@ def _resolve_overlay_source(video_path: str) -> tuple[str, dict | None]:
 
     - ``overlay_source: processed`` (or unknown / fallback): returns the caller's
       path unchanged; caller reads frames as-is (current behavior).
-    - ``overlay_source: raw_cropped``: strips the ``_pp`` suffix from the input
-      path to get the raw video, looks up ``crop_params`` in roi_library.json
-      by raw-video stem, and returns both so the caller can seek+crop.
+    - ``overlay_source: raw_cropped``:
+        If ``video_path`` points to an existing ``*_raw_cropped`` file, returns it
+        with ``crop_params=None`` (already cropped on disk).
+        Otherwise strips a ``_pp`` suffix when present, resolves the raw path,
+        loads ``crop_params`` from roi_library.json when needed, and returns the
+        path to decode plus crop metadata.
 
     Any missing file / missing library entry falls back silently (with a warning)
     to the processed substrate — visualization must never crash the pipeline.
@@ -50,7 +53,11 @@ def _resolve_overlay_source(video_path: str) -> tuple[str, dict | None]:
         print(f"[visualization] unknown overlay_source {mode!r} — using processed substrate.")
         return video_path, None
 
-    p = Path(video_path)
+    p = Path(video_path).expanduser()
+    # Saved cropped-raw artifact: same coordinate system as *_pp; no library crop pass.
+    if p.is_file() and p.stem.endswith("_raw_cropped"):
+        return str(p.resolve()), None
+
     raw_path = p.with_name(p.stem[:-3]).with_suffix(p.suffix) if p.stem.endswith("_pp") else p
 
     if not raw_path.exists():
@@ -69,7 +76,11 @@ def _resolve_overlay_source(video_path: str) -> tuple[str, dict | None]:
         print(f"[visualization] could not read roi_library.json ({exc}) — falling back to processed substrate.")
         return video_path, None
 
-    entry = library.get(raw_path.stem)
+    stem = raw_path.stem
+    entry = library.get(stem)
+    # roi_library keys use the main clip stem (e.g. ``…-converted``); overlay may pass ``…-converted_raw_cropped``.
+    if (not entry or "preprocessing" not in entry) and stem.endswith("_raw_cropped"):
+        entry = library.get(stem.removesuffix("_raw_cropped"))
     if not entry or "preprocessing" not in entry:
         print(f"[visualization] no preprocessing crop_params for stem {raw_path.stem!r} — falling back to processed substrate.")
         return video_path, None

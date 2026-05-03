@@ -63,8 +63,6 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
                    help="Tracklets shorter than this are excluded from feature scale computation")
 
     p.add_argument("--fps-out", type=int, default=v.get("fps_out", 30))
-    p.add_argument("--overlay-tick-len", type=int, default=v.get("tick_len", 4),
-                   help="Half-length of crosshair arms at each fly (pixels)")
 
     return p
 
@@ -79,19 +77,6 @@ def main():
     from src.stitching import wide_to_long, build_tracklets, stitch
     from src.roi import assign_vials_and_compact_ids
     from src.visualization import render_vial_overlay_video, render_raw_overlay_video
-
-    v_cfg = cfg.get("visualization", {})
-    overlay_kwargs = dict(
-        fps_out=args.fps_out,
-        show_ids=v_cfg.get("show_ids", True),
-        tick_len=args.overlay_tick_len,
-        tick_thick=v_cfg.get("tick_thick", 1),
-        chip_font_scale=v_cfg.get("chip_font_scale", 0.32),
-        label_offset_x=v_cfg.get("label_offset_x", 10),
-        label_offset_y=v_cfg.get("label_offset_y", -10),
-        chip_pad=v_cfg.get("chip_pad", 1),
-        leader_thick=v_cfg.get("leader_thick", 1),
-    )
 
     wide_csv     = os.path.join(args.output_dir, "tracks_wide_format.csv")
     roi_json     = os.path.join(args.output_dir, "vial_rois.json")
@@ -194,9 +179,8 @@ def main():
         print("\n=== Stage 6: Overlay videos ===")
 
         # Pick the overlay substrate from config.yaml:visualization.overlay_source.
-        # args.video is kept for fps reading (line ~109) since cv2 reads fps from
-        # either file equally. Overlays want the raw video when overlay_source is
-        # raw_cropped, so _resolve_overlay_source can match it against roi_library.json.
+        # args.video is kept for fps reading (~line 95). resolve_overlay_video /
+        # _resolve_overlay_source handle *_raw_cropped clips vs library-backed crop.
         _overlay_mode = cfg.get("visualization", {}).get("overlay_source", "raw_cropped")
         overlay_video = resolve_overlay_video(args.output_dir, _overlay_mode) or args.video
         print(f"  overlay_source={_overlay_mode}  →  substrate: {overlay_video}")
@@ -212,7 +196,7 @@ def main():
             out_mp4=raw_overlay_mp4,
             vial_rois=vial_rois,
             det_log_csv=det_log_arg,
-            **overlay_kwargs,
+            fps_out=args.fps_out,
         )
         print(f"  Raw OC-SORT overlay: {raw_overlay_mp4}")
 
@@ -224,7 +208,7 @@ def main():
             out_mp4=overlay_mp4,
             vial_rois=vial_rois,
             det_log_csv=det_log_arg,
-            **overlay_kwargs,
+            fps_out=args.fps_out,
         )
         print(f"  Stitched overlay:    {overlay_mp4}")
         save_run_params(args.output_dir, "outputs", {

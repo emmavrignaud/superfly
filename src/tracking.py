@@ -25,6 +25,7 @@ def export_tracks_xy_tuple_csv_one_config(
     output_csv: str,
     api_key: str,
     model_id: str,
+    inference_api_url: str = "https://detect.roboflow.com",
     detection_confidence_rfdetr: float = 0.4,
     confidence: float = 0.10,
     lost_track_buffer: int = 90,
@@ -88,7 +89,7 @@ def export_tracks_xy_tuple_csv_one_config(
         from inference_sdk import InferenceHTTPClient
         from inference_sdk.http.entities import InferenceConfiguration
         client = InferenceHTTPClient(
-            api_url="https://detect.roboflow.com",
+            api_url=inference_api_url.rstrip("/"),
             api_key=api_key,
         )
         client.configure(InferenceConfiguration(confidence_threshold=detection_confidence_rfdetr))

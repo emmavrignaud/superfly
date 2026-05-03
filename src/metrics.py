@@ -39,9 +39,11 @@ Builds two composite Plotly figures (interactive hover) and optionally writes:
 """
 
 import base64
+import copy
 import json
 import os
 import random
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -796,11 +798,12 @@ def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
     stitching_objectives : optional dict from compute_stitching_objectives()
     show_plots  : bool, default True — if False, skip Plotly ``.show()`` (unattended batch).
     """
-    if config is not None:
+    cfg_report = _config_for_report(config)
+    if cfg_report is not None:
         print("=" * 55)
         print("  RUN CONFIGURATION")
         print("=" * 55)
-        print(json.dumps(config, indent=2, default=str))
+        print(json.dumps(cfg_report, indent=2, default=str))
         print("=" * 55)
         print()
 
@@ -813,7 +816,7 @@ def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
     fig_pipeline = _build_pipeline_figure(tracker, df_wide, df_stitched, fps)
 
     if output_dir is not None:
-        _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
+        _save_report(output_dir, summary_text, cfg_report, fig_xy, fig_pipeline,
                      dup_stats, stitching_objectives)
 
     if show_plots:
@@ -824,6 +827,21 @@ def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
 # ---------------------------------------------------------------------------
 # Report writer
 # ---------------------------------------------------------------------------
+
+def _config_for_report(config):
+    """Copy of config for HTML/MD/console: drop inference endpoint noise."""
+    if config is None:
+        return None
+    c = copy.deepcopy(config)
+    rf = c.get("roboflow")
+    if isinstance(rf, dict):
+        rf = {k: v for k, v in rf.items() if k != "inference_api_url"}
+        if rf:
+            c["roboflow"] = rf
+        else:
+            c.pop("roboflow", None)
+    return c
+
 
 def _html_escape(text: str) -> str:
     return (text.replace("&", "&amp;")
@@ -962,13 +980,29 @@ def _funny_image_html() -> str:
     )
 
 
-def _landing_page_image_html() -> str:
-    img_path = Path(__file__).parent.parent / "data" / "media" / "landing_page.png"
-    if not img_path.exists():
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_HERO_VIDEO_SRC = _REPO_ROOT / "data" / "media" / "funny" / "tsa_line_video.mp4"
+_HERO_VIDEO_NAME = _HERO_VIDEO_SRC.name
+
+
+def _ensure_hero_video(output_dir: Path) -> Path | None:
+    """Copy hero MP4 beside metrics_report.html so relative src works when opened locally."""
+    if not _HERO_VIDEO_SRC.is_file():
+        return None
+    dest = output_dir / _HERO_VIDEO_NAME
+    shutil.copy2(_HERO_VIDEO_SRC, dest)
+    return dest
+
+
+def _landing_page_hero_html(hero_video: Path | None) -> str:
+    if hero_video is None or not hero_video.is_file():
         return ""
+    name = _html_escape(hero_video.name)
     return (
         '<div class="report-hero">'
-        f'<img src="{_image_data_uri(img_path)}" alt="Metrics report"></div>'
+        '<video class="report-hero-video" controls muted playsinline loop autoplay>'
+        f'<source src="{name}" type="video/mp4">'
+        "</video></div>"
     )
 
 
@@ -1017,6 +1051,7 @@ _HTML_STYLE = """
   th { background: #eee; }
   .report-hero { margin: 0 0 1.5em; }
   .report-hero img { display: block; width: 100%; height: auto; border-radius: 8px; }
+  .report-hero-video { display: block; width: 100%; height: auto; border-radius: 8px; }
   .report-two-col { width: 100%; border-collapse: collapse; table-layout: fixed; margin: 0.5em 0 1.5em; }
   .report-two-col td, .report-two-col th { border: none; padding: 0; vertical-align: top; }
   .report-two-col .report-left-col { width: 68%; padding-right: 24px; }
@@ -1048,6 +1083,8 @@ def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
       metrics_pipeline.png         — static pipeline plot
     """
     os.makedirs(output_dir, exist_ok=True)
+    out_path = Path(output_dir)
+    hero_video_path = _ensure_hero_video(out_path)
 
     xy_png       = os.path.join(output_dir, "metrics_xy_trajectories.png")
     pipeline_png = os.path.join(output_dir, "metrics_pipeline.png")
@@ -1072,7 +1109,7 @@ def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
     html = f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Metrics Report</title>{_HTML_STYLE}</head>
 <body>
-{_landing_page_image_html()}
+{_landing_page_hero_html(hero_video_path)}
 
 {config_block}
 

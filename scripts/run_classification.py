@@ -92,7 +92,7 @@ def main():
     from src.features import extract_behavioral_features, aggregate_per_fly_features
 
     import os
-    output_dir = output_dir or os.path.join(args.run_dir, "classification")
+    output_dir = args.output_dir or os.path.join(args.run_dir, "classification")
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"\nLoading run from: {args.run_dir}")
