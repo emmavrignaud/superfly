@@ -2,7 +2,8 @@
 
 Usage (from repo root):
     python -m labeler.main --video PATH --raw RAW_CSV [--tracks TRACKS_CSV]
-                           [--out-dir DIR] [--fresh]
+                           [--out-dir DIR] [--fresh] [--resume PATH]
+                           [--resume-autosave]
 
     args explained:
     --video    path to the video file to label (use the same one you ran the tracker on)
@@ -11,6 +12,8 @@ Usage (from repo root):
                or legacy tracks_wide_format.csv — auto-detected)
     --out-dir  override the default per-video labeling folder
     --fresh    ignore any existing session and start clean
+    --resume   explicit session/autosave file to resume from
+    --resume-autosave  prefer .labeler.autosave.json over .labeler.json
     --ocsort   (deprecated alias for --tracks)
 
     example: (run from repo root! hhhhhhh don't be like me and cd into labeler/ )
@@ -38,9 +41,11 @@ Working files written by the labeler:
     <videostem>.gt.csv                 ground-truth export (Ctrl+E writes here)
     <videostem>.gt_summary.txt         QC summary (written alongside the CSV)
 
-By default, the labeler auto-resumes the newer of .labeler.json /
-.labeler.autosave.json if either exists. Pass --fresh to start fresh
-(useful when you want to re-seed from a freshly-rerun tracker).
+By default, the labeler resumes `.labeler.json` if it exists, otherwise
+falls back to `.labeler.autosave.json`. Pass `--resume-autosave` to
+explicitly prefer autosave, or `--resume PATH` to choose a file yourself.
+Pass --fresh to start fresh (useful when you want to re-seed from a
+freshly-rerun tracker).
 """
 from __future__ import annotations
 
@@ -53,6 +58,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
 from .backend import LabelerBackend
+from .session import choose_resume_path
 from .video_provider import VideoFrameProvider
 
 
@@ -71,7 +77,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         "(default: <repo>/data/manual_labelling/<videostem>/)")
     p.add_argument("--fresh", action="store_true",
                    help="ignore any existing .labeler.json/.autosave.json and start fresh "
-                        "(default: auto-resume the newer of the two if either exists)")
+                        "(default: resume .labeler.json if present, else autosave)")
+    p.add_argument("--resume", default=None,
+                   help="explicit session/autosave file to resume from")
+    p.add_argument("--resume-autosave", action="store_true",
+                   help="prefer .labeler.autosave.json over .labeler.json when both exist")
     return p.parse_args(argv)
 
 
@@ -94,12 +104,19 @@ def derive_paths(args: argparse.Namespace) -> dict:
     export_path   = out_dir / f"{stem}.gt.csv"
     summary_path  = out_dir / f"{stem}.gt_summary.txt"
 
-    # Auto-resume by default. Pass --fresh for a clean start.
     resume_from = ""
     if not args.fresh:
-        candidates = [p for p in (session_path, autosave_path) if p.exists()]
-        if candidates:
-            resume_from = str(max(candidates, key=lambda p: p.stat().st_mtime))
+        if args.resume:
+            explicit = Path(args.resume)
+            if not explicit.exists():
+                raise FileNotFoundError(f"resume file not found: {explicit}")
+            resume_from = str(explicit.as_posix())
+        else:
+            resume_from = choose_resume_path(
+                str(session_path),
+                str(autosave_path),
+                prefer_autosave=bool(args.resume_autosave),
+            )
 
     return {
         "out_dir": str(out_dir.as_posix()),
