@@ -32,6 +32,30 @@ def _str_to_key(s: str) -> tuple[int, int]:
     return int(f), int(d)
 
 
+def choose_resume_path(
+    session_path: str,
+    autosave_path: str,
+    *,
+    prefer_autosave: bool = False,
+) -> str:
+    """Pick the session file to resume from.
+
+    Safe default: prefer the explicit save file when both exist. Autosave is
+    only used by default if no saved session exists, or when the caller
+    explicitly opts into autosave-first behavior.
+    """
+    session = Path(session_path)
+    autosave = Path(autosave_path)
+
+    if prefer_autosave and autosave.exists():
+        return str(autosave.as_posix())
+    if session.exists():
+        return str(session.as_posix())
+    if autosave.exists():
+        return str(autosave.as_posix())
+    return ""
+
+
 def save_session(
     path: str,
     *,

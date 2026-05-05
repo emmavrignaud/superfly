@@ -54,8 +54,12 @@ from src.classification import (
     run_classifier,
     cliffs_delta,
     save_plotly_figure,
+    genotype_category_order,
+    make_figure_by_genotype,
+    make_figure_wt_vs_mutant,
     plot_by_genotype,
     plot_wt_vs_mutant,
+    write_classification_html_report,
 )
 
 from src.visualization import (
@@ -98,8 +102,12 @@ __all__ = [
     "run_classifier",
     "cliffs_delta",
     "save_plotly_figure",
+    "genotype_category_order",
+    "make_figure_by_genotype",
+    "make_figure_wt_vs_mutant",
     "plot_by_genotype",
     "plot_wt_vs_mutant",
+    "write_classification_html_report",
     # visualization
     "render_vial_overlay_video",
 ]

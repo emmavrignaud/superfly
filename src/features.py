@@ -145,11 +145,13 @@ def aggregate_per_fly_features(
     Returns
     -------
     pd.DataFrame with one row per group_col and summary statistics.
+    If the input has a ``vial_id`` column, each row also carries that fly's
+    ``vial_id`` (for downstream plots that order genotypes by vial).
     """
     grouped = df.groupby(group_col)
 
-    return grouped.apply(
-        lambda g: pd.Series({
+    def _per_fly_row(g: pd.DataFrame) -> pd.Series:
+        row = {
             "mean_velocity":             g["velocity"].mean(),
             "median_velocity":           g["velocity"].median(),
             "std_velocity":              g["velocity"].std(),
@@ -159,5 +161,9 @@ def aggregate_per_fly_features(
             "total_distance_traveled":   g["distance_traveled"].iloc[-1],
             "tortuosity":                g["tortuosity"].iloc[0],
             "area_covered":              g["area_covered"].iloc[0],
-        })
-    ).reset_index()
+        }
+        if "vial_id" in g.columns and len(g) > 0:
+            row["vial_id"] = g["vial_id"].iloc[0]
+        return pd.Series(row)
+
+    return grouped.apply(_per_fly_row).reset_index()

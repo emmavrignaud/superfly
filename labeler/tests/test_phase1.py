@@ -26,6 +26,7 @@ from labeler.data_model import (
 )
 from labeler.session import (
     annotations_from_payload,
+    choose_resume_path,
     load_session,
     save_session,
 )
@@ -240,6 +241,45 @@ class TestAnnotationStore(unittest.TestCase):
 
 
 class TestSession(unittest.TestCase):
+    def test_choose_resume_path_prefers_saved_session_by_default(self):
+        with TemporaryDirectory() as td:
+            tdp = Path(td)
+            session = tdp / "run.labeler.json"
+            autosave = tdp / "run.labeler.autosave.json"
+            session.write_text("{}")
+            autosave.write_text("{}")
+
+            chosen = choose_resume_path(str(session), str(autosave))
+
+        self.assertEqual(chosen, session.as_posix())
+
+    def test_choose_resume_path_can_prefer_autosave(self):
+        with TemporaryDirectory() as td:
+            tdp = Path(td)
+            session = tdp / "run.labeler.json"
+            autosave = tdp / "run.labeler.autosave.json"
+            session.write_text("{}")
+            autosave.write_text("{}")
+
+            chosen = choose_resume_path(
+                str(session),
+                str(autosave),
+                prefer_autosave=True,
+            )
+
+        self.assertEqual(chosen, autosave.as_posix())
+
+    def test_choose_resume_path_falls_back_to_autosave(self):
+        with TemporaryDirectory() as td:
+            tdp = Path(td)
+            session = tdp / "run.labeler.json"
+            autosave = tdp / "run.labeler.autosave.json"
+            autosave.write_text("{}")
+
+            chosen = choose_resume_path(str(session), str(autosave))
+
+        self.assertEqual(chosen, autosave.as_posix())
+
     def test_round_trip(self):
         with TemporaryDirectory() as td:
             tdp = Path(td)
