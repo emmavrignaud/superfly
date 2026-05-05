@@ -329,7 +329,12 @@ def associate_detections_to_trackers(detections,trackers,iou_threshold = 0.3):
 
 
 def _filter_matches(matched_indices, iou_matrix, iou_threshold, num_dets, num_trks):
-    """Shared helper to split matched_indices into matches/unmatched based on IOU threshold."""
+    """Shared helper to split matched_indices into matches/unmatched based on IOU threshold.
+
+    Returns (matches, unmatched_dets, unmatched_trks, match_scores) where
+    match_scores[i] is the IoU value for matches[i] — used by OCSort to record
+    per-frame association confidence in each tracker's observation_log.
+    """
     if matched_indices.shape[0] > 0:
         unmatched_dets = np.setdiff1d(np.arange(num_dets), matched_indices[:,0])
         unmatched_trks = np.setdiff1d(np.arange(num_trks), matched_indices[:,1])
@@ -338,11 +343,13 @@ def _filter_matches(matched_indices, iou_matrix, iou_threshold, num_dets, num_tr
         unmatched_dets = np.concatenate([unmatched_dets, matched_indices[low_iou_mask, 0]])
         unmatched_trks = np.concatenate([unmatched_trks, matched_indices[low_iou_mask, 1]])
         matches = matched_indices[~low_iou_mask]
+        match_scores = iou_vals[~low_iou_mask].tolist()
     else:
         unmatched_dets = np.arange(num_dets)
         unmatched_trks = np.arange(num_trks)
         matches = np.empty((0,2),dtype=int)
-    return matches, unmatched_dets.astype(int), unmatched_trks.astype(int)
+        match_scores = []
+    return matches, unmatched_dets.astype(int), unmatched_trks.astype(int), match_scores
 
 
 def aspect_ratio_bonus_batch(detections, trackers, weight):
@@ -687,6 +694,317 @@ def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc
         matched_indices = np.empty(shape=(0,2))
 
     return _filter_matches(matched_indices, iou_matrix, iou_threshold, len(detections), len(trackers))
+
+
+# ---------------------------------------------------------------------------
+# Second-round re-linking helpers
+# ---------------------------------------------------------------------------
+
+# Normalisation scales for each behavioral feature (rough empirical ranges).
+# Used to bring all features onto a similar 0–1 scale before L1 distance.
+_RELINK_SCALES: dict = {
+    "median_speed":          40.0,   # px/s; typical fly speed range
+    "pause_fraction":         1.0,
+    "mean_turning_angle":   180.0,   # degrees
+    "mean_angular_velocity": 5400.0, # degrees/s  (180 deg × 30 fps)
+    "mean_acceleration":     80.0,   # px/s²
+    "n_large_displacements":  5.0,   # count; few per video segment
+    "tortuosity":             3.0,
+}
+
+
+def _profile_from_obs(obs_list: list, fps: float = 30.0) -> "dict | None":
+    """Compute a behavioral profile dict from a raw observation log.
+
+    Parameters
+    ----------
+    obs_list : list of (frame_idx, bbox_array) pairs where bbox_array is
+               [x1, y1, x2, y2] in pixel coordinates.
+    fps      : frames per second, used to convert frame-step velocities to px/s.
+
+    Returns None when there are fewer than 3 observations (not enough for
+    velocity + acceleration).
+    """
+    import numpy as np
+
+    if len(obs_list) < 3:
+        return None
+
+    obs_list = sorted(obs_list, key=lambda t: t[0])
+    frames = np.array([t[0] for t in obs_list], dtype=float)
+    bboxes = np.array([t[1] for t in obs_list], dtype=float)
+
+    cx = (bboxes[:, 0] + bboxes[:, 2]) / 2.0
+    cy = (bboxes[:, 1] + bboxes[:, 3]) / 2.0
+
+    dt = np.diff(frames) / fps          # seconds between consecutive obs
+    dt = np.where(dt == 0, 1e-6, dt)
+
+    dx = np.diff(cx)
+    dy = np.diff(cy)
+    dist = np.sqrt(dx ** 2 + dy ** 2)
+    speeds = dist / dt                  # px/s
+
+    # Turning angle (degrees) between consecutive displacement vectors
+    angles = []
+    for i in range(1, len(dx)):
+        v1 = np.array([dx[i - 1], dy[i - 1]])
+        v2 = np.array([dx[i], dy[i]])
+        n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
+        if n1 < 1e-9 or n2 < 1e-9:
+            angles.append(0.0)
+            continue
+        cos_a = np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0)
+        angles.append(float(np.degrees(np.arccos(cos_a))))
+
+    mean_turning = float(np.mean(angles)) if angles else 0.0
+    mean_ang_vel = mean_turning * fps
+
+    # Acceleration (px/s²)
+    dt2 = (dt[:-1] + dt[1:]) / 2.0
+    dt2 = np.where(dt2 == 0, 1e-6, dt2)
+    accel = np.abs(np.diff(speeds)) / dt2
+    mean_accel = float(np.mean(accel)) if len(accel) > 0 else 0.0
+
+    # Tortuosity: total path length / straight-line distance
+    path_len = float(dist.sum())
+    straight = float(np.sqrt((cx[-1] - cx[0]) ** 2 + (cy[-1] - cy[0]) ** 2))
+    tortuosity = path_len / straight if straight > 1.0 else 1.0
+
+    pause_thresh_px_s = 1.0  # px/s
+    pause_fraction = float(np.mean(speeds < pause_thresh_px_s))
+
+    large_disp_thresh = float(np.percentile(dist, 90)) if len(dist) >= 10 else float(dist.max() + 1)
+    n_large = int(np.sum(dist > large_disp_thresh))
+
+    return {
+        "median_speed":           float(np.median(speeds)),
+        "pause_fraction":         pause_fraction,
+        "mean_turning_angle":     mean_turning,
+        "mean_angular_velocity":  mean_ang_vel,
+        "mean_acceleration":      mean_accel,
+        "n_large_displacements":  n_large,
+        "tortuosity":             tortuosity,
+    }
+
+
+def behavioral_profile_distance(
+    profile_a: "dict | None",
+    profile_b: "dict | None",
+    weights: dict,
+) -> float:
+    """Weighted normalised L1 distance between two behavioral profiles.
+
+    Returns 1.0 if either profile is None (max dissimilarity).
+    """
+    if profile_a is None or profile_b is None:
+        return 1.0
+
+    total_w = 0.0
+    total_d = 0.0
+    for feat, w in weights.items():
+        if w == 0.0:
+            continue
+        scale = _RELINK_SCALES.get(feat, 1.0)
+        if scale == 0.0:
+            scale = 1.0
+        va = profile_a.get(feat, 0.0)
+        vb = profile_b.get(feat, 0.0)
+        total_d += w * abs(va - vb) / scale
+        total_w += w
+
+    if total_w == 0.0:
+        return 0.0
+    return min(total_d / total_w, 1.0)
+
+
+def relink_tracklets(
+    trackers: list,
+    weights: dict,
+    min_length: int = 10,
+    inconsistency_threshold: float = 0.4,
+    swap_threshold: float = 0.2,
+    confidence_weight: float = 1.0,
+    fps: float = 30.0,
+) -> list:
+    """Second-round re-linking via a Hungarian cost matrix at each weak frame.
+
+    Algorithm
+    ---------
+    1. Per-tracker adaptive threshold: a score is "low" if it falls below that
+       tracker's own median IoU. A tracker that is generally hard to follow has
+       a higher baseline, so only truly anomalous frames are flagged.
+
+    2. Weak-point frames: frames where ≥2 trackers simultaneously have a low
+       score — the moments most likely to coincide with an ID swap.
+
+    3. Each tracker's split point is its *earliest* weak-point frame (the first
+       moment of uncertainty).
+
+    4. At each split frame, group all trackers that split there. Build a cost
+       matrix C where:
+           C[i,i] = dist(first_half_i, second_half_i)           (keep own)
+           C[i,j] = dist(first_half_i, second_half_j)
+                    * (1 + confidence_weight * score_j_at_split) (swap penalty)
+       High-confidence match at split frame → expensive to take that second half.
+
+    5. Solve Hungarian on C. Accept the full group assignment only if total cost
+       improves by more than swap_threshold vs the diagonal (identity) assignment.
+       Record pairwise transpositions as (id_a, id_b, split_frame).
+
+    Parameters
+    ----------
+    trackers            : list of KalmanBoxTracker with `.observation_log`, `.id`
+                          observation_log entries are (frame_idx, bbox, score).
+    weights             : per-feature behavioral distance weights
+    min_length          : min observations to consider a tracker
+    inconsistency_threshold : reserved (unused, kept for API compatibility)
+    swap_threshold      : minimum total cost improvement to accept a group assignment
+    confidence_weight   : how strongly the split-frame IoU score penalises swapping
+                          that tracker's second half away (0 = ignore scores)
+    fps                 : frames per second
+
+    Returns
+    -------
+    List of (id_a, id_b, split_frame) tuples (1-based IDs) — one per accepted
+    transposition. For group assignments with cycles > 2, each edge in the cycle
+    is emitted as a separate pair (tracking.py handles them in order).
+    """
+    import numpy as np
+    from collections import defaultdict
+
+    # ── 1. Per-tracker: sorted observations + median IoU score ───────────────
+    tracker_data = []
+    for trk in trackers:
+        obs = getattr(trk, "observation_log", [])
+        if len(obs) < min_length:
+            continue
+        obs_sorted = sorted(obs, key=lambda t: t[0])
+        scores = [t[2] for t in obs_sorted if t[2] is not None]
+        if len(scores) < 3:
+            continue
+        median_score = float(np.median(scores))
+        tracker_data.append({
+            "trk":          trk,
+            "id":           trk.id + 1,    # 1-based
+            "obs":          obs_sorted,
+            "median_score": median_score,
+        })
+
+    if len(tracker_data) < 2:
+        return []
+
+    # ── 2. For each tracker, flag frames where its score is below its median ──
+    # frame → list of (tracker_data, score_at_frame)
+    frame_to_low: dict = defaultdict(list)
+    for td in tracker_data:
+        for frame_idx, bbox, score in td["obs"]:
+            if score is not None and score < td["median_score"]:
+                frame_to_low[frame_idx].append((td, float(score)))
+
+    # ── 3. Weak frames: ≥2 trackers simultaneously below their median ─────────
+    weak_frames = {
+        f: entries for f, entries in frame_to_low.items() if len(entries) >= 2
+    }
+    if not weak_frames:
+        return []
+
+    # ── 4. Each tracker's split point = its earliest weak frame ──────────────
+    tracker_split: dict = {}   # td["id"] → split_frame
+    tracker_split_score: dict = {}  # td["id"] → score at that split frame
+    for frame in sorted(weak_frames):
+        for td, score in weak_frames[frame]:
+            if td["id"] not in tracker_split:
+                tracker_split[td["id"]] = frame
+                tracker_split_score[td["id"]] = score
+
+    # ── 5. Group trackers by split frame; solve a cost matrix per group ───────
+    split_groups: dict = defaultdict(list)
+    for td in tracker_data:
+        if td["id"] in tracker_split:
+            split_groups[tracker_split[td["id"]]].append(td)
+
+    swaps: list = []
+    used: set = set()
+
+    for split_frame, group in sorted(split_groups.items()):
+        group = [td for td in group if td["id"] not in used]
+        if len(group) < 2:
+            continue
+
+        # Build halves for each member
+        halves = []
+        for td in group:
+            obs = td["obs"]
+            first  = [(f, b) for f, b, s in obs if f <  split_frame]
+            second = [(f, b) for f, b, s in obs if f >= split_frame]
+            if len(first) < 2 or len(second) < 2:
+                continue
+            p_first  = _profile_from_obs(first,  fps)
+            p_second = _profile_from_obs(second, fps)
+            halves.append({
+                "td":       td,
+                "p_first":  p_first,
+                "p_second": p_second,
+                # IoU score this tracker had at the split frame
+                "split_score": tracker_split_score.get(td["id"], 0.0),
+            })
+
+        if len(halves) < 2:
+            continue
+
+        n = len(halves)
+
+        # Cost matrix
+        # Diagonal = self-assignment (keep own second half) — no confidence penalty
+        # Off-diagonal = swap penalty proportional to how confident tracker j was
+        C = np.zeros((n, n))
+        for i in range(n):
+            for j in range(n):
+                base = behavioral_profile_distance(
+                    halves[i]["p_first"], halves[j]["p_second"], weights
+                )
+                if i == j:
+                    C[i, j] = base
+                else:
+                    penalty = 1.0 + confidence_weight * halves[j]["split_score"]
+                    C[i, j] = base * penalty
+
+        diagonal_cost = float(np.trace(C))
+
+        # Solve Hungarian (minimise total cost)
+        assignment = linear_assignment(C)   # → array [[i, j], ...]
+        assigned_cost = float(sum(C[int(a[0]), int(a[1])] for a in assignment))
+
+        gain = diagonal_cost - assigned_cost
+        if gain <= swap_threshold:
+            continue
+
+        # Emit pairwise transpositions from the assignment permutation
+        perm = {int(a[0]): int(a[1]) for a in assignment}
+        visited: set = set()
+        for start in range(n):
+            if start in visited or perm[start] == start:
+                visited.add(start)
+                continue
+            # Walk the cycle
+            cycle = []
+            cur = start
+            while cur not in visited:
+                visited.add(cur)
+                cycle.append(cur)
+                cur = perm[cur]
+            # Decompose cycle into adjacent transpositions
+            for k in range(len(cycle) - 1):
+                ia, ib = cycle[k], cycle[k + 1]
+                id_a = halves[ia]["td"]["id"]
+                id_b = halves[ib]["td"]["id"]
+                if id_a not in used and id_b not in used:
+                    swaps.append((id_a, id_b, split_frame))
+                    used.add(id_a)
+                    used.add(id_b)
+
+    return swaps
 
 
 def associate_kitti(detections, trackers, det_cates, iou_threshold,

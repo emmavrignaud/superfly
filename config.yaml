@@ -15,7 +15,7 @@ tracker:
   detection_confidence_rfdetr: 0.4   # RF-DETR output threshold
   confidence: 0.55                   # tracker match threshold (0.3–0.5 typical)
   track_activation_threshold: 0.10   # min conf to open a new track
-  lost_track_buffer: 180             # frames a track may go unseen before drop
+  lost_track_buffer: 400             # frames a track may go unseen before drop
   minimum_matching_threshold: 0.2   # min association score to keep a match
   minimum_consecutive_frames: 1      # frames needed to confirm a new track
   min_area: 20                       # px²; smaller detections discarded
@@ -59,6 +59,22 @@ stitching:
     mean_acceleration: 1.0
     n_large_displacements: 1.0
     tortuosity: 1.0
+
+relink:
+  # Second-round re-linking: swap tracklet segments at frames where ≥2 trackers
+  # simultaneously had a low association score (below their own per-track median).
+  min_length: 10                    # min observations for a tracker to be considered
+  inconsistency_threshold: 0.4     # reserved for future use (currently unused)
+  swap_threshold: 0.2              # min total cost improvement to accept a swap
+  confidence_weight: 1.0           # how strongly the split-frame IoU penalises swapping; 0 = ignore
+  behavioral_weights:
+    median_speed:          1.0
+    pause_fraction:        1.0
+    mean_turning_angle:    1.0
+    mean_angular_velocity: 1.0
+    mean_acceleration:     1.0
+    n_large_displacements: 1.0
+    tortuosity:            1.0
 
 preprocessing:
   # Per-pixel percentile background, divided out and rescaled to white.

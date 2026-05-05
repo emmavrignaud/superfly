@@ -1,0 +1,77 @@
+# Ground-truth export summary — 2026-05-04T00:02:00
+# CSV: 2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.gt.csv
+
+frames in video        : 363
+total annotations      : 11874
+  human-confirmed      : 1408
+  ocsort-sourced       : 10466
+distinct track IDs     : 64
+mean det conf (annot.) : 0.731
+
+per-track counts:
+  track   1  →  1 frames
+  track   2  →  5 frames
+  track   3  →  1 frames
+  track   4  →  263 frames
+  track   5  →  74 frames
+  track   6  →  121 frames
+  track   7  →  267 frames
+  track   8  →  244 frames
+  track   9  →  260 frames
+  track  10  →  3 frames
+  track  11  →  164 frames
+  track  12  →  55 frames
+  track  13  →  20 frames
+  track  14  →  132 frames
+  track  15  →  1 frames
+  track  16  →  170 frames
+  track  17  →  16 frames
+  track  18  →  290 frames
+  track  19  →  15 frames
+  track  20  →  153 frames
+  track  21  →  50 frames
+  track  22  →  260 frames
+  track  23  →  1 frames
+  track  24  →  99 frames
+  track  25  →  289 frames
+  track  26  →  1 frames
+  track  27  →  229 frames
+  track  28  →  5 frames
+  track  29  →  276 frames
+  track  30  →  23 frames
+  track  31  →  5 frames
+  track  32  →  344 frames
+  track  33  →  337 frames
+  track  34  →  1 frames
+  track  35  →  346 frames
+  track  36  →  21 frames
+  track  37  →  354 frames
+  track  38  →  327 frames
+  track  39  →  239 frames
+  track  40  →  328 frames
+  track  41  →  357 frames
+  track  42  →  363 frames
+  track  43  →  363 frames
+  track  44  →  188 frames
+  track  45  →  294 frames
+  track  46  →  5 frames
+  track  47  →  365 frames
+  track  48  →  324 frames
+  track  49  →  339 frames
+  track  50  →  362 frames
+  track  51  →  1 frames
+  track  53  →  2 frames
+  track  54  →  363 frames
+  track  55  →  363 frames
+  track  57  →  363 frames
+  track  58  →  12 frames
+  track  59  →  227 frames
+  track  60  →  363 frames
+  track  61  →  363 frames
+  track  62  →  364 frames
+  track  63  →  361 frames
+  track  65  →  1 frames
+  track  66  →  340 frames
+  track 6364  →  1 frames
+
+frames with detections but ZERO annotations: 0

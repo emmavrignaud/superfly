@@ -514,9 +514,10 @@ Item {
 
     Rectangle {
         id: inputBubble
-        visible: backend.selectedDetIdx !== -1
+        readonly property bool segmentReady: backend.segStart >= 0 && backend.segEnd >= 0
+        visible: backend.selectedDetIdx !== -1 || segmentReady
         color: "#313244"
-        border.color: wouldDuplicate ? "#ef4444" : "#cba6f7"
+        border.color: wouldDuplicate ? "#ef4444" : (segmentReady ? "#a6e3a1" : "#cba6f7")
         border.width: 1
         radius: 4
         width: Math.max(bubbleText.implicitWidth, warnText.visible ? warnText.implicitWidth : 0) + 16
@@ -535,21 +536,23 @@ Item {
             return backend.would_duplicate_in_current_frame(tid)
         }
 
+        // Centre of video canvas when no detection is selected (segment mode).
         x: {
-            if (!sel)
-                return 0
-            const ox = (flick.contentWidth - root.contentVideoW) / 2
-            const cx = ox + sel.x * root.screenScale - flick.contentX
-            const px = cx - width / 2
-            return Math.max(0, Math.min(px, root.width - width))
+            if (sel) {
+                const ox = (flick.contentWidth - root.contentVideoW) / 2
+                const cx = ox + sel.x * root.screenScale - flick.contentX
+                return Math.max(0, Math.min(cx - width / 2, root.width - width))
+            }
+            return Math.max(0, (root.width - width) / 2)
         }
         y: {
-            if (!sel)
-                return 0
-            const oy = (flick.contentHeight - root.contentVideoH) / 2
-            const cy = oy + sel.y * root.screenScale - flick.contentY
-            const desired = cy - 18 - height
-            return desired < 0 ? cy + 18 : desired
+            if (sel) {
+                const oy = (flick.contentHeight - root.contentVideoH) / 2
+                const cy = oy + sel.y * root.screenScale - flick.contentY
+                const desired = cy - 18 - height
+                return desired < 0 ? cy + 18 : desired
+            }
+            return 20
         }
 
         Column {
@@ -563,6 +566,14 @@ Item {
                 font.family: "JetBrains Mono, Consolas, Courier New"
                 font.pixelSize: 12
                 text: {
+                    // Segment-crop mode: no detection selected, but a range is ready.
+                    if (!inputBubble.sel && inputBubble.segmentReady) {
+                        const lo = backend.segStart + 1
+                        const hi = backend.segEnd + 1
+                        if (root.pendingInput.length === 0)
+                            return "seg [" + lo + "→" + hi + "]   ID _   next free: " + backend.nextFreeTrackId
+                        return "seg [" + lo + "→" + hi + "]   ID " + root.pendingInput
+                    }
                     const sel = inputBubble.sel
                     if (!sel)
                         return ""

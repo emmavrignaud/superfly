@@ -48,7 +48,13 @@ def export_tracks_xy_tuple_csv_one_config(
     w_over: float = 2.0,
     overlap_iou_scale: float = 0.1,
     edge_fraction: float = 0.1,
-) -> tuple[pd.DataFrame, object]:
+    relink_behavioral_weights: dict | None = None,
+    relink_min_length: int = 10,
+    relink_inconsistency_threshold: float = 0.4,
+    relink_swap_threshold: float = 0.2,
+    relink_confidence_weight: float = 1.0,
+    relinked_csv: str | None = None,
+) -> tuple[pd.DataFrame, object, "pd.DataFrame | None"]:
     """
     Run RF-DETR + OC-SORT for one configuration and write a wide CSV where:
       - rows    = frame index
@@ -59,9 +65,11 @@ def export_tracks_xy_tuple_csv_one_config(
     detections are loaded from the cache. This lets you re-run the tracker
     with different association parameters at zero API cost.
 
-    Returns (df, tracker):
-      df      — the wide-format DataFrame that was saved to CSV
-      tracker — the OCSort object (carries detection_log and suppressed_tracks)
+    Returns (df, tracker, df_relinked):
+      df           — the wide-format DataFrame that was saved to output_csv
+      tracker      — the OCSort object (carries detection_log and suppressed_tracks)
+      df_relinked  — long-format relinked DataFrame (frame, x, y, original_id,
+                     relinked_id), or None if relinked_csv was not specified
     """
     from .ocsort import OCSort
 
@@ -120,6 +128,12 @@ def export_tracks_xy_tuple_csv_one_config(
         w_over=w_over,
         overlap_iou_scale=overlap_iou_scale,
         edge_fraction=edge_fraction,
+        fps=fps_assumed,
+        relink_behavioral_weights=relink_behavioral_weights,
+        relink_min_length=relink_min_length,
+        relink_inconsistency_threshold=relink_inconsistency_threshold,
+        relink_swap_threshold=relink_swap_threshold,
+        relink_confidence_weight=relink_confidence_weight,
     )
 
     rows = []
@@ -186,4 +200,49 @@ def export_tracks_xy_tuple_csv_one_config(
         pd.DataFrame(det_log_rows).to_csv(det_log_csv, index=False)
         print(f"Saved detection cache: {det_log_csv}  ({len(det_log_rows)} detections)")
 
-    return df, tracker
+    # ── Second-round re-linking ───────────────────────────────────────────────
+    swaps = tracker.relink()
+    if swaps:
+        print(f"Relink: {len(swaps)} swap(s) accepted: {swaps}")
+    else:
+        print("Relink: no swaps accepted.")
+
+    if relinked_csv is not None:
+        # Build long-format relinked CSV applying the swaps to observation_log.
+        # For each tracker, walk its observation_log. If a swap involves this
+        # tracker, detections from swap_frame onward belong to the partner's ID.
+        id_map: dict[int, list] = {}  # 1-based id → list of (frame, x, y, orig_id)
+        swap_lookup: dict[int, tuple[int, int]] = {}  # id_a → (id_b, swap_frame)
+        for id_a, id_b, swap_frame in swaps:
+            swap_lookup[id_a] = (id_b, swap_frame)
+            swap_lookup[id_b] = (id_a, swap_frame)
+
+        for trk in tracker.trackers:
+            obs = getattr(trk, "observation_log", [])
+            orig_id = trk.id + 1  # 1-based
+            swap_info = swap_lookup.get(orig_id)
+            for frame_i, bbox, *_ in sorted(obs, key=lambda t: t[0]):
+                cx = float((bbox[0] + bbox[2]) / 2.0)
+                cy = float((bbox[1] + bbox[3]) / 2.0)
+                if swap_info is not None:
+                    partner_id, swap_frame = swap_info
+                    relinked_id = partner_id if frame_i >= swap_frame else orig_id
+                else:
+                    relinked_id = orig_id
+                id_map.setdefault(orig_id, []).append({
+                    "frame": frame_i,
+                    "x": cx,
+                    "y": cy,
+                    "original_id": orig_id,
+                    "relinked_id": relinked_id,
+                })
+
+        relink_rows = [row for rows_list in id_map.values() for row in rows_list]
+        df_relinked = pd.DataFrame(relink_rows, columns=["frame", "x", "y", "original_id", "relinked_id"])
+        df_relinked = df_relinked.sort_values(["frame", "relinked_id"]).reset_index(drop=True)
+        df_relinked.to_csv(relinked_csv, index=False)
+        print(f"Saved relinked tracks: {relinked_csv}  ({len(df_relinked)} rows)")
+    else:
+        df_relinked = None
+
+    return df, tracker, df_relinked

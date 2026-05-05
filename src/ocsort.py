@@ -147,7 +147,7 @@ class KalmanBoxTracker(object):
     _H = np.array([[1, 0, 0, 0, 0, 0, 0], [0, 1, 0, 0, 0, 0, 0],
                         [0, 0, 1, 0, 0, 0, 0], [0, 0, 0, 1, 0, 0, 0]], dtype=np.float64)
 
-    def __init__(self, bbox, delta_t=3, orig=False, brownian_pos_noise=1.0, vial_roi=None):
+    def __init__(self, bbox, delta_t=3, orig=False, brownian_pos_noise=1.0, vial_roi=None, fps=30.0):
         """
         Initialises a tracker using initial bounding box.
 
@@ -215,13 +215,19 @@ class KalmanBoxTracker(object):
         self.history_observations = []
         self.velocity = None
         self.delta_t = delta_t
+        self.fps = fps             # used to compute mean_angular_velocity in behavioral_profile
+        self.observation_log: list = []  # [(frame_idx, bbox), ...] — real detections only
+        self.frame_born: int = -1  # absolute frame index when this tracker was spawned
         self.vial_roi = vial_roi  # (x0, y0, x1, y1) or None — used for wall-bounce prediction
 
-    def update(self, bbox):
+    def update(self, bbox, frame_idx: int = -1, score: float | None = None):
         """
         Updates the state vector with observed bbox.
+        frame_idx : absolute frame number — stored in observation_log for real detections.
+        score     : IoU association score for this match, recorded for re-linking.
         """
         if bbox is not None:
+            self.observation_log.append((frame_idx, bbox[:4].copy(), score))
             if self.last_observation.sum() >= 0:  # no previous observation
                 previous_box = None
                 for i in range(self.delta_t):
@@ -405,6 +411,7 @@ class KalmanBoxTracker(object):
             "median_scale":          float(np.median(scales)),
             "pause_fraction":        float((speeds < 1.0).mean()),
             "mean_turning_angle":    mean_turning_angle,
+            "mean_angular_velocity": mean_turning_angle * self.fps,  # degrees/second
             "mean_acceleration":     mean_acceleration,
             "n_large_displacements": n_large_displacements,
             "tortuosity":            tortuosity,
@@ -472,7 +479,11 @@ class OCSort(object):
         brownian_pos_noise=1.0, vial_rois=None, aspect_weight=0.0, behavioral_weight=0.0,
         jump_factor=2.0, jump_iou_threshold=0.05, jump_inertia=0.05,
         expected_count=None, w_under=15.0, w_over=2.0,
-        overlap_iou_scale=0.1, edge_fraction=0.1):
+        overlap_iou_scale=0.1, edge_fraction=0.1,
+        fps=30.0,
+        relink_behavioral_weights=None, relink_min_length=10,
+        relink_inconsistency_threshold=0.4, relink_swap_threshold=0.2,
+        relink_confidence_weight=1.0):
         """
         Sets key parameters for SORT
 
@@ -510,6 +521,20 @@ class OCSort(object):
         self.w_over  = w_over
         self.overlap_iou_scale = overlap_iou_scale
         self.edge_fraction = edge_fraction
+        self.fps = fps
+        self.relink_behavioral_weights = relink_behavioral_weights or {
+            "median_speed":          1.0,
+            "pause_fraction":        1.0,
+            "mean_turning_angle":    1.0,
+            "mean_angular_velocity": 1.0,
+            "mean_acceleration":     1.0,
+            "n_large_displacements": 1.0,
+            "tortuosity":            1.0,
+        }
+        self.relink_min_length              = relink_min_length
+        self.relink_inconsistency_threshold = relink_inconsistency_threshold
+        self.relink_swap_threshold          = relink_swap_threshold
+        self.relink_confidence_weight       = relink_confidence_weight
         KalmanBoxTracker.count = 0
 
         # --- Diagnostics ---
@@ -665,7 +690,7 @@ class OCSort(object):
                 for dv in det_vials
             ], dtype=bool)
 
-        matched, unmatched_dets, unmatched_trks = associate(
+        matched, unmatched_dets, unmatched_trks, match_scores = associate(
             dets, trks, self.iou_threshold, velocities, k_observations, self.inertia, self.asso_func, self.aspect_weight,
             vial_mask=vial_mask,
             trk_profiles=trk_profiles, trk_last_centers=trk_last_centers,
@@ -673,8 +698,8 @@ class OCSort(object):
             link_trk_states=all_trk_states,
             overlap_det_mask=overlap_det_mask,
             overlap_iou_scale=self.overlap_iou_scale)
-        for m in matched:
-            self.trackers[m[1]].update(dets[m[0], :])
+        for m, sc in zip(matched, match_scores):
+            self.trackers[m[1]].update(dets[m[0], :], frame_idx=self.frame_count, score=sc)
 
         """
             Second round of associaton by OCR
@@ -696,7 +721,7 @@ class OCSort(object):
                     det_ind, trk_ind = m[0], unmatched_trks[m[1]]
                     if iou_left[m[0], m[1]] < self.iou_threshold:
                         continue
-                    self.trackers[trk_ind].update(dets_second[det_ind, :])
+                    self.trackers[trk_ind].update(dets_second[det_ind, :], frame_idx=self.frame_count)
                     to_remove_trk_indices.append(trk_ind)
                 unmatched_trks = np.setdiff1d(unmatched_trks, np.array(to_remove_trk_indices))
 
@@ -727,7 +752,7 @@ class OCSort(object):
             # Subset all_trk_states for the unmatched trackers only.
             jump_trk_states = [all_trk_states[t] for t in unmatched_trks]
 
-            jump_matched, jump_ud, jump_ut = associate(
+            jump_matched, jump_ud, jump_ut, jump_scores = associate(
                 left_dets, jump_boxes,
                 self.jump_iou_threshold,
                 jump_velocities, jump_k_obs, self.jump_inertia,
@@ -741,10 +766,10 @@ class OCSort(object):
                 overlap_iou_scale=self.overlap_iou_scale,
             )
 
-            for m in jump_matched:
+            for m, sc in zip(jump_matched, jump_scores):
                 det_ind = unmatched_dets[m[0]]
                 trk_ind = unmatched_trks[m[1]]
-                self.trackers[trk_ind].update(dets[det_ind, :])
+                self.trackers[trk_ind].update(dets[det_ind, :], frame_idx=self.frame_count, score=sc)
 
             unmatched_dets = unmatched_dets[jump_ud]
             unmatched_trks = unmatched_trks[jump_ut]
@@ -779,7 +804,8 @@ class OCSort(object):
                         break
             trk = KalmanBoxTracker(dets[i, :], delta_t=self.delta_t,
                                    brownian_pos_noise=self.brownian_pos_noise,
-                                   vial_roi=vial_roi)
+                                   vial_roi=vial_roi, fps=self.fps)
+            trk.frame_born = self.frame_count
             self.trackers.append(trk)
         i = len(self.trackers)
         for trk in reversed(self.trackers):
@@ -823,6 +849,36 @@ class OCSort(object):
         if(len(ret) > 0):
             return np.concatenate(ret)
         return np.empty((0, 5))
+
+    def relink(self) -> list:
+        """
+        Post-tracking re-link pass using behavioral split-and-compare.
+        Call after all frames have been processed.
+
+        Finds tracks whose behavioral profile is inconsistent with itself
+        (first half vs second half differ more than relink_inconsistency_threshold),
+        then tries swapping second segments between pairs of suspect tracks to
+        improve consistency. The split point is the frame with the largest
+        speed/acceleration change — a proxy for where an overlap-induced swap
+        may have occurred.
+
+        Returns
+        -------
+        list of (id_a, id_b, swap_frame) tuples.
+        Each entry means: after `swap_frame`, observations in tracker id_a
+        should be labelled id_b and vice versa.
+        id_a, id_b are 1-based tracker IDs.
+        """
+        from .association import relink_tracklets
+        return relink_tracklets(
+            self.trackers,
+            weights=self.relink_behavioral_weights,
+            min_length=self.relink_min_length,
+            inconsistency_threshold=self.relink_inconsistency_threshold,
+            swap_threshold=self.relink_swap_threshold,
+            confidence_weight=self.relink_confidence_weight,
+            fps=self.fps,
+        )
 
     def update_public(self, dets, cates, scores):
         self.frame_count += 1

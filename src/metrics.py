@@ -336,6 +336,71 @@ def plot_xy_trajectories_compact(df_compact, vial_rois=None, fig=None, row=None,
     return fig
 
 
+def plot_xy_trajectories_relinked(df_relinked, vial_rois=None, fig=None, row=None, col=None):
+    """
+    XY trajectory plot using relinked IDs from the second-round re-linking pass.
+
+    df_relinked must have columns: frame, x, y, original_id, relinked_id.
+    Each line is one relinked_id.
+    """
+    if fig is None:
+        fig = go.Figure()
+
+    _add_vial_shapes(fig, vial_rois, row=row, col=col)
+
+    relinked_ids = sorted(df_relinked["relinked_id"].unique())
+    for i, rid in enumerate(relinked_ids):
+        sub = df_relinked[df_relinked["relinked_id"] == rid].sort_values("frame")
+        if sub.empty:
+            continue
+        xs = sub["x"].values
+        ys = sub["y"].values
+        frames = sub["frame"].values
+        orig_ids = sub["original_id"].values
+        color = _track_color(i)
+        customdata = np.stack(
+            [frames, np.full(len(frames), str(rid)), np.asarray(orig_ids, dtype=object)],
+            axis=-1,
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=xs, y=ys, mode="lines",
+                line=dict(color=color, width=1),
+                opacity=0.75,
+                name=f"rID {rid}",
+                legendgroup=f"relinked-{rid}",
+                customdata=customdata,
+                hovertemplate=(
+                    "relinked %{customdata[1]}<br>"
+                    "orig %{customdata[2]}<br>"
+                    "frame %{customdata[0]}<br>"
+                    "(%{x:.1f}, %{y:.1f})<extra></extra>"
+                ),
+                showlegend=False,
+            ),
+            row=row, col=col,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=[xs[0], xs[-1]], y=[ys[0], ys[-1]],
+                mode="markers+text",
+                marker=dict(color=color, size=[8, 9], symbol=["circle", "x"]),
+                text=[f"{rid}", ""],
+                textposition="middle right",
+                textfont=dict(size=8, color=color),
+                legendgroup=f"relinked-{rid}",
+                hoverinfo="skip",
+                showlegend=False,
+            ),
+            row=row, col=col,
+        )
+
+    fig.update_xaxes(title_text="x (pixels)", row=row, col=col)
+    fig.update_yaxes(title_text="y (pixels)", row=row, col=col)
+    return fig
+
+
 def plot_detection_log(tracker, fps=30, fig=None, row=None, col=None):
     """
     Line plot: raw detections vs emitted tracks per frame.
@@ -709,29 +774,34 @@ def print_stitching_objectives(objectives: dict) -> str:
 # Composite figure builders
 # ---------------------------------------------------------------------------
 
-def _build_xy_figure(df_wide, df_compact, vial_rois):
-    """Build the XY trajectory composite figure (1×1 or 1×2)."""
+def _build_xy_figure(df_wide, df_compact, vial_rois, df_relinked=None):
+    """Build the XY trajectory composite figure (1×1, 1×2, or 1×3)."""
+    panels = [("Raw tracker IDs", lambda fig, r, c: plot_xy_trajectories(
+        df_wide, vial_rois=vial_rois, fig=fig, row=r, col=c))]
+
+    if df_relinked is not None:
+        panels.append(("Relinked IDs", lambda fig, r, c: plot_xy_trajectories_relinked(
+            df_relinked, vial_rois=vial_rois, fig=fig, row=r, col=c)))
+
     if df_compact is not None:
-        fig = make_subplots(
-            rows=1, cols=2,
-            subplot_titles=("Raw tracker IDs", "Compact IDs after stitching"),
-            horizontal_spacing=0.06,
-        )
-        plot_xy_trajectories(df_wide, vial_rois=vial_rois, fig=fig, row=1, col=1)
-        plot_xy_trajectories_compact(df_compact, vial_rois=vial_rois, fig=fig, row=1, col=2)
-        fig.update_yaxes(autorange="reversed", row=1, col=1)
-        fig.update_yaxes(autorange="reversed", row=1, col=2)
-        fig.update_xaxes(scaleanchor="y",  scaleratio=1, row=1, col=1)
-        fig.update_xaxes(scaleanchor="y2", scaleratio=1, row=1, col=2)
-        title = "XY trajectories: raw tracker IDs (left) vs compact IDs after stitching (right)"
-        width = 1600
-    else:
-        fig = make_subplots(rows=1, cols=1, subplot_titles=("Raw tracker IDs",))
-        plot_xy_trajectories(df_wide, vial_rois=vial_rois, fig=fig, row=1, col=1)
-        fig.update_yaxes(autorange="reversed", row=1, col=1)
-        fig.update_xaxes(scaleanchor="y", scaleratio=1, row=1, col=1)
-        title = "XY trajectories (○=start ×=end)"
-        width = 1000
+        panels.append(("Compact IDs after stitching", lambda fig, r, c: plot_xy_trajectories_compact(
+            df_compact, vial_rois=vial_rois, fig=fig, row=r, col=c)))
+
+    n_cols = len(panels)
+    fig = make_subplots(
+        rows=1, cols=n_cols,
+        subplot_titles=[p[0] for p in panels],
+        horizontal_spacing=0.06,
+    )
+    for col_i, (_, plot_fn) in enumerate(panels, start=1):
+        plot_fn(fig, 1, col_i)
+        fig.update_yaxes(autorange="reversed", row=1, col=col_i)
+        scaleanchor = "y" if col_i == 1 else f"y{col_i}"
+        fig.update_xaxes(scaleanchor=scaleanchor, scaleratio=1, row=1, col=col_i)
+
+    title_parts = [p[0] for p in panels]
+    title = "XY trajectories: " + " | ".join(title_parts) if n_cols > 1 else "XY trajectories (○=start ×=end)"
+    width = 800 * n_cols
 
     fig.update_layout(
         title=dict(text=title, x=0.5, xanchor="center", font=dict(size=13)),
