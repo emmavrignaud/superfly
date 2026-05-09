@@ -628,7 +628,7 @@ def link_cost_batch(
 
 def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc_weight, asso_func=iou_batch, aspect_weight=0.0, vial_mask=None, trk_profiles=None, trk_last_centers=None, behavioral_weight=0.0, link_trk_states=None, link_weights=None, overlap_det_mask=None, overlap_iou_scale=0.1):
     if(len(trackers)==0):
-        return np.empty((0,2),dtype=int), np.arange(len(detections)), np.empty((0,5),dtype=int)
+        return np.empty((0,2),dtype=int), np.arange(len(detections)), np.empty((0,5),dtype=int), []
 
     iou_matrix = asso_func(detections, trackers)
 

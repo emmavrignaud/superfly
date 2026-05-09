@@ -848,6 +848,7 @@ def _build_pipeline_figure(tracker, df_wide, df_stitched, fps):
 # ---------------------------------------------------------------------------
 
 def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
+                    df_relinked=None,
                     n_expected=None, fps=30, vial_rois=None,
                     config=None, output_dir=None,
                     stitching_objectives=None, show_plots=True):
@@ -882,7 +883,7 @@ def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
 
     dup_stats = compute_stitch_duplicate_stats(df_stitched, vial_rois) if df_stitched is not None else None
 
-    fig_xy       = _build_xy_figure(df_wide, df_compact, vial_rois)
+    fig_xy       = _build_xy_figure(df_wide, df_compact, vial_rois, df_relinked=df_relinked)
     fig_pipeline = _build_pipeline_figure(tracker, df_wide, df_stitched, fps)
 
     if output_dir is not None:

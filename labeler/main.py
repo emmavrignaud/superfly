@@ -2,17 +2,20 @@
 
 Usage (from repo root):
     python -m labeler.main --video PATH --raw RAW_CSV [--tracks TRACKS_CSV]
+                           [--annotator NAME]
                            [--out-dir DIR] [--fresh] [--resume PATH]
                            [--resume-autosave]
 
     args explained:
-    --video    path to the video file to label (use the same one you ran the tracker on)
-    --raw      path to the raw detections CSV (frame,x1,y1,x2,y2,conf) from RF-DETR
-    --tracks   tracks CSV for seeded suggestions (compact_tracks.csv long-format
-               or legacy tracks_wide_format.csv — auto-detected)
-    --out-dir  override the default per-video labeling folder
-    --fresh    ignore any existing session and start clean
-    --resume   explicit session/autosave file to resume from
+    --video      path to the video file to label (use the same one you ran the tracker on)
+    --raw        path to the raw detections CSV (frame,x1,y1,x2,y2,conf) from RF-DETR
+    --tracks     tracks CSV for seeded suggestions (compact_tracks.csv long-format
+                 or legacy tracks_wide_format.csv — auto-detected)
+    --annotator  your name (e.g. emma or isagi). Saves to <stem>.labeler.<name>.json
+                 so two annotators never overwrite each other. Omit for legacy behaviour.
+    --out-dir    override the default per-video labeling folder
+    --fresh      ignore any existing session and start clean
+    --resume     explicit session/autosave file to resume from
     --resume-autosave  prefer .labeler.autosave.json over .labeler.json
     --ocsort   (deprecated alias for --tracks)
 
@@ -36,8 +39,10 @@ On startup the labeler populates the folder with:
     metadata.json               session/source/git provenance + live counts
 
 Working files written by the labeler:
-    <videostem>.labeler.json           session (Ctrl+S writes here)
-    <videostem>.labeler.autosave.json  autosave (every 60 s if dirty)
+    <videostem>.labeler.json                    session — legacy, no --annotator
+    <videostem>.labeler.<name>.json             session — with --annotator name
+    <videostem>.labeler.autosave.json           autosave — legacy
+    <videostem>.labeler.<name>.autosave.json    autosave — with --annotator name
     <videostem>.gt.csv                 ground-truth export (Ctrl+E writes here)
     <videostem>.gt_summary.txt         QC summary (written alongside the CSV)
 
@@ -82,6 +87,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="explicit session/autosave file to resume from")
     p.add_argument("--resume-autosave", action="store_true",
                    help="prefer .labeler.autosave.json over .labeler.json when both exist")
+    p.add_argument("--annotator", default=None,
+                   help="annotator name (e.g. emma or isagi). Saves to "
+                        "<stem>.labeler.<name>.json so two annotators never collide.")
     return p.parse_args(argv)
 
 
@@ -99,8 +107,13 @@ def derive_paths(args: argparse.Namespace) -> dict:
         out_dir = _repo_root() / "data" / "manual_labelling" / stem
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    session_path  = out_dir / f"{stem}.labeler.json"
-    autosave_path = out_dir / f"{stem}.labeler.autosave.json"
+    name = args.annotator.strip().lower() if args.annotator else None
+    if name:
+        session_path  = out_dir / f"{stem}.labeler.{name}.json"
+        autosave_path = out_dir / f"{stem}.labeler.{name}.autosave.json"
+    else:
+        session_path  = out_dir / f"{stem}.labeler.json"
+        autosave_path = out_dir / f"{stem}.labeler.autosave.json"
     export_path   = out_dir / f"{stem}.gt.csv"
     summary_path  = out_dir / f"{stem}.gt_summary.txt"
 
