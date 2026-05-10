@@ -169,6 +169,17 @@ def export_tracks_xy_tuple_csv_one_config(
 
         frame_row = {"frame": frame_idx}
 
+        # Filter detections to vials only — discard anything whose centre
+        # falls outside every vial ROI so spurious out-of-vial detections
+        # never spawn new tracks.
+        if vial_rois is not None and len(det_array) > 0:
+            cx = (det_array[:, 0] + det_array[:, 2]) / 2.0
+            cy = (det_array[:, 1] + det_array[:, 3]) / 2.0
+            in_vial = np.zeros(len(det_array), dtype=bool)
+            for x0, y0, x1, y1 in vial_rois.values():
+                in_vial |= (cx >= x0) & (cx <= x1) & (cy >= y0) & (cy <= y1)
+            det_array = det_array[in_vial]
+
         if len(det_array) > 0:
             tracks = tracker.update(det_array, [img_h, img_w], [img_h, img_w])
 

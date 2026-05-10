@@ -176,6 +176,103 @@ def print_tracker_summary(stats, tracker, n_expected=None):
 
 
 # ---------------------------------------------------------------------------
+# Stage 2.5 — Relinking comparison
+# ---------------------------------------------------------------------------
+
+def compute_relink_stats(df_wide, df_relinked):
+    """
+    Compare tracking quality before and after the relinking pass.
+
+    Parameters
+    ----------
+    df_wide      : wide-format DataFrame (rows=frames, cols=track IDs)
+    df_relinked  : long-format DataFrame with columns frame, x, y, original_id, relinked_id
+
+    Returns
+    -------
+    dict with before/after statistics and swap counts.
+    """
+    id_cols = [c for c in df_wide.columns if c != "frame"]
+    n_frames = len(df_wide)
+
+    before_lengths = np.array([
+        (df_wide[c].notna() & (df_wide[c] != "")).sum()
+        for c in id_cols
+    ], dtype=float)
+
+    after_lengths = df_relinked.groupby("relinked_id")["frame"].count().values.astype(float)
+
+    swapped = df_relinked[df_relinked["original_id"] != df_relinked["relinked_id"]]
+    unique_swap_pairs = set(
+        tuple(sorted([a, b]))
+        for a, b in zip(swapped["original_id"], swapped["relinked_id"])
+    )
+    affected_ids = (
+        set(swapped["original_id"].unique()) | set(swapped["relinked_id"].unique())
+    )
+
+    return {
+        "n_ids_before":        len(id_cols),
+        "n_ids_after":         int(df_relinked["relinked_id"].nunique()),
+        "mean_length_before":  round(float(np.mean(before_lengths)), 1) if len(before_lengths) else 0.0,
+        "median_length_before":round(float(np.median(before_lengths)), 1) if len(before_lengths) else 0.0,
+        "min_length_before":   int(np.min(before_lengths)) if len(before_lengths) else 0,
+        "max_length_before":   int(np.max(before_lengths)) if len(before_lengths) else 0,
+        "mean_length_after":   round(float(np.mean(after_lengths)), 1) if len(after_lengths) else 0.0,
+        "median_length_after": round(float(np.median(after_lengths)), 1) if len(after_lengths) else 0.0,
+        "min_length_after":    int(np.min(after_lengths)) if len(after_lengths) else 0,
+        "max_length_after":    int(np.max(after_lengths)) if len(after_lengths) else 0,
+        "coverage_before":     round(float(np.mean(before_lengths / n_frames)) * 100, 1) if len(before_lengths) else 0.0,
+        "coverage_after":      round(float(np.mean(after_lengths / n_frames)) * 100, 1) if len(after_lengths) else 0.0,
+        "n_swaps":             len(unique_swap_pairs),
+        "n_affected_tracks":   len(affected_ids),
+    }
+
+
+def print_relink_comparison(stats):
+    """Print a before/after table for the relinking pass. Returns the text."""
+    lines = []
+    lines.append("=" * 55)
+    lines.append("  RELINKING COMPARISON  (raw OC-SORT  ->  relinked)")
+    lines.append("=" * 55)
+    lines.append(f"  Swaps accepted          : {stats['n_swaps']}")
+    lines.append(f"  Tracks affected         : {stats['n_affected_tracks']}")
+    lines.append("")
+    lines.append(f"  {'Metric':<26}{'Before':>8}  {'After':>8}  {'Delta':>8}")
+    lines.append(f"  {'-'*26}{'-'*8}  {'-'*8}  {'-'*8}")
+
+    def row(label, before, after, fmt=".1f"):
+        delta = after - before
+        sign  = "+" if delta > 0 else ""
+        lines.append(
+            f"  {label:<26}{before:>8{fmt}}  {after:>8{fmt}}  {sign}{delta:>{fmt}}"
+        )
+
+    row("Unique track IDs",      stats["n_ids_before"],        stats["n_ids_after"],        fmt="d")
+    row("Mean track length (f)", stats["mean_length_before"],  stats["mean_length_after"])
+    row("Median track length",   stats["median_length_before"],stats["median_length_after"])
+    row("Min track length",      stats["min_length_before"],   stats["min_length_after"],   fmt="d")
+    row("Max track length",      stats["max_length_before"],   stats["max_length_after"],   fmt="d")
+    row("Mean ID coverage (%)",  stats["coverage_before"],     stats["coverage_after"])
+
+    lines.append("")
+    if stats["n_swaps"] == 0:
+        lines.append("  No swaps were accepted — tracks unchanged.")
+    else:
+        lines.append(f"  {stats['n_swaps']} swap(s) corrected across "
+                     f"{stats['n_affected_tracks']} track(s).")
+        if stats["mean_length_after"] > stats["mean_length_before"]:
+            lines.append("  Mean track length increased — relinking is helping.")
+        else:
+            lines.append("  Mean track length unchanged — swaps may be cosmetic.")
+    lines.append("=" * 55)
+
+    text = "\n".join(lines)
+    print(text)
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Plots (Plotly)
 # ---------------------------------------------------------------------------
 
@@ -881,6 +978,11 @@ def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
     stats = compute_tracker_stats(tracker, df_wide)
     summary_text = print_tracker_summary(stats, tracker, n_expected)
 
+    relink_text = ""
+    if df_relinked is not None:
+        relink_stats = compute_relink_stats(df_wide, df_relinked)
+        relink_text  = print_relink_comparison(relink_stats)
+
     dup_stats = compute_stitch_duplicate_stats(df_stitched, vial_rois) if df_stitched is not None else None
 
     fig_xy       = _build_xy_figure(df_wide, df_compact, vial_rois, df_relinked=df_relinked)
@@ -888,7 +990,7 @@ def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
 
     if output_dir is not None:
         _save_report(output_dir, summary_text, cfg_report, fig_xy, fig_pipeline,
-                     dup_stats, stitching_objectives)
+                     dup_stats, stitching_objectives, relink_text=relink_text)
 
     if show_plots:
         fig_xy.show()
@@ -1145,7 +1247,7 @@ _HTML_STYLE = """
 
 
 def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
-                 dup_stats=None, objectives=None):
+                 dup_stats=None, objectives=None, relink_text=""):
     """
     Write:
       metrics_report.html          — interactive, all figures embedded
@@ -1187,8 +1289,10 @@ def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
 <table class="report-two-col" role="presentation">
 <tr>
 <td class="report-left-col">
-<h2>Summary</h2>
+<h2>Tracker Summary</h2>
 <pre>{_html_escape(summary_text)}</pre>
+
+{f'<h2>Relinking Comparison</h2><pre>{_html_escape(relink_text)}</pre>' if relink_text else ''}
 
 <h2>Stitching Duplicate Check</h2>
 {_dup_stats_html(dup_stats)}
@@ -1225,10 +1329,16 @@ def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
         md.append(json.dumps(config, indent=2, default=str))
         md.append("```\n")
 
-    md.append("## Summary\n")
+    md.append("## Tracker Summary\n")
     md.append("```")
     md.append(summary_text)
     md.append("```\n")
+
+    if relink_text:
+        md.append("## Relinking Comparison\n")
+        md.append("```")
+        md.append(relink_text)
+        md.append("```\n")
 
     md.append("## Stitching Duplicate Check\n")
     if dup_stats is not None:
