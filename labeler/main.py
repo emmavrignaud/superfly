@@ -9,22 +9,22 @@ Usage (from repo root):
     args explained:
     --video      path to the video file to label (use the same one you ran the tracker on)
     --raw        path to the raw detections CSV (frame,x1,y1,x2,y2,conf) from RF-DETR
-    --tracks     tracks CSV for seeded suggestions (compact_tracks.csv long-format
-                 or legacy tracks_wide_format.csv — auto-detected)
+    --tracks     tracks CSV for seeded suggestions (ordered_tracks.csv long-format
+                 or legacy ocsort_tracks.csv — auto-detected)
     --annotator  your name (e.g. emma or isagi). Saves to <stem>.labeler.<name>.json
                  so two annotators never overwrite each other. Omit for legacy behaviour.
     --out-dir    override the default per-video labeling folder
-    --fresh      ignore any existing session and start clean
+    --fresh      ignore any existing session a1-- nd start clean
     --resume     explicit session/autosave file to resume from
     --resume-autosave  prefer .labeler.autosave.json over .labeler.json
     --ocsort   (deprecated alias for --tracks)
 
     example: (run from repo root! hhhhhhh don't be like me and cd into labeler/ )
-            python -m labeler.main --video outputs/run_84_31DPE_n005/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4 --raw outputs/run_84_31DPE_n005/detections_raw.csv --tracks outputs/run_84_31DPE_n005/compact_tracks.csv --fresh
+            python -B -m labeler.main --video C:/Users/emmav/Downloads/superfly/outputs/run_104/2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped.mp4 --raw C:/Users/emmav/Downloads/superfly/outputs/run_80_13DPE_n002/detections_raw.csv --tracks C:/Users/emmav/Downloads/superfly/outputs/run_104/ordered_tracks.csv --fresh
 
 The --tracks CSV may be either:
-  - long-format  (e.g. compact_tracks.csv: frame, x, y, compact_id, ...)
-  - wide-format  (legacy tracks_wide_format.csv: frame, id1, id2, ...)
+  - long-format  (e.g. ordered_tracks.csv: frame, x, y, ordered_id, ...)
+  - wide-format  (legacy ocsort_tracks.csv: frame, id1, id2, ...)
 The format is auto-detected from the column header.
 
 `--ocsort` is kept as a deprecated alias for `--tracks`.
@@ -73,8 +73,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--raw", required=True, help="raw detection bbox CSV (frame,x1,y1,x2,y2,conf)")
     p.add_argument("--tracks", default=None,
                    help="optional tracks CSV for OC-SORT-style suggestions. "
-                        "Long-format (compact_tracks.csv) or legacy wide-format "
-                        "(tracks_wide_format.csv) — auto-detected.")
+                        "Long-format (ordered_tracks.csv) or legacy wide-format "
+                        "(ocsort_tracks.csv) — auto-detected.")
     p.add_argument("--ocsort", default=None,
                    help="(deprecated alias for --tracks)")
     p.add_argument("--out-dir", default=None,

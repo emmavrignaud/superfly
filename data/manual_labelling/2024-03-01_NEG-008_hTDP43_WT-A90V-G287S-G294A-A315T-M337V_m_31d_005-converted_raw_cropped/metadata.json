@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
   "created_at": "2026-04-27T21:53:38",
-  "last_opened_at": "2026-05-03T14:26:31",
-  "last_saved_at": "2026-05-04T17:54:31",
+  "last_opened_at": "2026-05-08T00:10:10",
+  "last_saved_at": "2026-05-08T00:12:15",
   "last_exported_at": "2026-05-04T00:02:00",
-  "labeler_git_commit": "224b72984b3e66f4c94151f51d0af80cf35ac582",
+  "labeler_git_commit": "5e4d3c84ed570d61e88fa9da531f114d7f5c2312",
   "sources": {
-    "video": "outputs/run_84_31DPE_n005/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4",
-    "raw_detections_csv": "outputs/run_84_31DPE_n005/detections_raw.csv",
-    "tracks_csv": "outputs/run_84_31DPE_n005/compact_tracks.csv"
+    "video": "data/manual_labelling/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4",
+    "raw_detections_csv": "data/manual_labelling/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped/detections_raw.csv",
+    "tracks_csv": "data/manual_labelling/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped/tracks_long.csv"
   },
   "video": {
     "frame_count": 363,
@@ -26,9 +26,9 @@
     "wrote": []
   },
   "annotation_counts": {
-    "total": 11877,
-    "human": 1518,
-    "ocsort": 10359,
-    "tracks": 64
+    "total": 7385,
+    "human": 2297,
+    "ocsort": 5088,
+    "tracks": 34
   }
 }

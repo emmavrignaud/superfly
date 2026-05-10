@@ -5,12 +5,11 @@ Quantitative metrics and diagnostics for the tracking pipeline.
 
 Purpose
 -------
-After running the tracker and stitching, it is hard to know from the overlay
-video alone whether a problem is caused by the detector, the tracker, or the
-stitching. This module answers the question: at which stage is information
-being lost, and why?
+After running the tracker, it is hard to know from the overlay video alone
+whether a problem is caused by the detector or the tracker. This module
+answers the question: at which stage is information being lost, and why?
 
-It works in three stages, each pointing to different fixes:
+It works in two stages, each pointing to different fixes:
 
   Stage 1 — Detector
     Are the right number of flies being detected each frame?
@@ -22,19 +21,14 @@ It works in three stages, each pointing to different fixes:
     or flies jumping a lot!
     Many IDs but high coverage → maybe matching problem (wrong asso_func or IoU threshold).
 
-  Stage 3 — Stitching
-    Did stitching reduce IDs without losing frame coverage?
-    IDs reduced but coverage drops → score may be too high (strict)
-    IDs not reduced enough → link_score too lenient or gaps too large.
-
 Main entry point
 ----------------
-    run_diagnostics(tracker, df_wide, df_stitched, n_expected, fps)
+    run_diagnostics(tracker, df_wide, n_expected, fps)
 
 Builds two composite Plotly figures (interactive hover) and optionally writes:
   metrics_report.html          — interactive, all figures embedded
   metrics_report.md            — markdown with static PNG references
-  metrics_xy_trajectories.png  — side-by-side XY (raw vs compact)
+  metrics_xy_trajectories.png  — side-by-side XY (raw vs ordered)
   metrics_pipeline.png         — 4-panel pipeline diagnostics
 """
 
@@ -367,22 +361,21 @@ def plot_xy_trajectories(df_wide, vial_rois=None, fig=None, row=None, col=None):
     return fig
 
 
-def plot_xy_trajectories_compact(df_compact, vial_rois=None, fig=None, row=None, col=None):
+def plot_xy_trajectories_ordered(df_ordered, vial_rois=None, fig=None, row=None, col=None):
     """
-    XY trajectory plot using compact IDs (after stitching + vial assignment).
+    XY trajectory plot using ordered IDs (after vial assignment).
 
-    Each line is one compact_id, so you can verify that stitching correctly
-    merged fragments and that each compact ID stays within its vial.
+    Each line is one ordered_id, so you can verify that each ordered ID stays within its vial.
     """
     if fig is None:
         fig = go.Figure()
 
     _add_vial_shapes(fig, vial_rois, row=row, col=col)
 
-    compact_ids = sorted(df_compact["compact_id"].unique())
-    has_vial = "vial_id" in df_compact.columns
-    for i, cid in enumerate(compact_ids):
-        sub = df_compact[df_compact["compact_id"] == cid].sort_values("frame")
+    ordered_ids = sorted(df_ordered["ordered_id"].unique())
+    has_vial = "vial_id" in df_ordered.columns
+    for i, cid in enumerate(ordered_ids):
+        sub = df_ordered[df_ordered["ordered_id"] == cid].sort_values("frame")
         if sub.empty:
             continue
         xs = sub["x"].values
@@ -400,11 +393,11 @@ def plot_xy_trajectories_compact(df_compact, vial_rois=None, fig=None, row=None,
                 x=xs, y=ys, mode="lines",
                 line=dict(color=color, width=1),
                 opacity=0.75,
-                name=f"cID {cid}",
-                legendgroup=f"compact-{cid}",
+                name=f"oID {cid}",
+                legendgroup=f"ordered-{cid}",
                 customdata=customdata,
                 hovertemplate=(
-                    "compact %{customdata[1]}<br>"
+                    "ordered %{customdata[1]}<br>"
                     "vial %{customdata[2]}<br>"
                     "frame %{customdata[0]}<br>"
                     "(%{x:.1f}, %{y:.1f})<extra></extra>"
@@ -421,7 +414,7 @@ def plot_xy_trajectories_compact(df_compact, vial_rois=None, fig=None, row=None,
                 text=[f"{cid}", ""],
                 textposition="middle right",
                 textfont=dict(size=8, color=color),
-                legendgroup=f"compact-{cid}",
+                legendgroup=f"ordered-{cid}",
                 hoverinfo="skip",
                 showlegend=False,
             ),
@@ -664,9 +657,9 @@ def plot_suppressed_histogram(tracker, fig=None, row=None, col=None):
     return fig
 
 
-def plot_coverage_comparison(df_wide, df_stitched, fig=None, row=None, col=None):
+def plot_coverage_comparison(df_wide, fig=None, row=None, col=None):
     """
-    Bar chart: mean frame coverage per ID before and after stitching.
+    Bar chart: mean frame coverage per track ID.
     """
     if fig is None:
         fig = go.Figure()
@@ -676,23 +669,9 @@ def plot_coverage_comparison(df_wide, df_stitched, fig=None, row=None, col=None)
         [(df_wide[c].notna() & (df_wide[c] != "")).mean() for c in id_cols_wide]
     ) * 100 if id_cols_wide else 0.0
 
-    labels = ["Before stitching"]
+    labels = ["OC-SORT tracks"]
     values = [cov_before]
     colors = ["steelblue"]
-    cov_after = None
-
-    if df_stitched is not None and "stitched_id" in df_stitched.columns:
-        n_frames = df_wide["frame"].max() + 1
-        cov_after_vals = [
-            grp["frame"].nunique() / n_frames
-            for _, grp in df_stitched.groupby("stitched_id")
-        ]
-        cov_after = float(np.mean(cov_after_vals) * 100) if cov_after_vals else 0.0
-        labels.append("After stitching")
-        values.append(cov_after)
-        colors.append("mediumseagreen")
-        n_before = len(id_cols_wide)
-        n_after  = df_stitched["stitched_id"].nunique()
 
     fig.add_trace(
         go.Bar(
@@ -709,17 +688,16 @@ def plot_coverage_comparison(df_wide, df_stitched, fig=None, row=None, col=None)
     fig.update_xaxes(row=row, col=col)
     fig.update_yaxes(title_text="Mean frame coverage per ID (%)", range=[0, 110], row=row, col=col)
 
-    if cov_after is not None:
-        fig.add_annotation(
-            text=f"IDs: {n_before} → {n_after}  |  Coverage: {cov_before:.1f}% → {cov_after:.1f}%",
-            showarrow=False,
-            xref=f"x{'' if (row is None or col is None) else f' domain'}",
-            yref=f"y{'' if (row is None or col is None) else f' domain'}",
-            x=0.5, y=-0.25,
-            xanchor="center", yanchor="top",
-            font=dict(size=10, color="gray"),
-            row=row, col=col,
-        )
+    fig.add_annotation(
+        text=f"IDs: {len(id_cols_wide)}  |  Coverage: {cov_before:.1f}%",
+        showarrow=False,
+        xref=f"x{'' if (row is None or col is None) else f' domain'}",
+        yref=f"y{'' if (row is None or col is None) else f' domain'}",
+        x=0.5, y=-0.25,
+        xanchor="center", yanchor="top",
+        font=dict(size=10, color="gray"),
+        row=row, col=col,
+    )
 
     return fig
 
@@ -871,18 +849,18 @@ def print_stitching_objectives(objectives: dict) -> str:
 # Composite figure builders
 # ---------------------------------------------------------------------------
 
-def _build_xy_figure(df_wide, df_compact, vial_rois, df_relinked=None):
+def _build_xy_figure(df_wide, df_ordered, vial_rois, df_relinked=None):
     """Build the XY trajectory composite figure (1×1, 1×2, or 1×3)."""
-    panels = [("Raw tracker IDs", lambda fig, r, c: plot_xy_trajectories(
+    panels = [("Raw OC-SORT IDs", lambda fig, r, c: plot_xy_trajectories(
         df_wide, vial_rois=vial_rois, fig=fig, row=r, col=c))]
 
     if df_relinked is not None:
         panels.append(("Relinked IDs", lambda fig, r, c: plot_xy_trajectories_relinked(
             df_relinked, vial_rois=vial_rois, fig=fig, row=r, col=c)))
 
-    if df_compact is not None:
-        panels.append(("Compact IDs after stitching", lambda fig, r, c: plot_xy_trajectories_compact(
-            df_compact, vial_rois=vial_rois, fig=fig, row=r, col=c)))
+    if df_ordered is not None:
+        panels.append(("Ordered track IDs", lambda fig, r, c: plot_xy_trajectories_ordered(
+            df_ordered, vial_rois=vial_rois, fig=fig, row=r, col=c)))
 
     n_cols = len(panels)
     fig = make_subplots(
@@ -909,7 +887,7 @@ def _build_xy_figure(df_wide, df_compact, vial_rois, df_relinked=None):
     return fig
 
 
-def _build_pipeline_figure(tracker, df_wide, df_stitched, fps):
+def _build_pipeline_figure(tracker, df_wide, fps):
     """Build the 4-row pipeline diagnostics figure."""
     fig = make_subplots(
         rows=4, cols=1,
@@ -919,13 +897,13 @@ def _build_pipeline_figure(tracker, df_wide, df_stitched, fps):
             "Stage 1→2: Detections vs emitted tracks per frame",
             "Stage 2: Tracklet timeline (blue=emitted, red=suppressed)",
             "Stage 2: Suppressed track length distribution",
-            "Stage 2→3: Coverage before vs after stitching",
+            "Stage 2: Mean frame coverage per ID",
         ),
     )
     plot_detection_log(tracker, fps=fps, fig=fig, row=1, col=1)
     plot_tracklet_timeline(df_wide, suppressed_tracks=tracker.suppressed_tracks, fig=fig, row=2, col=1)
     plot_suppressed_histogram(tracker, fig=fig, row=3, col=1)
-    plot_coverage_comparison(df_wide, df_stitched, fig=fig, row=4, col=1)
+    plot_coverage_comparison(df_wide, fig=fig, row=4, col=1)
 
     fig.update_layout(
         title=dict(text="Tracking pipeline diagnostics", x=0.5, xanchor="center",
@@ -944,27 +922,25 @@ def _build_pipeline_figure(tracker, df_wide, df_stitched, fps):
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
+def run_diagnostics(tracker, df_wide, df_ordered=None,
                     df_relinked=None,
                     n_expected=None, fps=30, vial_rois=None,
                     config=None, output_dir=None,
-                    stitching_objectives=None, show_plots=True):
+                    show_plots=True):
     """
     Run all diagnostics, display interactive Plotly figures, and optionally save a report.
 
     Parameters
     ----------
-    tracker     : OCSort object returned by export_tracks_xy_tuple_csv_one_config
-    df_wide     : wide-format DataFrame from tracking
-    df_stitched : stitched long-format DataFrame (optional, for stage 3)
-    df_compact  : compact_tracks DataFrame (optional, shows post-stitching trajectories)
-    n_expected  : total number of flies expected (e.g. n_vials × flies_per_vial)
-    fps         : video frame rate (used for axis labels)
-    vial_rois   : optional dict {vial_id: [x1, y1, x2, y2]} for XY plot background
-    config      : optional dict — the full config used for this run
-    output_dir  : optional path — if given, saves HTML + markdown + PNGs inside that directory
-    stitching_objectives : optional dict from compute_stitching_objectives()
-    show_plots  : bool, default True — if False, skip Plotly ``.show()`` (unattended batch).
+    tracker    : OCSort object returned by export_tracks_xy_tuple_csv_one_config
+    df_wide    : wide-format OC-SORT tracks DataFrame
+    df_ordered : ordered_tracks DataFrame (optional, shows post-tracking trajectories)
+    n_expected : total number of flies expected (e.g. n_vials × flies_per_vial)
+    fps        : video frame rate (used for axis labels)
+    vial_rois  : optional dict {vial_id: [x1, y1, x2, y2]} for XY plot background
+    config     : optional dict — the full config used for this run
+    output_dir : optional path — if given, saves HTML + markdown + PNGs inside that directory
+    show_plots : bool, default True — if False, skip Plotly ``.show()`` (unattended batch).
     """
     cfg_report = _config_for_report(config)
     if cfg_report is not None:
@@ -983,14 +959,12 @@ def run_diagnostics(tracker, df_wide, df_stitched=None, df_compact=None,
         relink_stats = compute_relink_stats(df_wide, df_relinked)
         relink_text  = print_relink_comparison(relink_stats)
 
-    dup_stats = compute_stitch_duplicate_stats(df_stitched, vial_rois) if df_stitched is not None else None
-
-    fig_xy       = _build_xy_figure(df_wide, df_compact, vial_rois, df_relinked=df_relinked)
-    fig_pipeline = _build_pipeline_figure(tracker, df_wide, df_stitched, fps)
+    fig_xy       = _build_xy_figure(df_wide, df_ordered, vial_rois, df_relinked=df_relinked)
+    fig_pipeline = _build_pipeline_figure(tracker, df_wide, fps)
 
     if output_dir is not None:
         _save_report(output_dir, summary_text, cfg_report, fig_xy, fig_pipeline,
-                     dup_stats, stitching_objectives, relink_text=relink_text)
+                     relink_text=relink_text)
 
     if show_plots:
         fig_xy.show()
@@ -1247,7 +1221,7 @@ _HTML_STYLE = """
 
 
 def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
-                 dup_stats=None, objectives=None, relink_text=""):
+                 relink_text=""):
     """
     Write:
       metrics_report.html          — interactive, all figures embedded
@@ -1293,12 +1267,6 @@ def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
 <pre>{_html_escape(summary_text)}</pre>
 
 {f'<h2>Relinking Comparison</h2><pre>{_html_escape(relink_text)}</pre>' if relink_text else ''}
-
-<h2>Stitching Duplicate Check</h2>
-{_dup_stats_html(dup_stats)}
-
-<h2>Stitching Quality Objectives</h2>
-{_objectives_html(objectives)}
 </td>
 <td class="report-right-col">
 {_random_funny_image_html()}
@@ -1339,34 +1307,6 @@ def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
         md.append("```")
         md.append(relink_text)
         md.append("```\n")
-
-    md.append("## Stitching Duplicate Check\n")
-    if dup_stats is not None:
-        n_ids    = dup_stats["n_duplicate_ids"]
-        n_frames = dup_stats["n_duplicate_frames"]
-        if n_ids == 0:
-            md.append("**0 duplicate (frame, stitched_id) pairs — clean.**\n")
-        else:
-            md.append(f"**{n_ids} stitched_id(s) had duplicates across {n_frames} frame(s).**\n")
-            md.append("| stitched_id | vial | affected frames |")
-            md.append("|---|---|---|")
-            for d in dup_stats["details"]:
-                md.append(f"| {d['stitched_id']} | {d['vial_id']} | {d['n_frames']} |")
-            md.append("")
-    else:
-        md.append("_Stitched output not provided — duplicate check skipped._\n")
-
-    md.append("## Stitching Quality Objectives\n")
-    if objectives is not None:
-        md.append("| Objective | Value |")
-        md.append("|---|---|")
-        md.append(f"| vial_count_error | {objectives['vial_count_error']:.1f} |")
-        md.append(f"| per_id_coverage_loss | {objectives['per_id_coverage_loss']:.1f} frames/fly |")
-        md.append(f"| short_track_count | {objectives['short_track_count']} |")
-        md.append(f"| per_frame_id_variance | {objectives['per_frame_id_variance']:.3f} |")
-        md.append("")
-    else:
-        md.append("_Not computed for this run._\n")
 
     md.append("## XY Trajectories\n")
     md.append("![XY Trajectories](metrics_xy_trajectories.png)\n")

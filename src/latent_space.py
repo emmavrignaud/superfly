@@ -1,7 +1,7 @@
 """
 src/latent_space.py
 
-Latent-space analysis helpers for compact_tracks-based genotype studies.
+Latent-space analysis helpers for ordered_tracks-based genotype studies.
 """
 
 from __future__ import annotations
@@ -126,7 +126,7 @@ def add_roi_relative_x(
 
 
 def _fly_ids(df: pd.DataFrame) -> list[str]:
-    return sorted(df["compact_id"].astype(str).unique().tolist())
+    return sorted(df["ordered_id"].astype(str).unique().tolist())
 
 
 def build_xy_plus_features_matrix(
@@ -138,7 +138,7 @@ def build_xy_plus_features_matrix(
     """
     fly_ids = _fly_ids(df_frames)
     lengths = (
-        df_frames.groupby("compact_id")["frame"]
+        df_frames.groupby("ordered_id")["frame"]
         .count()
         .reindex(fly_ids)
         .fillna(0)
@@ -150,7 +150,7 @@ def build_xy_plus_features_matrix(
 
     traj_blocks: list[np.ndarray] = []
     for fid in fly_ids:
-        g = df_frames[df_frames["compact_id"].astype(str) == fid].sort_values("frame")
+        g = df_frames[df_frames["ordered_id"].astype(str) == fid].sort_values("frame")
         xy = g[["x_rel", "y"]].to_numpy(dtype=float)
         if len(xy) >= T:
             xy = xy[:T]
@@ -161,23 +161,23 @@ def build_xy_plus_features_matrix(
 
     traj_matrix = np.vstack(traj_blocks) if traj_blocks else np.zeros((0, 2 * T))
 
-    cols_drop = {"compact_id", "vial_id", "genotype", "run"}
+    cols_drop = {"ordered_id", "vial_id", "genotype", "run"}
     numeric_cols = [c for c in df_fly.columns if c not in cols_drop and np.issubdtype(df_fly[c].dtype, np.number)]
     meta = (
-        df_fly[["compact_id", "genotype", "run"]].copy()
-        .assign(compact_id=lambda d: d["compact_id"].astype(str))
-        .set_index("compact_id")
+        df_fly[["ordered_id", "genotype", "run"]].copy()
+        .assign(ordered_id=lambda d: d["ordered_id"].astype(str))
+        .set_index("ordered_id")
         .reindex(fly_ids)
     )
     feats = (
-        df_fly.set_index(df_fly["compact_id"].astype(str))[numeric_cols]
+        df_fly.set_index(df_fly["ordered_id"].astype(str))[numeric_cols]
         .reindex(fly_ids)
         .to_numpy(dtype=float)
     )
 
     X = np.hstack([traj_matrix, feats])
     X = StandardScaler().fit_transform(X)
-    meta = meta.reset_index().rename(columns={"index": "compact_id"})
+    meta = meta.reset_index().rename(columns={"index": "ordered_id"})
     return X, meta, T
 
 
@@ -209,7 +209,7 @@ def build_hist_kinematics_matrix(
 
     blocks: list[np.ndarray] = []
     for fid in fly_ids:
-        g = df_frames[df_frames["compact_id"].astype(str) == fid]
+        g = df_frames[df_frames["ordered_id"].astype(str) == fid]
         vec: list[np.ndarray] = []
         for sig in signals:
             h, _ = np.histogram(g[sig].to_numpy(dtype=float), bins=edges[sig])
@@ -221,12 +221,12 @@ def build_hist_kinematics_matrix(
     X = np.vstack(blocks) if blocks else np.zeros((0, 0))
     X = StandardScaler().fit_transform(X) if X.size else X
     meta = (
-        df_frames.drop_duplicates("compact_id")[["compact_id", "genotype", "run"]]
-        .assign(compact_id=lambda d: d["compact_id"].astype(str))
-        .set_index("compact_id")
+        df_frames.drop_duplicates("ordered_id")[["ordered_id", "genotype", "run"]]
+        .assign(ordered_id=lambda d: d["ordered_id"].astype(str))
+        .set_index("ordered_id")
         .reindex(fly_ids)
         .reset_index()
-        .rename(columns={"index": "compact_id"})
+        .rename(columns={"index": "ordered_id"})
     )
     return X, meta, edges
 
@@ -278,7 +278,7 @@ def make_umap_figure(emb: np.ndarray, meta: pd.DataFrame, title: str) -> go.Figu
             "component_3": emb[:, 2],
             "genotype": meta["genotype"].values,
             "run": meta["run"].values,
-            "compact_id": meta["compact_id"].values,
+            "ordered_id": meta["ordered_id"].values,
         }
     )
     fig = px.scatter_3d(
@@ -287,7 +287,7 @@ def make_umap_figure(emb: np.ndarray, meta: pd.DataFrame, title: str) -> go.Figu
         y="component_2",
         z="component_3",
         color="genotype",
-        hover_data=["compact_id", "run"],
+        hover_data=["ordered_id", "run"],
         title=title,
     )
     fig.update_traces(marker=dict(size=4, opacity=0.85))
@@ -369,9 +369,9 @@ def permanova_test(
 def run_latent_space_analysis(df_raw: pd.DataFrame) -> dict:
     """
     End-to-end latent analysis from raw compact tracks + metadata columns.
-    Requires: compact_id, frame, x, y, vial_id, genotype, run.
+    Requires: ordered_id, frame, x, y, vial_id, genotype, run.
     """
-    required = {"compact_id", "frame", "x", "y", "vial_id", "genotype", "run"}
+    required = {"ordered_id", "frame", "x", "y", "vial_id", "genotype", "run"}
     miss = required - set(df_raw.columns)
     if miss:
         raise ValueError(f"Missing required columns for latent analysis: {sorted(miss)}")
@@ -409,9 +409,9 @@ def run_latent_space_analysis(df_raw: pd.DataFrame) -> dict:
 
     df_feat = extract_behavioral_features(df_norm)
     df_fly = aggregate_per_fly_features(df_feat, pause_threshold=1.0)
-    meta = df_norm.drop_duplicates("compact_id").set_index("compact_id")[["genotype", "run"]]
-    df_fly["genotype"] = df_fly["compact_id"].map(meta["genotype"])
-    df_fly["run"] = df_fly["compact_id"].map(meta["run"])
+    meta = df_norm.drop_duplicates("ordered_id").set_index("ordered_id")[["genotype", "run"]]
+    df_fly["genotype"] = df_fly["ordered_id"].map(meta["genotype"])
+    df_fly["run"] = df_fly["ordered_id"].map(meta["run"])
 
     X1, m1, T = build_xy_plus_features_matrix(df_feat, df_fly)
     X1_eff, pca1 = maybe_apply_pca(X1)

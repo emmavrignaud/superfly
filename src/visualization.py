@@ -1,9 +1,9 @@
 """
 src/visualization.py
 
-Render overlay video: fly positions coloured by vial, shaded by compact_id.
+Render overlay video: fly positions coloured by vial, shaded by ordered_id.
 
-Expects compact_tracks CSV columns: frame, x, y, vial_id, compact_id.
+Expects ordered_tracks CSV columns: frame, x, y, vial_id, ordered_id.
 """
 
 import json
@@ -200,7 +200,7 @@ def render_vial_overlay_video(
 ):
     """
     Render an overlay video where flies are coloured by vial and shaded
-    by compact_id within each vial.
+    by ordered_id within each vial.
 
     Color scheme (HSV hue per vial):
         vial1: blue    vial4: orange
@@ -212,7 +212,7 @@ def render_vial_overlay_video(
     video_path : str
         Path to the original (or preprocessed) video.
     csv_path : str
-        compact_tracks CSV from assign_vials_and_compact_ids().
+        ordered_tracks CSV from assign_vials_and_ordered_ids().
     out_mp4 : str
         Output path for the annotated video.
     frame_offset : int
@@ -226,7 +226,7 @@ def render_vial_overlay_video(
     fps_out : int
         Output frame rate.
     show_ids : bool
-        Overlay compact_id chip next to each fly.
+        Overlay ordered_id chip next to each fly.
     tick_len, tick_thick : int
         Half-length and stroke width of the crosshair at the fly centroid.
     chip_font_scale : float
@@ -250,14 +250,14 @@ def render_vial_overlay_video(
 
     df = pd.read_csv(csv_path)
     df["frame"] = df["frame"].astype(int)
-    df["compact_id"] = df["compact_id"].astype(int)
+    df["ordered_id"] = df["ordered_id"].astype(int)
     df["vial_id"] = df["vial_id"].astype(str)
 
     by_frame = {
-        int(f): g[["x", "y", "vial_id", "compact_id"]].to_numpy()
+        int(f): g[["x", "y", "vial_id", "ordered_id"]].to_numpy()
         for f, g in df.groupby("frame")
     }
-    max_in_vial = df.groupby("vial_id")["compact_id"].max().to_dict()
+    max_in_vial = df.groupby("vial_id")["ordered_id"].max().to_dict()
 
     cfg = _visualization_cfg()
     show_unmatched = bool(cfg.get("show_unmatched_detections", False))

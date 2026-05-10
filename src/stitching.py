@@ -56,7 +56,7 @@ def wide_to_long(df_wide, out_csv: Optional[str] = None):
 
     Parameters
     ----------
-    out_csv : optional path to save the long-format CSV (e.g. OUTPUT_PATH/tracks_long_format.csv)
+    out_csv : optional path to save the long-format CSV (e.g. OUTPUT_PATH/ocsort_tracks_long.csv)
     """
     id_cols = [c for c in df_wide.columns if c != "frame"]
 

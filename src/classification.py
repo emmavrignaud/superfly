@@ -46,7 +46,7 @@ for _logger_name in ("kaleido", "choreographer", "logistro", "Kaleido", "Choreog
 
 def map_vial_to_genotype(run_dir: str) -> pd.DataFrame:
     """
-    Load compact_tracks.csv from a run directory and add a "genotype" column.
+    Load ordered_tracks.csv from a run directory and add a "genotype" column.
 
     The source video filename is read from run_params.json (config.video).
     Expected filename format: <date>_<something>_hTDP43_<GT1>-<GT2>-..._<rest>.mp4
@@ -68,7 +68,7 @@ def map_vial_to_genotype(run_dir: str) -> pd.DataFrame:
     genotypes = parts[3].split("-")
     vial_to_genotype = {f"vial{i + 1}": genotypes[i] for i in range(len(genotypes))}
 
-    csv_path = os.path.join(run_dir, "compact_tracks.csv")
+    csv_path = os.path.join(run_dir, "ordered_tracks.csv")
     df = pd.read_csv(csv_path)
     df["genotype"] = df["vial_id"].map(vial_to_genotype)
     return df
@@ -94,8 +94,8 @@ def make_classifier(model_name: str):
 # ---------------------------------------------------------------------------
 
 def prepare_xy(df: pd.DataFrame):
-    """Return (X array, feature_names list) dropping non-numeric and compact_id."""
-    X = df.select_dtypes(include=[np.number]).drop(columns=["compact_id"], errors="ignore")
+    """Return (X array, feature_names list) dropping non-numeric and ordered_id."""
+    X = df.select_dtypes(include=[np.number]).drop(columns=["ordered_id"], errors="ignore")
     return X.values, X.columns.tolist()
 
 

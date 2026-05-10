@@ -4,8 +4,8 @@ src/__init__.py
 Re-exports the public API so users can do:
     from src import preprocess_bgsub_gui
     from src import export_tracks_xy_tuple_csv_one_config
-    from src import wide_to_long, build_tracklets, stitch
-    from src import assign_vials_and_compact_ids
+    from src import wide_to_long
+    from src import assign_vials_and_ordered_ids
     from src import extract_behavioral_features, run_classifier
 """
 
@@ -20,20 +20,12 @@ from src.tracking import (
 
 from src.stitching import (
     wide_to_long,
-    Tracklet,
-    build_tracklets,
-    simulate_position,
-    link_score,
-    build_cost_matrix,
-    stitch_per_vial,
-    stitch_general,
-    stitch,
 )
 
 from src.roi import (
     draw_and_save_vial_rois,
-    assign_compact_ids_left_to_right,
-    assign_vials_and_compact_ids,
+    assign_ordered_ids_left_to_right,
+    assign_vials_and_ordered_ids,
 )
 
 from src.features import (
@@ -72,20 +64,12 @@ __all__ = [
     "preprocess_bgsub_gui",
     # tracking
     "export_tracks_xy_tuple_csv_one_config",
-    # stitching
+    # stitching (wide_to_long still used for format conversion)
     "wide_to_long",
-    "Tracklet",
-    "build_tracklets",
-    "simulate_position",
-    "link_score",
-    "build_cost_matrix",
-    "stitch_per_vial",
-    "stitch_general",
-    "stitch",
     # roi
     "draw_and_save_vial_rois",
-    "assign_compact_ids_left_to_right",
-    "assign_vials_and_compact_ids",
+    "assign_ordered_ids_left_to_right",
+    "assign_vials_and_ordered_ids",
     # features
     "add_kinematics",
     "add_area_covered",

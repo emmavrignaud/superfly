@@ -6,7 +6,7 @@ CLI: outputs/<run_dir> -> classifier results + Plotly figures.
 
 Stages
 ------
-1. Load compact_tracks from run dir, map genotypes from run_params.json
+1. Load ordered_tracks from run dir, map genotypes from run_params.json
 2. Extract behavioural features (kinematics, area, tortuosity)
 3. Aggregate per-fly features
 4. Run chosen classifier(s) with cross-validation
@@ -56,12 +56,12 @@ FEATURE_TITLES = {
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Classification pipeline: compact_tracks.csv -> results + figures",
+        description="Classification pipeline: ordered_tracks.csv -> results + figures",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--run-dir", required=True,
                    help="Path to a run directory under outputs/ (must contain "
-                        "run_params.json and compact_tracks.csv)")
+                        "run_params.json and ordered_tracks.csv)")
     p.add_argument("--output-dir", default=None,
                    help="Directory for figures and outputs "
                         "(default: <run-dir>/classification)")
@@ -113,11 +113,11 @@ def main():
     df_agg = aggregate_per_fly_features(df_feat, pause_threshold=args.pause_threshold)
 
     # Merge genotype back onto per-fly aggregation
-    genotype_map = df_raw.drop_duplicates("compact_id").set_index("compact_id")["genotype"]
-    df_agg["genotype"] = df_agg["compact_id"].map(genotype_map)
+    genotype_map = df_raw.drop_duplicates("ordered_id").set_index("ordered_id")["genotype"]
+    df_agg["genotype"] = df_agg["ordered_id"].map(genotype_map)
     df_agg = df_agg.dropna(subset=["genotype"])
 
-    hover_data = ["compact_id"]
+    hover_data = ["ordered_id"]
 
     # ------------------------------------------------------------------
     # Classification

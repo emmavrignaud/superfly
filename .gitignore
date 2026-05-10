@@ -14,3 +14,4 @@ ignore_mds/
 .claude/settings.local.json
 .vscode/settings.json
 _test_ann.html
+roboflow_export*/

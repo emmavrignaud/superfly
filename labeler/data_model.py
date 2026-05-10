@@ -12,6 +12,10 @@ Raw detection cache (`src/tracking.py` writes this):
 OC-SORT wide tracking output (`src/tracking.py` writes this):
     columns: frame, id1, id2, ...
     each cell is a string like "(142.50, 88.20)" or empty
+
+Roboflow export (13d_002)
+-------------------------
+    python scripts/export_to_roboflow.py --gt data/manual_labelling/2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped/2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped.gt.csv --video data/manual_labelling/2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped/2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped.mp4 --out roboflow_export_13d_002.zip
 """
 from __future__ import annotations
 
@@ -146,9 +150,8 @@ def load_ocsort_wide(csv_path: str) -> dict[int, list[tuple[int, float, float]]]
 
 
 # ID column candidates for long-format CSVs, in priority order.
-# `compact_id` wins because compact_tracks.csv (post-stitching) is the
-# preferred GT-suggestion source and uses that name.
-LONG_ID_COL_CANDIDATES = ("compact_id", "ID", "id", "stitched_id", "orig_id")
+# `ordered_id` wins because ordered_tracks.csv is the preferred GT-suggestion source.
+LONG_ID_COL_CANDIDATES = ("ordered_id", "ID", "id", "orig_id")
 
 
 def load_tracks_long(csv_path: str) -> dict[int, list[tuple[int, float, float]]]:
@@ -342,7 +345,7 @@ class AnnotationStore:
     # ---- export ----
 
     def export_long_csv(self, path: str) -> int:
-        """Write `frame, ID, x, y` rows for every annotated detection.
+        """Write `frame, ID, x, y, x1, y1, x2, y2` rows for every annotated detection.
 
         Includes both human-confirmed and OC-SORT-sourced annotations — once
         an OC-SORT suggestion is in the store, it counts as accepted unless
@@ -357,8 +360,12 @@ class AnnotationStore:
                 "ID": ann.track_id,
                 "x": det.x,
                 "y": det.y,
+                "x1": det.x1,
+                "y1": det.y1,
+                "x2": det.x2,
+                "y2": det.y2,
             })
-        df = pd.DataFrame(rows, columns=["frame", "ID", "x", "y"])
+        df = pd.DataFrame(rows, columns=["frame", "ID", "x", "y", "x1", "y1", "x2", "y2"])
         df = df.sort_values(["frame", "ID"]).reset_index(drop=True)
         df.to_csv(path, index=False)
         return len(df)

@@ -1,7 +1,7 @@
 """
 src/features.py
 
-Behavioural feature extraction from compact_tracks CSV.
+Behavioural feature extraction from ordered_tracks CSV.
 
 Pipeline
 --------
@@ -24,7 +24,7 @@ with open(_CONFIG_PATH) as f:
 
 fps = cfg['stitching']['fps']
 
-def add_kinematics(df: pd.DataFrame, group_col: str = "compact_id") -> pd.DataFrame:
+def add_kinematics(df: pd.DataFrame, group_col: str = "ordered_id") -> pd.DataFrame:
     """
     Add frame-level kinematic columns to df, computed per fly.
 
@@ -64,7 +64,7 @@ def add_kinematics(df: pd.DataFrame, group_col: str = "compact_id") -> pd.DataFr
     return df
 
 
-def add_area_covered(df: pd.DataFrame, group_col: str = "compact_id") -> pd.DataFrame:
+def add_area_covered(df: pd.DataFrame, group_col: str = "ordered_id") -> pd.DataFrame:
     """
     Add an 'area_covered' column to df.
 
@@ -91,7 +91,7 @@ def add_area_covered(df: pd.DataFrame, group_col: str = "compact_id") -> pd.Data
     return df.merge(area_df, on=group_col, how="left")
 
 
-def add_path_tortuosity(df: pd.DataFrame, group_col: str = "compact_id") -> pd.DataFrame:
+def add_path_tortuosity(df: pd.DataFrame, group_col: str = "ordered_id") -> pd.DataFrame:
     """
     Add a 'tortuosity' column to df.
 
@@ -115,7 +115,7 @@ def add_path_tortuosity(df: pd.DataFrame, group_col: str = "compact_id") -> pd.D
 
 def extract_behavioral_features(
     df: pd.DataFrame,
-    group_col: str = "compact_id",
+    group_col: str = "ordered_id",
 ) -> pd.DataFrame:
     """Run all feature extractors and drop NaN/Inf rows."""
     df = add_kinematics(df, group_col=group_col)
@@ -127,7 +127,7 @@ def extract_behavioral_features(
 
 def aggregate_per_fly_features(
     df: pd.DataFrame,
-    group_col: str = "compact_id",
+    group_col: str = "ordered_id",
     pause_threshold: float = 1.0,
 ) -> pd.DataFrame:
     """
@@ -138,7 +138,7 @@ def aggregate_per_fly_features(
     df : pd.DataFrame
         Output of extract_behavioral_features().
     group_col : str
-        Column to group by (default: "compact_id").
+        Column to group by (default: "ordered_id").
     pause_threshold : float
         Velocity (px/s) below which a frame is counted as a pause.
 

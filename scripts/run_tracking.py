@@ -2,15 +2,16 @@
 """
 scripts/run_tracking.py
 
-CLI: raw video -> tracks_wide_format.csv
+CLI: raw video -> ocsort_tracks.csv + ordered_tracks.csv + overlay videos
 
 Stages
 ------
 1. (optional) Background subtraction GUI  -- --preprocess flag
 2. Interactive vial ROI drawing           -- draws & saves vial_rois.json
-3. RF-DETR + OC-SORT tracking            -- writes tracks_wide_format.csv
-
-Then run scripts/run_stitching.py to continue from the wide CSV.
+3. RF-DETR + OC-SORT tracking            -- writes ocsort_tracks.csv + detections_raw.csv
+3b. RF-DETR detection overlay video
+4. Vial assignment + ordered IDs         -- writes ordered_tracks.csv
+5. Overlay videos                        -- overlay_raw_ocsort.mp4 + overlay_ordered.mp4
 
 Usage
 -----
@@ -34,7 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from utils import save_run_params
+from utils import save_run_params, resolve_overlay_video
 
 ROI_LIBRARY_PATH = Path(__file__).resolve().parents[1] / "roi_library.json"
 
@@ -73,9 +74,10 @@ def _auto_output_dir(video_path: str) -> str:
 
 def build_parser(cfg: dict) -> argparse.ArgumentParser:
     t = cfg.get("tracker", {})
+    v = cfg.get("visualization", {})
 
     p = argparse.ArgumentParser(
-        description="Fly tracking: raw video -> tracks_wide_format.csv",
+        description="Fly tracking: raw video -> ocsort_tracks.csv + ordered_tracks.csv",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
@@ -88,6 +90,7 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
 
     p.add_argument("--preprocess", action="store_true",
                    help="Run interactive background-subtraction GUI before tracking")
+    p.add_argument("--no-overlay", action="store_true", help="Skip overlay video rendering")
 
     p.add_argument("--confidence", type=float, default=t.get("confidence", 0.10))
     p.add_argument("--lost-track-buffer", type=int, default=t.get("lost_track_buffer", 90))
@@ -101,7 +104,8 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
                    help="OC-SORT association function: diou, hmiou, or iou")
     p.add_argument("--brownian-pos-noise", type=float,
                    default=t.get("brownian_pos_noise", 1.0),
-                   help="Scale factor on Kalman Q[cx], Q[cy] (1.0 = original; higher tolerates saccades)")
+                   help="Scale factor on Kalman Q[cx], Q[cy]")
+    p.add_argument("--fps-out", type=int, default=v.get("fps_out", 30))
 
     return p
 
@@ -115,6 +119,7 @@ def main():
     _p = cfg.get("preprocessing", {})
     _r = cfg.get("roi", {})
     _rf = cfg.get("roboflow", {})
+    _s = cfg.get("stitching", {})  # kept for expected_per_vial
     inference_api_url = _rf.get("inference_api_url", "https://detect.roboflow.com")
     detection_confidence_rfdetr = _t.get("detection_confidence_rfdetr", 0.4)
     use_saved_roi = _r.get("use_saved_roi", True)
@@ -124,15 +129,18 @@ def main():
         print(f"Auto output-dir: {args.output_dir}")
 
     import cv2
+    import pandas as pd
     from src.preprocessing import preprocess_bgsub_gui
     from src.ui_context import parse_video_context
     from src.tracking import export_tracks_xy_tuple_csv_one_config
-    from src.roi import draw_and_save_vial_rois
-    from src.visualization import render_detections_video
+    from src.stitching import wide_to_long
+    from src.roi import draw_and_save_vial_rois, assign_vials_and_ordered_ids
+    from src.visualization import render_detections_video, render_vial_overlay_video, render_raw_overlay_video
+    from src.metrics import run_diagnostics
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Copy/hardlink original video into the run folder (zero disk cost if same filesystem)
+    # Copy/hardlink original video into the run folder
     dest_video = os.path.join(args.output_dir, Path(args.video).name)
     if not os.path.exists(dest_video):
         try:
@@ -145,11 +153,11 @@ def main():
     _library   = _load_roi_library()
     video_context = parse_video_context(args.video)
 
-    # persist config + video metadata
     cap = cv2.VideoCapture(video_path)
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
     save_run_params(args.output_dir, "config", {
         "video": video_path,
-        "video_fps": cap.get(cv2.CAP_PROP_FPS),
+        "video_fps": fps,
         "video_width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
         "video_height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
         "video_frames": int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
@@ -194,7 +202,6 @@ def main():
         )
         print(f"Preprocessed video: {video_path}")
 
-        # persist to library
         if _video_key not in _library:
             _library[_video_key] = {}
         _library[_video_key]["preprocessing"] = crop_params
@@ -233,7 +240,6 @@ def main():
             video_context=video_context,
         )
 
-        # persist to library
         if _video_key not in _library:
             _library[_video_key] = {}
         _library[_video_key]["vial_rois"] = {k: list(v) for k, v in vials.items()}
@@ -242,14 +248,14 @@ def main():
     save_run_params(args.output_dir, "roi", {k: list(v) for k, v in vials.items()})
 
     # ------------------------------------------------------------------
-    # Stage 3: track
+    # Stage 3: RF-DETR + OC-SORT tracking
     # ------------------------------------------------------------------
-    wide_csv    = os.path.join(args.output_dir, "tracks_wide_format.csv")
+    ocsort_csv  = os.path.join(args.output_dir, "ocsort_tracks.csv")
     det_log_csv = os.path.join(args.output_dir, "detections_raw.csv")
     print("\n=== Stage 3: RF-DETR + OC-SORT tracking ===")
-    df, tracker = export_tracks_xy_tuple_csv_one_config(
+    df_wide, tracker, _ = export_tracks_xy_tuple_csv_one_config(
         video_path=video_path,
-        output_csv=wide_csv,
+        output_csv=ocsort_csv,
         api_key=args.api_key,
         model_id=args.model_id,
         inference_api_url=inference_api_url,
@@ -262,15 +268,15 @@ def main():
         asso_func=args.asso_func,
         brownian_pos_noise=args.brownian_pos_noise,
         det_log_csv=det_log_csv,
+        vial_rois=vials,
     )
-    print(f"  shape: {df.shape}")
+    print(f"  shape: {df_wide.shape}")
     save_run_params(args.output_dir, "tracker_output", {
-        "wide_csv": wide_csv,
-        "frames": int(df.shape[0]),
-        "track_count": int(df.shape[1] - 1),
+        "ocsort_csv": ocsort_csv,
+        "frames": int(df_wide.shape[0]),
+        "track_count": int(df_wide.shape[1] - 1),
     })
 
-    # Save tracker internals so run_stitching.py can generate metrics_report.md
     tracker_log_json = os.path.join(args.output_dir, "tracker_log.json")
     with open(tracker_log_json, "w") as _f:
         json.dump({
@@ -280,7 +286,6 @@ def main():
             "max_age":           tracker.max_age,
         }, _f)
 
-    # RF-DETR detection overlay video
     print("\n=== Stage 3b: RF-DETR detection overlay video ===")
     render_detections_video(
         video_path=video_path,
@@ -289,7 +294,86 @@ def main():
         fps_out=cfg.get("visualization", {}).get("fps_out", 30),
     )
 
-    print("\nDone. Run scripts/run_stitching.py to continue.")
+    # ------------------------------------------------------------------
+    # Stage 4: vial assignment + ordered IDs
+    # ------------------------------------------------------------------
+    ordered_csv = os.path.join(args.output_dir, "ordered_tracks.csv")
+    print("\n=== Stage 4: Vial assignment + ordered IDs ===")
+
+    long_df = wide_to_long(df_wide)
+    # save OC-SORT long format — used by the raw OC-SORT overlay renderer
+    ocsort_long = os.path.join(args.output_dir, "ocsort_long.csv")
+    long_df.to_csv(ocsort_long, index=False)
+
+    df_ordered = assign_vials_and_ordered_ids(
+        ocsort_csv=ocsort_long,
+        roi_json=roi_json,
+        out_csv=ordered_csv,
+        fps=fps,
+    )
+    print(f"  ordered_tracks saved: {ordered_csv}  shape: {df_ordered.shape}")
+    save_run_params(args.output_dir, "ordered", {
+        "csv": ordered_csv,
+        "rows": int(df_ordered.shape[0]),
+        "track_count": int(df_ordered["ordered_id"].nunique()),
+    })
+
+    # Metrics report
+    run_diagnostics(
+        tracker=tracker,
+        df_wide=df_wide,
+        df_ordered=df_ordered,
+        n_expected=_s.get("expected_per_vial", 7) * len(vials),
+        fps=fps,
+        vial_rois=vials,
+        config=cfg,
+        output_dir=args.output_dir,
+        show_plots=False,
+    )
+    print(f"  Metrics report: {os.path.join(args.output_dir, 'metrics_report.md')}")
+
+    # ------------------------------------------------------------------
+    # Stage 5 (optional): overlay videos
+    # ------------------------------------------------------------------
+    if not args.no_overlay:
+        print("\n=== Stage 5: Overlay videos ===")
+
+        _overlay_mode = cfg.get("visualization", {}).get("overlay_source", "raw_cropped")
+        overlay_video = resolve_overlay_video(args.output_dir, _overlay_mode) or video_path
+        print(f"  overlay_source={_overlay_mode}  →  substrate: {overlay_video}")
+
+        det_log_arg = det_log_csv if os.path.exists(det_log_csv) else None
+
+        # 5a — raw OC-SORT overlay
+        raw_overlay_mp4 = os.path.join(args.output_dir, "overlay_raw_ocsort.mp4")
+        render_raw_overlay_video(
+            video_path=overlay_video,
+            csv_path=ocsort_long,
+            out_mp4=raw_overlay_mp4,
+            vial_rois=vials,
+            det_log_csv=det_log_arg,
+            fps_out=args.fps_out,
+        )
+        print(f"  Raw OC-SORT overlay: {raw_overlay_mp4}")
+
+        # 5b — ordered/relinked tracks overlay
+        ordered_overlay_mp4 = os.path.join(args.output_dir, "overlay_ordered.mp4")
+        render_vial_overlay_video(
+            video_path=overlay_video,
+            csv_path=ordered_csv,
+            out_mp4=ordered_overlay_mp4,
+            vial_rois=vials,
+            det_log_csv=det_log_arg,
+            fps_out=args.fps_out,
+        )
+        print(f"  Ordered tracks overlay: {ordered_overlay_mp4}")
+
+        save_run_params(args.output_dir, "outputs", {
+            "raw_overlay": raw_overlay_mp4,
+            "ordered_overlay": ordered_overlay_mp4,
+        })
+
+    print("\nDone.")
 
 
 if __name__ == "__main__":

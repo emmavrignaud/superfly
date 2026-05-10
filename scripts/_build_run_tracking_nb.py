@@ -1,9 +1,9 @@
 """
 Build notebooks/run_tracking.ipynb from 01_tracking_pipeline.ipynb.
-Identical pipeline but with no stitching step:
-  - stitched_id == orig_id (passthrough)
-  - tracking call wired with vial_rois, aspect_weight, behavioral_weight
-  - stitching imports removed
+Patches the key cells to use the new pipeline (no stitching):
+  - ocsort_tracks.csv  (was tracks_wide_format.csv)
+  - ordered_tracks.csv (was compact_tracks.csv)
+  - vial assignment runs directly after OC-SORT (no Hungarian stitching step)
 """
 import json, copy
 from pathlib import Path
@@ -19,25 +19,25 @@ new_nb = copy.deepcopy(nb)
 
 # ── Cell 0: markdown title ───────────────────────────────────────────────────
 new_nb["cells"][0]["source"] = (
-    "# Notebook — Tracking Pipeline (no stitching)\n\n"
-    "Identical to `01_tracking_pipeline.ipynb` but with no Hungarian stitching.\n"
-    "`stitched_id` equals `orig_id` — OC-SORT track IDs are used directly.\n\n"
+    "# Notebook — Tracking Pipeline\n\n"
+    "Full pipeline: RF-DETR detection → OC-SORT tracking → vial assignment → overlays.\n\n"
     "New tracker features active:\n"
     "- OCM direction term (velocity consistency in association)\n"
     "- Vial-aware hard constraint (no cross-vial matches)\n"
-    "- Behavioral consistency bonus (speed + scale plausibility)\n\n"
+    "- Behavioral consistency bonus (speed + scale plausibility)\n"
+    "- Jump round (re-links broken tracklets live during tracking)\n\n"
     "## Stages\n"
     "1. Setup & configuration\n"
     "2. (Optional) Background subtraction\n"
     "3. Draw vial ROIs\n"
-    "4. RF-DETR + OC-SORT tracking → wide CSV\n"
-    "5. Passthrough (no stitching) → stitched long CSV with stitched_id == orig_id\n"
-    "6. Vial assignment + compact IDs → compact_tracks.csv\n"
+    "4. RF-DETR + OC-SORT tracking → ocsort_tracks.csv\n"
+    "5. Vial assignment + ordered IDs → ordered_tracks.csv\n"
+    "6. Diagnostics\n"
     "7. Overlay video rendering\n\n"
     "**Replace all `PLACEHOLDER` paths with your actual file paths.**"
 )
 
-# ── Cell 1: imports — drop build_tracklets and stitch ───────────────────────
+# ── Cell 1: imports ──────────────────────────────────────────────────────────
 new_nb["cells"][1]["source"] = """\
 import sys
 sys.path.insert(0, '..')
@@ -52,14 +52,14 @@ from pathlib import Path
 from IPython.display import Video
 
 from src.preprocessing import preprocess_bgsub_gui
-from src.metrics import run_diagnostics, compute_stitching_objectives, print_stitching_objectives
+from src.metrics import run_diagnostics
 from src.tracking import export_tracks_xy_tuple_csv_one_config
 from src.stitching import wide_to_long
-from src.roi import draw_and_save_vial_rois, assign_vials_and_compact_ids
+from src.roi import draw_and_save_vial_rois, assign_vials_and_ordered_ids
 from src.visualization import render_vial_overlay_video, render_raw_overlay_video, render_detections_video
 from utils import save_run_params"""
 
-# ── Cell 3: config — add aspect_weight + behavioral_weight ──────────────────
+# ── Cell 3: config ───────────────────────────────────────────────────────────
 new_nb["cells"][3]["source"] = """\
 # ---- EDIT THESE ----
 RAW_VIDEO = r"../2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m\\41 DPE\\004\\2024-03-11_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_41d_004-converted.mp4"
@@ -74,7 +74,7 @@ API_KEY = creds_config["API_KEY"]
 with open("../config.yaml") as _f:
     _cfg = yaml.safe_load(_f)
 _t = _cfg.get("tracker", {})
-_s = _cfg.get("stitching", {})
+_s = _cfg.get("stitching", {})  # kept for expected_per_vial
 _p = _cfg.get("preprocessing", {})
 _rf = _cfg.get("roboflow", {})
 inference_api_url = _rf.get("inference_api_url", "https://detect.roboflow.com")
@@ -126,9 +126,10 @@ print(f"aspect_weight={aspect_weight}, behavioral_weight={behavioral_weight}")
 print(f"jump_factor={jump_factor}, jump_iou_threshold={jump_iou_threshold}, jump_inertia={jump_inertia}")
 print(f"Roboflow model_id: {MODEL_ID}")
 _cap = cv2.VideoCapture(RAW_VIDEO)
+fps = float(_cap.get(cv2.CAP_PROP_FPS) or 30.0)
 save_run_params(OUTPUT_PATH, "config", {
     "video": RAW_VIDEO, "output_dir": OUTPUT_PATH, "short_name": short_name,
-    "video_fps": _cap.get(cv2.CAP_PROP_FPS),
+    "video_fps": fps,
     "video_width": int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
     "video_height": int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
     "video_frames": int(_cap.get(cv2.CAP_PROP_FRAME_COUNT)),
@@ -146,9 +147,9 @@ save_run_params(OUTPUT_PATH, "config", {
 })
 _cap.release()"""
 
-# ── Cell 9: tracking — add vial_rois, aspect_weight, behavioral_weight ───────
+# ── Cell 9: tracking ─────────────────────────────────────────────────────────
 new_nb["cells"][9]["source"] = """\
-WIDE_CSV = os.path.join(OUTPUT_PATH, "tracks_wide_format.csv")
+OCSORT_CSV  = os.path.join(OUTPUT_PATH, "ocsort_tracks.csv")
 DET_LOG_CSV = os.path.join(OUTPUT_PATH, "detections_raw.csv")
 
 # ── Detection cache ───────────────────────────────────────────────────────────
@@ -162,9 +163,9 @@ if CACHED_DETS and os.path.exists(CACHED_DETS):
 else:
     print("No cache found — running RF-DETR inference")
 
-df_wide, tracker = export_tracks_xy_tuple_csv_one_config(
+df_wide, tracker, _ = export_tracks_xy_tuple_csv_one_config(
     video_path=str(PATH_TO_VID),
-    output_csv=WIDE_CSV,
+    output_csv=OCSORT_CSV,
     api_key=API_KEY,
     model_id=MODEL_ID,
     inference_api_url=inference_api_url,
@@ -187,7 +188,7 @@ df_wide, tracker = export_tracks_xy_tuple_csv_one_config(
 
 print(df_wide.shape)
 save_run_params(OUTPUT_PATH, "tracker_output", {
-    "wide_csv": WIDE_CSV, "frames": int(df_wide.shape[0]), "track_count": int(df_wide.shape[1] - 1),
+    "ocsort_csv": OCSORT_CSV, "frames": int(df_wide.shape[0]), "track_count": int(df_wide.shape[1] - 1),
 })
 df_wide.head()
 
@@ -205,61 +206,52 @@ render_detections_video(
     out_mp4=os.path.join(OUTPUT_PATH, f"{short_name}_detections_RF-DETR.mp4"),
 )"""
 
-# ── Cell 11: markdown — rename step 5 ───────────────────────────────────────
+# ── Cell 11: markdown — vial assignment ──────────────────────────────────────
 new_nb["cells"][11]["source"] = (
-    "## 5 — No stitching (passthrough)\n\n"
-    "OC-SORT track IDs are used directly. `stitched_id` is set equal to `orig_id`.\n"
-    "`wide_to_long` converts the wide CSV to long format as usual."
+    "## 5 — Vial assignment + ordered IDs\n\n"
+    "OC-SORT track IDs are melted to long format, then assigned to vials.\n"
+    "`ordered_id` is a left-to-right ordered ID within each vial."
 )
 
-# ── Cell 12: replace stitching with passthrough ──────────────────────────────
+# ── Cell 12: vial assignment (replaces stitching passthrough) ────────────────
 new_nb["cells"][12]["source"] = """\
-STITCHED_CSV = os.path.join(OUTPUT_PATH, "tracks_xy_stitched_long.csv")
-LONG_CSV     = os.path.join(OUTPUT_PATH, "tracks_long_format.csv")
+OCSORT_LONG = os.path.join(OUTPUT_PATH, "ocsort_long.csv")
+ORDERED_CSV = os.path.join(OUTPUT_PATH, "ordered_tracks.csv")
+ROI_JSON    = os.path.join(OUTPUT_PATH, "vial_rois.json")
 
 with open(ROI_JSON) as f:
     vial_rois = {k: tuple(v) for k, v in json.load(f).items()}
 
-long_df = wide_to_long(pd.read_csv(WIDE_CSV), out_csv=LONG_CSV)
+long_df = wide_to_long(pd.read_csv(OCSORT_CSV), out_csv=OCSORT_LONG)
 
-# No stitching: stitched_id == orig_id
-stitched_df = long_df.copy()
-stitched_df["stitched_id"] = stitched_df["orig_id"]
-stitched_df.to_csv(STITCHED_CSV, index=False)
-
-print(f"Track IDs (no stitching): {stitched_df['orig_id'].nunique()}")
-save_run_params(OUTPUT_PATH, "stitching_output", {
-    "stitched_csv": STITCHED_CSV,
-    "stitched_ids": int(stitched_df["stitched_id"].nunique()),
-    "original_ids": int(stitched_df["orig_id"].nunique()),
-})"""
-
-# ── Cell 15: diagnostics — same but works without separate stitching step ────
-new_nb["cells"][15]["source"] = """\
-df_wide = pd.read_csv(WIDE_CSV)
-num_frames = int(df_wide["frame"].max()) + 1
-
-stitching_objectives = compute_stitching_objectives(
-    df_stitched       = stitched_df,
-    vial_rois         = vial_rois,
-    num_frames        = num_frames,
-    expected_per_vial = _s.get("expected_per_vial", 7),
-    short_frac        = _s.get("short_track_frac", 0.10),
+df_ordered = assign_vials_and_ordered_ids(
+    ocsort_csv=OCSORT_LONG,
+    roi_json=ROI_JSON,
+    out_csv=ORDERED_CSV,
+    fps=fps,
 )
-print_stitching_objectives(stitching_objectives)
-save_run_params(OUTPUT_PATH, "stitching_objectives", {k: float(v) for k, v in stitching_objectives.items()})
+
+print(f"Track IDs: {long_df['orig_id'].nunique()}  →  ordered IDs: {df_ordered['ordered_id'].nunique()}")
+save_run_params(OUTPUT_PATH, "ordered", {
+    "csv": ORDERED_CSV,
+    "rows": int(df_ordered.shape[0]),
+    "track_count": int(df_ordered["ordered_id"].nunique()),
+})
+df_ordered.head()"""
+
+# ── Cell 15: diagnostics ─────────────────────────────────────────────────────
+new_nb["cells"][15]["source"] = """\
+df_wide = pd.read_csv(OCSORT_CSV)
 
 run_diagnostics(
-    tracker              = tracker,
-    df_wide              = df_wide,
-    df_stitched          = stitched_df,
-    df_compact           = df_compact,
-    n_expected           = _s.get("expected_per_vial", 7) * len(vial_rois),
-    fps                  = _s.get("fps", 30),
-    vial_rois            = vial_rois,
-    config               = _cfg,
-    output_dir           = OUTPUT_PATH,
-    stitching_objectives = stitching_objectives,
+    tracker    = tracker,
+    df_wide    = df_wide,
+    df_ordered = df_ordered,
+    n_expected = _s.get("expected_per_vial", 7) * len(vial_rois),
+    fps        = fps,
+    vial_rois  = vial_rois,
+    config     = _cfg,
+    output_dir = OUTPUT_PATH,
 )"""
 
 with open(DST, "w") as f:

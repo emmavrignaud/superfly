@@ -4,15 +4,13 @@ Batch tracking pipeline — parity with notebooks/01_tracking_pipeline.ipynb.
 
 **Interactive order (per video):** for each job, preprocessing (if enabled in
 ``config.yaml``) then vial ROIs — so you finish one video's GUIs before the
-next. **Automated tail:** tracking → stitching → compact/metrics → overlays is
-run **per video** end-to-end (simple, API-friendly); order within that chain
-matches the notebook.
+next. **Automated tail:** tracking → vial assignment → metrics → overlays is
+run **per video** end-to-end (simple, API-friendly).
 
 **Tracker for diagnostics:** the live OC-SORT object exists only right after
 tracking. For later ``run_diagnostics`` we do **not** pickle the tracker; we
-reload ``tracker_log.json`` into a ``SimpleNamespace`` (same approach as
-``scripts/run_stitching.py``), which is enough for ``compute_tracker_stats`` and
-the pipeline figure.
+reload ``tracker_log.json`` into a ``SimpleNamespace``, which is enough for
+``compute_tracker_stats`` and the pipeline figure.
 
 **Config:** Background subtraction always runs (notebook parity). Whether the
 preprocessing **GUI** opens follows ``roi.use_saved_roi`` and ``roi_library.json``
@@ -258,18 +256,14 @@ def main() -> None:
 
     from src.preprocessing import preprocess_bgsub_gui
     from src.tracking import export_tracks_xy_tuple_csv_one_config
-    from src.stitching import wide_to_long, build_tracklets, stitch
-    from src.roi import draw_and_save_vial_rois, assign_vials_and_compact_ids
+    from src.stitching import wide_to_long
+    from src.roi import draw_and_save_vial_rois, assign_vials_and_ordered_ids
     from src.visualization import (
         render_vial_overlay_video,
         render_raw_overlay_video,
         render_detections_video,
     )
-    from src.metrics import (
-        run_diagnostics,
-        compute_stitching_objectives,
-        print_stitching_objectives,
-    )
+    from src.metrics import run_diagnostics
     from src.ui_context import parse_video_context
 
     library = _load_roi_library()
@@ -391,11 +385,11 @@ def main() -> None:
 
     v_cfg = cfg.get("visualization", {})
 
-    # ── Phase B: per video — track → stitch → compact/metrics → overlays ────
+    # ── Phase B: per video — track → order → metrics → overlays ─────────────
     for j in jobs:
-        print(f"\n=== [{j.short_name}] tracking → stitching → metrics → overlays ===")
+        print(f"\n=== [{j.short_name}] tracking → ordering → metrics → overlays ===")
         ptv = path_to_vid[j.video_key]
-        wide_csv = j.output_dir / "tracks_wide_format.csv"
+        wide_csv = j.output_dir / "ocsort_tracks.csv"
         det_log_csv = j.output_dir / "detections_raw.csv"
         print("  RF-DETR + OC-SORT …")
         df_wide, tracker = export_tracks_xy_tuple_csv_one_config(
@@ -416,7 +410,7 @@ def main() -> None:
         )
 
         save_run_params(str(j.output_dir), "tracker_output", {
-            "wide_csv": str(wide_csv),
+            "ocsort_csv": str(wide_csv),
             "frames": int(df_wide.shape[0]),
             "track_count": int(df_wide.shape[1] - 1),
         })
@@ -446,53 +440,26 @@ def main() -> None:
         )
 
         roi_json = j.output_dir / "vial_rois.json"
-        stitched_csv = j.output_dir / "tracks_xy_stitched_long.csv"
-        long_csv = j.output_dir / "tracks_long_format.csv"
+        ocsort_long = j.output_dir / "ocsort_long.csv"
+        ordered_csv = j.output_dir / "ordered_tracks.csv"
 
         with open(roi_json) as f:
             vial_rois = {k: tuple(v) for k, v in json.load(f).items()}
 
-        print("  Hungarian stitching …")
-        long_df = wide_to_long(pd.read_csv(wide_csv), out_csv=str(long_csv))
-        tracklets = build_tracklets(long_df)
-        stitched_df = stitch(
-            long_df=long_df,
-            vial_rois=vial_rois,
-            tracklets=tracklets,
-            output_dir=str(j.output_dir),
-        )
-        stitched_df.to_csv(stitched_csv, index=False)
-        save_run_params(str(j.output_dir), "stitching_output", {
-            "stitched_csv": str(stitched_csv),
-            "stitched_ids": int(stitched_df["stitched_id"].nunique()),
-            "original_ids": int(stitched_df["orig_id"].nunique()),
-        })
-        print(f"  stitched -> {stitched_csv}")
-
-        compact_csv = j.output_dir / "compact_tracks.csv"
-        print("  compact IDs …")
-        df_compact = assign_vials_and_compact_ids(
-            stitched_csv=str(stitched_csv),
+        print("  Vial assignment + ordered IDs …")
+        long_df = wide_to_long(pd.read_csv(wide_csv), out_csv=str(ocsort_long))
+        df_ordered = assign_vials_and_ordered_ids(
+            ocsort_csv=str(ocsort_long),
             roi_json=str(roi_json),
-            out_csv=str(compact_csv),
+            out_csv=str(ordered_csv),
             fps=diag_fps,
         )
-        save_run_params(str(j.output_dir), "compact", {
-            "csv": str(compact_csv),
-            "rows": int(df_compact.shape[0]),
+        save_run_params(str(j.output_dir), "ordered", {
+            "csv": str(ordered_csv),
+            "rows": int(df_ordered.shape[0]),
+            "track_count": int(df_ordered["ordered_id"].nunique()),
         })
-
-        num_frames = int(df_wide["frame"].max()) + 1
-        objectives = compute_stitching_objectives(
-            df_stitched=stitched_df,
-            vial_rois=vial_rois,
-            num_frames=num_frames,
-            expected_per_vial=_s.get("expected_per_vial", 7),
-            short_frac=_s.get("short_track_frac", 0.10),
-        )
-        print_stitching_objectives(objectives)
-        save_run_params(str(j.output_dir), "stitching_objectives",
-                        {k: float(v) for k, v in objectives.items()})
+        print(f"  ordered -> {ordered_csv}")
 
         with open(j.output_dir / "tracker_log.json") as f:
             _tl = json.load(f)
@@ -503,14 +470,12 @@ def main() -> None:
         run_diagnostics(
             tracker=mock_tracker,
             df_wide=df_wide,
-            df_stitched=stitched_df,
-            df_compact=df_compact,
+            df_ordered=df_ordered,
             n_expected=n_expected,
             fps=diag_fps,
             vial_rois=vial_rois,
             config=cfg,
             output_dir=str(j.output_dir),
-            stitching_objectives=objectives,
             show_plots=show_plots,
         )
 
@@ -525,25 +490,25 @@ def main() -> None:
         print(f"  overlays (substrate={_overlay_mode}) …")
 
         raw_overlay_mp4 = j.output_dir / f"{j.short_name}_overlay_raw_ocsort.mp4"
-        overlay_mp4 = j.output_dir / f"{j.short_name}_overlay_vials_stitched.mp4"
+        ordered_overlay_mp4 = j.output_dir / f"{j.short_name}_overlay_ordered.mp4"
 
         render_raw_overlay_video(
             video_path=overlay_video,
-            csv_path=str(long_csv),
+            csv_path=str(ocsort_long),
             out_mp4=str(raw_overlay_mp4),
             vial_rois=vial_rois,
             det_log_csv=str(det_log_csv) if det_log_csv.exists() else None,
         )
         render_vial_overlay_video(
             video_path=overlay_video,
-            csv_path=str(compact_csv),
-            out_mp4=str(overlay_mp4),
+            csv_path=str(ordered_csv),
+            out_mp4=str(ordered_overlay_mp4),
             vial_rois=vial_rois,
             det_log_csv=str(det_log_csv) if det_log_csv.exists() else None,
         )
         save_run_params(str(j.output_dir), "outputs", {
             "raw_overlay": str(raw_overlay_mp4),
-            "overlay": str(overlay_mp4),
+            "ordered_overlay": str(ordered_overlay_mp4),
         })
 
     print("\nAll jobs finished.")
