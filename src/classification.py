@@ -11,6 +11,7 @@ Plots: cross-validation accuracy, feature importance, per-genotype boxes
 
 import html as html_module
 import json
+import logging
 import os
 import re
 import numpy as np
@@ -29,6 +30,14 @@ from sklearn.model_selection import GroupKFold, cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
+
+_PNG_EXPORT_WARNING_SHOWN = False
+
+# Silence verbose Kaleido/Choreographer INFO logs during Plotly PNG export.
+for _logger_name in ("kaleido", "choreographer", "logistro", "Kaleido", "Choreographer"):
+    _logger = logging.getLogger(_logger_name)
+    _logger.setLevel(logging.WARNING)
+    _logger.propagate = False
 
 
 # ---------------------------------------------------------------------------
@@ -155,8 +164,8 @@ def run_cross_validation(
     fig.add_hline(y=scores.mean(), line_dash="dash")
     fig.update_layout(
         title=(
-            f"{classification_mode.upper()} Cross-validation accuracy ({scheme}) "
-            f"— mean={scores.mean():.3f}"
+            f"Cross-validation accuracy: {model_name.upper()} ({classification_mode}, {scheme}) "
+            f"- mean={scores.mean():.3f}"
         ),
         xaxis_title="CV fold",
         yaxis_title="Accuracy",
@@ -197,7 +206,7 @@ def plot_feature_importance(
     fig = go.Figure()
     fig.add_bar(x=values[idx], y=[feature_names[i] for i in idx], orientation="h")
     fig.update_layout(
-        title=f"{classification_mode.upper()} Feature importance ({model_name.upper()})",
+        title=f"Feature importance: {model_name.upper()} ({classification_mode})",
         xaxis_title=xlabel,
         yaxis_title="Feature",
     )
@@ -303,8 +312,11 @@ def save_plotly_figure(fig, outdir: str, name: str, show: bool = True):
     try:
         fig.write_image(png_path, width=1200, height=800, scale=2)
     except Exception as exc:
-        # Kaleido/Choreographer can fail (e.g. logger `debug2` mismatch); HTML still saved.
-        print(f"[classification] PNG export skipped ({name}.png): {exc}")
+        # Avoid noisy repeated Kaleido warnings; HTML is still saved and usable.
+        global _PNG_EXPORT_WARNING_SHOWN
+        if not _PNG_EXPORT_WARNING_SHOWN:
+            print(f"[classification] PNG export disabled (Kaleido unavailable/misconfigured): {exc}")
+            _PNG_EXPORT_WARNING_SHOWN = True
     if show:
         fig.show()
 
@@ -484,7 +496,7 @@ def _add_significance_brackets(
             # Offset uses tick (same scale as bracket arms), not a tiny fraction of span_y.
             fig.add_annotation(
                 x=x_mid,
-                y=y + 0.32 * tick,
+                y=y + 0.15 * tick,
                 xref="x",
                 yref="y",
                 text=star_lbl,
@@ -521,7 +533,7 @@ def make_figure_by_genotype(
         category_orders={"genotype": labels},
         title=f"{feature_titles[feat]} (Kruskal-Wallis p={p_kw:.3g})",
     )
-    fig.update_traces(jitter=0.35, marker=dict(size=9, opacity=0.8))
+    fig.update_traces(jitter=0.30, marker=dict(size=5, opacity=0.70))
     fig.update_layout(showlegend=False)
     _add_significance_brackets(fig, df, feat, sig_pairs, labels)
     return fig
@@ -553,7 +565,7 @@ def make_figure_wt_vs_mutant(
             f"(MWU p={p_u:.3g}, Cliff's delta={delta:.2f})"
         ),
     )
-    fig.update_traces(jitter=0.35, marker=dict(size=9, opacity=0.8))
+    fig.update_traces(jitter=0.30, marker=dict(size=5, opacity=0.70))
     fig.update_layout(showlegend=False)
     return fig
 
@@ -641,24 +653,39 @@ def _figure_to_embed_html(fig: go.Figure, div_id: str, include_plotlyjs) -> str:
 def _html_cv_blurb_pooled(groups: np.ndarray | None) -> str:
     if groups is not None:
         return (
-            "<p class=\"plot-blurb\"><strong>Cross-validation:</strong> "
-            "<em>GroupKFold</em> — each fold holds out one entire video; no fly from "
-            "that video appears in training. Tests whether genotypes separate when "
-            "generalising across recordings.</p>"
+            "<p class=\"plot-blurb\"><strong>Cross-validation design:</strong> "
+            "<em>GroupKFold</em> by run. Each fold holds out one complete recording, "
+            "so no fly from that recording appears in training.</p>"
         )
     return (
-        "<p class=\"plot-blurb\"><strong>Cross-validation:</strong> "
-        "<em>Stratified K-fold</em> on all pooled flies (folds may mix flies from "
-        "different videos).</p>"
+        "<p class=\"plot-blurb\"><strong>Cross-validation design:</strong> "
+        "<em>Stratified K-fold</em> on pooled flies. Folds may include flies from "
+        "multiple recordings.</p>"
     )
 
 
 def _html_cv_blurb_per_trial() -> str:
     return (
-        "<p class=\"plot-blurb\"><strong>Cross-validation:</strong> "
-        "<em>Stratified K-fold</em> within this trial only (one video — group / "
-        "leave-one-video-out is not defined).</p>"
+        "<p class=\"plot-blurb\"><strong>Cross-validation design:</strong> "
+        "<em>Stratified K-fold</em> within a single run. Group-based splitting is "
+        "not applicable when only one run is analyzed.</p>"
     )
+
+
+def _pretty_classifier_caption(figure_id: str) -> str:
+    """
+    Convert internal figure IDs into reader-facing captions.
+    Example: lda_multiclass_cv -> LDA multiclass cross-validation accuracy
+    """
+    tok = figure_id.split("_")
+    if len(tok) < 3:
+        return figure_id.replace("_", " ")
+    model, mode, suffix = tok[0], tok[1], tok[-1]
+    model_map = {"lda": "LDA", "logistic": "Logistic regression", "svc": "Linear SVM"}
+    suffix_map = {"cv": "cross-validation accuracy", "importance": "feature importance"}
+    model_txt = model_map.get(model, model.upper())
+    suffix_txt = suffix_map.get(suffix, suffix)
+    return f"{model_txt} {mode} {suffix_txt}"
 
 
 def write_classification_html_report(
@@ -673,6 +700,8 @@ def write_classification_html_report(
     pooled_cv: int = 5,
     pooled_cv_groups: np.ndarray | None = None,
     per_trial_cv: int = 5,
+    include_pooled: bool = True,
+    include_per_trial: bool = True,
 ) -> None:
     """
     Write a single standalone HTML file: pooled exploratory + classifiers, then
@@ -706,17 +735,14 @@ def write_classification_html_report(
         "</style></head><body>",
         f"<h1>{html_module.escape(report_title)}</h1>",
         "<div class=\"report-lead\">",
-        "<p><strong>How this page is organised</strong></p>",
+        "<p><strong>How to read this report</strong></p>",
         "<ul>",
-        "<li><strong>Pooled</strong> — every fly from every video in one table: exploratory "
-        "box plots and classifiers see all trials at once.</li>",
-        "<li><strong>Per trial</strong> — the same plots and models repeated for a "
-        f"<em>single</em> value of <code>{html_module.escape(trial_column)}</code> "
-        "(one recording). Nothing from other trials enters that block.</li>",
+        "<li><strong>Pooled cohort</strong> - all flies from all runs are analyzed together.</li>",
+        "<li><strong>Per-run analysis</strong> - each run is analyzed independently.</li>",
         "</ul>",
-        "<p>Each plot title still carries the statistical test (e.g. Kruskal–Wallis "
-        "<i>p</i>, Mann–Whitney, CV accuracy). Bracket lines with stars are Dunn "
-        "post-hoc pairs (Holm-adjusted <i>p</i> &lt; 0.05).</p>",
+        "<p>Titles include key statistical results (for example Kruskal-Wallis p-values, "
+        "Mann-Whitney p-values, and cross-validation accuracy). Significance brackets "
+        "show Dunn post-hoc comparisons with Holm-adjusted p-values.</p>",
         "</div>",
     ]
 
@@ -735,60 +761,58 @@ def write_classification_html_report(
         div_i += 1
         parts.append("</div>")
 
-    # --- Pooled ---
-    parts.append("<section>")
-    parts.append("<h2>Pooled — all trials</h2>")
-    parts.append(
-        f"<p class=\"section-intro\"><strong>What this section is:</strong> "
-        f"all <strong>{n_f}</strong> flies and <strong>{n_r}</strong> videos together "
-        f"(column <code>{html_module.escape(trial_column)}</code> is <em>not</em> "
-        f"filtered). Genotype order on the x-axis follows vial order within each run, "
-        f"then run order, as in the analysis notebook.</p>"
-    )
-    g_order_pool = genotype_category_order(df)
-    for feat in features:
-        ft = html_module.escape(feature_titles[feat])
-        blurb = (
-            f"<p class=\"plot-blurb\"><strong>Scope:</strong> Pooled — all trials. "
-            f"<strong>Chart:</strong> <em>{ft}</em> by genotype (one point = one fly). "
-            f"Title = Kruskal–Wallis omnibus <i>p</i>; horizontal bars = Dunn/Holm "
-            f"pairwise comparisons (stars = Holm-adjusted <i>p</i> &lt; 0.05).</p>"
+    if include_pooled:
+        # --- Pooled ---
+        parts.append("<section>")
+        parts.append("<h2>Pooled cohort analysis</h2>")
+        parts.append(
+            f"<p class=\"section-intro\">This section analyzes all "
+            f"<strong>{n_f}</strong> flies across <strong>{n_r}</strong> runs together. "
+            f"Genotype ordering follows vial order within each run, then run order.</p>"
         )
-        emit(
-            blurb,
-            f"{feature_titles[feat]} — by genotype (pooled)",
-            make_figure_by_genotype(
-                df, feat, feature_titles, hover_data, genotype_order=g_order_pool
-            ),
-        )
-    for feat in features:
-        ft = html_module.escape(feature_titles[feat])
-        blurb = (
-            f"<p class=\"plot-blurb\"><strong>Scope:</strong> Pooled — all trials. "
-            f"<strong>Chart:</strong> <em>{ft}</em>; WT versus all non-WT genotypes pooled. "
-            f"Mann–Whitney <i>p</i> and Cliff's delta in the title.</p>"
-        )
-        emit(
-            blurb,
-            f"{feature_titles[feat]} — WT vs mutant (pooled)",
-            make_figure_wt_vs_mutant(df, feat, feature_titles, hover_data),
-        )
-    parts.append("<h3>Classifiers (pooled)</h3>")
-    parts.append(_html_cv_blurb_pooled(pooled_cv_groups))
-    for cap, fig in _collect_all_classifier_figures(
-        df, cv=pooled_cv, groups=pooled_cv_groups
-    ):
-        cid = html_module.escape(cap.replace("_", " "))
-        emit(
-            f"<p class=\"plot-blurb\"><strong>Scope:</strong> Pooled — all trials. "
-            f"<strong>Figure:</strong> <code>{cid}</code>.</p>",
-            cap.replace("_", " "),
-            fig,
-        )
-    parts.append("</section>")
+        g_order_pool = genotype_category_order(df)
+        for feat in features:
+            ft = html_module.escape(feature_titles[feat])
+            blurb = (
+                f"<p class=\"plot-blurb\">Each point represents one fly. "
+                f"The title reports the Kruskal-Wallis omnibus test for <em>{ft}</em>; "
+                f"horizontal brackets indicate Dunn post-hoc comparisons with Holm adjustment.</p>"
+            )
+            emit(
+                blurb,
+                f"{feature_titles[feat]} — by genotype (pooled)",
+                make_figure_by_genotype(
+                    df, feat, feature_titles, hover_data, genotype_order=g_order_pool
+                ),
+            )
+        for feat in features:
+            ft = html_module.escape(feature_titles[feat])
+            blurb = (
+                f"<p class=\"plot-blurb\">This panel compares WT against all mutant genotypes "
+                f"for <em>{ft}</em>. The title reports Mann-Whitney p-value and Cliff's delta.</p>"
+            )
+            emit(
+                blurb,
+                f"{feature_titles[feat]} — WT vs mutant (pooled)",
+                make_figure_wt_vs_mutant(df, feat, feature_titles, hover_data),
+            )
+        parts.append("<h3>Genotype classification (pooled cohort)</h3>")
+        parts.append(_html_cv_blurb_pooled(pooled_cv_groups))
+        for cap, fig in _collect_all_classifier_figures(
+            df, cv=pooled_cv, groups=pooled_cv_groups
+        ):
+            pretty = _pretty_classifier_caption(cap)
+            cid = html_module.escape(pretty)
+            emit(
+                f"<p class=\"plot-blurb\">Classification results for the pooled cohort "
+                f"using <code>{cid}</code>.</p>",
+                pretty,
+                fig,
+            )
+        parts.append("</section>")
 
     # --- Per trial (skip if only one run — same as pooled) ---
-    if trial_column in df.columns and df[trial_column].nunique() > 1:
+    if include_per_trial and trial_column in df.columns and df[trial_column].nunique() > 1:
         trials = sorted(df[trial_column].unique(), key=_trial_sort_key)
     else:
         trials = []
@@ -798,7 +822,7 @@ def write_classification_html_report(
         if len(sub) < 2:
             continue
         parts.append("<section>")
-        parts.append(f"<h2>Per trial — {html_module.escape(str(trial))}</h2>")
+        parts.append(f"<h2>Per-run analysis - {html_module.escape(str(trial))}</h2>")
         m_trial = re.search(r"n(\d{3})", str(trial), re.I)
         trial_idx = f"n{m_trial.group(1)}" if m_trial else None
         idx_line = (
@@ -808,19 +832,17 @@ def write_classification_html_report(
         )
         parts.append(
             f"<p class=\"section-intro\">{idx_line}"
-            f"Only rows with <code>{html_module.escape(trial_column)}</code> = "
-            f"<code>{html_module.escape(str(trial))}</code>. "
-            f"<strong>{len(sub)}</strong> flies; other recordings do not contribute "
-            f"to any plot or model in this block.</p>"
+            f"This section includes only flies from run "
+            f"<code>{html_module.escape(str(trial))}</code> "
+            f"(<strong>{len(sub)}</strong> flies). No other runs contribute to this block.</p>"
         )
         g_order = genotype_category_order(sub)
         for feat in features:
             ft = html_module.escape(feature_titles[feat])
             tr = html_module.escape(str(trial))
             blurb = (
-                f"<p class=\"plot-blurb\"><strong>Scope:</strong> This trial only "
-                f"(<code>{tr}</code>). <strong>Chart:</strong> <em>{ft}</em> by genotype. "
-                f"Same tests as pooled; sample size is only flies from this video.</p>"
+                f"<p class=\"plot-blurb\">Within-run distribution of <em>{ft}</em> by genotype "
+                f"for run <code>{tr}</code>. Statistical tests match the pooled analysis.</p>"
             )
             emit(
                 blurb,
@@ -833,25 +855,26 @@ def write_classification_html_report(
             ft = html_module.escape(feature_titles[feat])
             tr = html_module.escape(str(trial))
             blurb = (
-                f"<p class=\"plot-blurb\"><strong>Scope:</strong> This trial only "
-                f"(<code>{tr}</code>). <strong>Chart:</strong> <em>{ft}</em>; WT vs mutant.</p>"
+                f"<p class=\"plot-blurb\">Within-run WT versus mutant comparison for "
+                f"<em>{ft}</em> in run <code>{tr}</code>.</p>"
             )
             emit(
                 blurb,
                 f"{feature_titles[feat]} — WT vs mutant",
                 make_figure_wt_vs_mutant(sub, feat, feature_titles, hover_data),
             )
-        parts.append("<h3>Classifiers (single trial)</h3>")
+        parts.append("<h3>Genotype classification (single run)</h3>")
         parts.append(_html_cv_blurb_per_trial())
         for cap, fig in _collect_all_classifier_figures(
             sub, cv=per_trial_cv, groups=None
         ):
-            cid = html_module.escape(cap.replace("_", " "))
+            pretty = _pretty_classifier_caption(cap)
+            cid = html_module.escape(pretty)
             tr = html_module.escape(str(trial))
             emit(
-                f"<p class=\"plot-blurb\"><strong>Scope:</strong> Trial <code>{tr}</code> "
-                f"only. <strong>Figure:</strong> <code>{cid}</code>.</p>",
-                cap.replace("_", " "),
+                f"<p class=\"plot-blurb\">Classification results for run "
+                f"<code>{tr}</code> using <code>{cid}</code>.</p>",
+                pretty,
                 fig,
             )
         parts.append("</section>")
@@ -859,3 +882,126 @@ def write_classification_html_report(
     parts.append("</body></html>")
     with open(out_html, "w", encoding="utf-8") as f:
         f.write("\n".join(parts))
+
+
+def write_classification_report_site(
+    df: pd.DataFrame,
+    features: list[str],
+    feature_titles: dict[str, str],
+    hover_data: list[str],
+    out_dir: str,
+    *,
+    trial_column: str = "run",
+    report_title: str = "Classification report",
+    pooled_cv: int = 5,
+    pooled_cv_groups: np.ndarray | None = None,
+    per_trial_cv: int = 5,
+    entry_filename: str = "classification_report.html",
+    latent_page_filename: str | None = None,
+) -> str:
+    """
+    Write a navigable multi-page report site and return entry HTML path.
+
+    Layout:
+    - entry page (left nav + overview)
+    - pooled page
+    - per-trial page(s)
+    - optional latent-space page link
+    """
+    out_dir_abs = os.path.abspath(out_dir)
+    os.makedirs(out_dir_abs, exist_ok=True)
+    sections_dir = os.path.join(out_dir_abs, "report_sections")
+    os.makedirs(sections_dir, exist_ok=True)
+
+    pooled_html = os.path.join(sections_dir, "pooled.html")
+    write_classification_html_report(
+        df=df,
+        features=features,
+        feature_titles=feature_titles,
+        hover_data=hover_data,
+        out_html=pooled_html,
+        trial_column=trial_column,
+        report_title=f"{report_title} - pooled and per-trial",
+        pooled_cv=pooled_cv,
+        pooled_cv_groups=pooled_cv_groups,
+        per_trial_cv=per_trial_cv,
+        include_pooled=True,
+        include_per_trial=False,
+    )
+
+    # Keep per-trial pages separate so very large cohorts stay responsive.
+    trial_links: list[tuple[str, str]] = []
+    if trial_column in df.columns and df[trial_column].nunique() > 1:
+        for trial in sorted(df[trial_column].unique(), key=_trial_sort_key):
+            sub = df[df[trial_column] == trial].copy()
+            if len(sub) < 2:
+                continue
+            safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(trial))
+            fn = f"trial_{safe}.html"
+            trial_html = os.path.join(sections_dir, fn)
+            write_classification_html_report(
+                df=sub,
+                features=features,
+                feature_titles=feature_titles,
+                hover_data=hover_data,
+                out_html=trial_html,
+                trial_column=trial_column,
+                report_title=f"{report_title} - {trial}",
+                pooled_cv=per_trial_cv,
+                pooled_cv_groups=None,
+                per_trial_cv=per_trial_cv,
+                include_pooled=True,
+                include_per_trial=False,
+            )
+            trial_links.append((str(trial), os.path.join("report_sections", fn).replace("\\", "/")))
+
+    nav_items = [
+        ("Overview", os.path.join("report_sections", os.path.basename(pooled_html)).replace("\\", "/")),
+        ("Pooled + classifiers", os.path.join("report_sections", os.path.basename(pooled_html)).replace("\\", "/")),
+    ]
+    if latent_page_filename:
+        nav_items.append(("Latent-space", latent_page_filename.replace("\\", "/")))
+
+    entry_path = os.path.join(out_dir_abs, entry_filename)
+    nav_html = "\n".join(
+        f"<li><a href=\"{html_module.escape(href)}\" target=\"viewer\">{html_module.escape(label)}</a></li>"
+        for label, href in nav_items
+    )
+    pooled_src = os.path.join("report_sections", os.path.basename(pooled_html)).replace("\\", "/")
+    trials_html = "\n".join(
+        f"<li><a href=\"{html_module.escape(href)}\" target=\"viewer\">{html_module.escape(label)}</a></li>"
+        for label, href in trial_links
+    )
+    with open(entry_path, "w", encoding="utf-8") as f:
+        f.write(
+            "\n".join(
+                [
+                    "<!DOCTYPE html>",
+                    "<html lang=\"en\"><head><meta charset=\"utf-8\"/>",
+                    f"<title>{html_module.escape(report_title)}</title>",
+                    "<style>",
+                    "body{margin:0;font-family:system-ui,sans-serif;display:grid;grid-template-columns:320px 1fr;min-height:100vh;}",
+                    "aside{border-right:1px solid #ddd;padding:1rem;overflow:auto;background:#fafafa;}",
+                    "main{padding:0;margin:0;}",
+                    "h1{font-size:1.05rem;margin:0 0 0.5rem;}",
+                    "h2{font-size:0.95rem;margin:1rem 0 0.4rem;color:#333;}",
+                    "ul{list-style:none;padding:0;margin:0;}",
+                    "li{margin:0.2rem 0;}",
+                    "a{text-decoration:none;color:#1a4c8b;}",
+                    "a:hover{text-decoration:underline;}",
+                    "iframe{border:0;width:100%;height:100vh;}",
+                    ".hint{font-size:0.86rem;color:#555;line-height:1.35;}",
+                    "</style></head><body>",
+                    f"<aside><h1>{html_module.escape(report_title)}</h1>",
+                    "<p class=\"hint\">Navigation hub for pooled, per-trial, and optional latent-space outputs.</p>",
+                    "<h2>Main sections</h2>",
+                    f"<ul>{nav_html}</ul>",
+                    "<h2>Per-trial pages</h2>",
+                    f"<ul>{trials_html or '<li><em>Single-trial dataset: none generated.</em></li>'}</ul>",
+                    "</aside>",
+                    f"<main><iframe name=\"viewer\" src=\"{html_module.escape(pooled_src)}\"></iframe></main>",
+                    "</body></html>",
+                ]
+            )
+        )
+    return entry_path

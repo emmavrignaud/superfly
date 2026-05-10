@@ -104,3 +104,20 @@ roi:
   use_saved_roi: true         # false = always open GUI to redraw
   snap_threshold_pct: 0.005   # snap zone as fraction of last box height
   snap_enabled: true          # press 'S' in GUI to toggle per-vial
+latent_space:
+  # Latent-space preprocessing and dimensionality controls.
+  use_pca: true
+  pca_explained_variance: 0.95
+  representation_method: baseline   # baseline | autoencoder
+  umap_n_components: 3
+  seed: 42
+  autoencoder:
+    latent_dim: 64
+    hidden_dims: [512, 256]
+    epochs: 300
+    batch_size: 64
+    learning_rate: 0.001
+    weight_decay: 0.00001
+    val_fraction: 0.2
+    patience: 30
+    verbose: true

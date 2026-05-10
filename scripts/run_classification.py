@@ -76,6 +76,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Velocity threshold (px/s) for pause detection")
     p.add_argument("--no-box-plots", action="store_true",
                    help="Skip per-feature box plots")
+    p.add_argument("--report-site", action="store_true",
+                   help="Write navigable multi-page report site")
+    p.add_argument("--latent-space", action="store_true",
+                   help="Run latent-space analysis and export latent report page")
     return p
 
 
@@ -88,8 +92,10 @@ def main():
         run_classifier,
         plot_by_genotype,
         plot_wt_vs_mutant,
+        write_classification_report_site,
     )
     from src.features import extract_behavioral_features, aggregate_per_fly_features
+    from src.latent_space import run_latent_space_analysis
 
     import os
     output_dir = args.output_dir or os.path.join(args.run_dir, "classification")
@@ -97,6 +103,8 @@ def main():
 
     print(f"\nLoading run from: {args.run_dir}")
     df_raw = map_vial_to_genotype(args.run_dir)
+    df_raw["run"] = os.path.basename(os.path.normpath(args.run_dir))
+    df_raw["run_dir"] = args.run_dir
 
     print("Extracting behavioural features...")
     df_feat = extract_behavioral_features(df_raw)
@@ -135,6 +143,76 @@ def main():
 
         print("=== WT vs Mutant box plots ===")
         plot_wt_vs_mutant(df_agg, FEATURES, FEATURE_TITLES, hover_data, outdir=output_dir)
+
+    # ------------------------------------------------------------------
+    # Latent-space analysis (optional)
+    # ------------------------------------------------------------------
+    latent_rel = None
+    if args.latent_space:
+        print("\n=== Latent-space analysis ===")
+        latent = run_latent_space_analysis(df_raw)
+        latent_dir = os.path.join(output_dir, "latent_space")
+        os.makedirs(latent_dir, exist_ok=True)
+
+        latent["analysis1"]["umap_fig"].write_html(os.path.join(latent_dir, "umap_xy_kinematics.html"))
+        latent["analysis2"]["umap_fig"].write_html(os.path.join(latent_dir, "umap_hist_kinematics.html"))
+        latent["rf_importance_fig"].write_html(os.path.join(latent_dir, "rf_importance.html"))
+
+        # Standalone latent summary page (linked from report site when enabled)
+        p1a = latent["analysis1"]["permanova"]["run_aware"]
+        p1b = latent["analysis1"]["permanova"]["pooled"]
+        p2a = latent["analysis2"]["permanova"]["run_aware"]
+        p2b = latent["analysis2"]["permanova"]["pooled"]
+        r1 = latent["analysis1"].get("representation", {})
+        r2 = latent["analysis2"].get("representation", {})
+        latent_page = os.path.join(output_dir, "latent_space_report.html")
+        with open(latent_page, "w", encoding="utf-8") as f:
+            f.write(
+                "\n".join(
+                    [
+                        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'/>",
+                        "<title>Latent-space report</title>",
+                        "<style>body{font-family:system-ui,sans-serif;margin:1rem 2rem;max-width:1200px;} .card{background:#f7f7f8;padding:0.6rem 0.8rem;border-radius:6px;margin:0.6rem 0;} iframe{width:100%;height:560px;border:1px solid #ddd;margin:0.5rem 0 1.2rem;}</style>",
+                        "</head><body>",
+                        "<h1>Latent-space report</h1>",
+                        f"<div class='card'><strong>Analysis 1 representation</strong> - method={r1.get('representation_method', 'baseline')}, used_autoencoder={r1.get('used_autoencoder', False)}, latent_dim={r1.get('latent_dim', 'n/a')}</div>",
+                        f"<div class='card'><strong>Analysis 2 representation</strong> - method={r2.get('representation_method', 'baseline')}, used_autoencoder={r2.get('used_autoencoder', False)}, latent_dim={r2.get('latent_dim', 'n/a')}</div>",
+                        f"<div class='card'><strong>Analysis 1 PERMANOVA (run-aware, primary)</strong> - method={p1a['method']}, pseudo-F={p1a['pseudo_f']:.4f}, p={p1a['p_value']:.4g}, R2={p1a['r2']:.4f}</div>",
+                        f"<div class='card'><strong>Analysis 1 PERMANOVA (pooled, exploratory)</strong> - method={p1b['method']}, pseudo-F={p1b['pseudo_f']:.4f}, p={p1b['p_value']:.4g}, R2={p1b['r2']:.4f}</div>",
+                        f"<div class='card'><strong>Analysis 2 PERMANOVA (run-aware, primary)</strong> - method={p2a['method']}, pseudo-F={p2a['pseudo_f']:.4f}, p={p2a['p_value']:.4g}, R2={p2a['r2']:.4f}</div>",
+                        f"<div class='card'><strong>Analysis 2 PERMANOVA (pooled, exploratory)</strong> - method={p2b['method']}, pseudo-F={p2b['pseudo_f']:.4f}, p={p2b['p_value']:.4g}, R2={p2b['r2']:.4f}</div>",
+                        "<h2>Fly trajectory and kinematic embedding (3D)</h2>",
+                        "<iframe src='latent_space/umap_xy_kinematics.html'></iframe>",
+                        "<h2>Fly kinematic distribution embedding (3D)</h2>",
+                        "<iframe src='latent_space/umap_hist_kinematics.html'></iframe>",
+                        "<h2>Random Forest Importance</h2>",
+                        "<iframe src='latent_space/rf_importance.html'></iframe>",
+                        "</body></html>",
+                    ]
+                )
+            )
+        latent_rel = "latent_space_report.html"
+        print("Latent-space figures saved to:", latent_dir)
+
+    # ------------------------------------------------------------------
+    # Navigable report site (optional)
+    # ------------------------------------------------------------------
+    if args.report_site:
+        entry = write_classification_report_site(
+            df=df_agg,
+            features=FEATURES,
+            feature_titles=FEATURE_TITLES,
+            hover_data=hover_data,
+            out_dir=output_dir,
+            trial_column="run",
+            report_title="Classification and latent-space report",
+            pooled_cv=args.cv,
+            pooled_cv_groups=None,
+            per_trial_cv=args.cv,
+            entry_filename="classification_report.html",
+            latent_page_filename=latent_rel,
+        )
+        print("Report site entry:", entry)
 
     print("\nDone. Figures saved to:", output_dir)
 

@@ -1,0 +1,67 @@
+# Ground-truth export summary — 2026-05-10T17:34:52
+# CSV: 2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.gt.csv
+
+frames in video        : 363
+total annotations      : 12140
+  human-confirmed      : 5021
+  ocsort-sourced       : 7119
+distinct track IDs     : 54
+mean det conf (annot.) : 0.729
+
+per-track counts:
+  track  17  →  16 frames
+  track  18  →  290 frames
+  track  19  →  15 frames
+  track  20  →  153 frames
+  track  21  →  50 frames
+  track  22  →  260 frames
+  track  23  →  1 frames
+  track  24  →  99 frames
+  track  25  →  289 frames
+  track  26  →  1 frames
+  track  27  →  229 frames
+  track  28  →  5 frames
+  track  29  →  276 frames
+  track  40  →  328 frames
+  track  41  →  357 frames
+  track  42  →  363 frames
+  track  43  →  363 frames
+  track  44  →  188 frames
+  track  45  →  294 frames
+  track  46  →  5 frames
+  track  47  →  365 frames
+  track  48  →  324 frames
+  track  49  →  339 frames
+  track  50  →  362 frames
+  track  51  →  1 frames
+  track  53  →  2 frames
+  track  54  →  363 frames
+  track  55  →  363 frames
+  track  57  →  363 frames
+  track  58  →  12 frames
+  track  59  →  227 frames
+  track  60  →  363 frames
+  track  61  →  363 frames
+  track  62  →  364 frames
+  track  63  →  361 frames
+  track  65  →  1 frames
+  track  66  →  340 frames
+  track 6364  →  1 frames
+  track 6366  →  360 frames
+  track 6367  →  355 frames
+  track 6368  →  263 frames
+  track 6369  →  213 frames
+  track 6370  →  340 frames
+  track 6372  →  359 frames
+  track 6373  →  335 frames
+  track 6376  →  3 frames
+  track 6377  →  11 frames
+  track 6380  →  33 frames
+  track 6388  →  324 frames
+  track 6389  →  307 frames
+  track 6390  →  332 frames
+  track 6391  →  205 frames
+  track 6392  →  329 frames
+  track 6393  →  275 frames
+
+frames with detections but ZERO annotations: 0
