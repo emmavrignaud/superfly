@@ -28,7 +28,7 @@ Main entry point
 Builds two composite Plotly figures (interactive hover) and optionally writes:
   metrics_report.html          — interactive, all figures embedded
   metrics_report.md            — markdown with static PNG references
-  metrics_xy_trajectories.png  — side-by-side XY (raw vs ordered)
+  metrics_xy_trajectories.png  — side-by-side XY (raw vs compact)
   metrics_pipeline.png         — 4-panel pipeline diagnostics
 """
 
