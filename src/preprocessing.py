@@ -45,7 +45,8 @@ def _preprocessing_cfg() -> dict:
 
 
 # ─── Stylesheet ───────────────────────────────────────────────────────────
-_QSS = (Path(__file__).parent / "preprocessing_style.qss").read_text()
+# Stylesheet lives in the repo-level assets/ folder so src/ stays python-only.
+_QSS = (Path(__file__).resolve().parent.parent / "assets" / "preprocessing_style.qss").read_text()
 
 _STYLE_ROI_NONE = (
     "color:#f38ba8; background:#313244; border-radius:4px; padding:5px 12px;"

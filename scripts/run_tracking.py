@@ -30,19 +30,13 @@ import os
 import re
 import shutil
 import sys
-import yaml
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from utils import save_run_params, resolve_overlay_video
+from utils import save_run_params, resolve_overlay_video, load_config
 
 ROI_LIBRARY_PATH = Path(__file__).resolve().parents[1] / "roi_library.json"
-
-
-def load_config(config_path: str) -> dict:
-    with open(config_path) as f:
-        return yaml.safe_load(f)
 
 
 def _load_roi_library() -> dict:
@@ -72,10 +66,8 @@ def _auto_output_dir(video_path: str) -> str:
     return base_tpl.format(N=n)
 
 
-def build_parser(cfg: dict) -> argparse.ArgumentParser:
-    t = cfg.get("tracker", {})
-    v = cfg.get("visualization", {})
-
+def build_parser(cfg) -> argparse.ArgumentParser:
+    t = cfg.tracker
     p = argparse.ArgumentParser(
         description="Fly tracking: raw video -> ocsort_tracks.csv + ordered_tracks.csv",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -92,37 +84,26 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
                    help="Run interactive background-subtraction GUI before tracking")
     p.add_argument("--no-overlay", action="store_true", help="Skip overlay video rendering")
 
-    p.add_argument("--confidence", type=float, default=t.get("confidence", 0.10))
-    p.add_argument("--lost-track-buffer", type=int, default=t.get("lost_track_buffer", 90))
-    p.add_argument("--min-matching-threshold", type=float,
-                   default=t.get("minimum_matching_threshold", 0.2))
-    p.add_argument("--min-consecutive-frames", type=int,
-                   default=t.get("minimum_consecutive_frames", 3))
+    p.add_argument("--confidence", type=float, default=t.confidence)
+    p.add_argument("--lost-track-buffer", type=int, default=t.lost_track_buffer)
+    p.add_argument("--min-matching-threshold", type=float, default=t.minimum_matching_threshold)
+    p.add_argument("--min-consecutive-frames", type=int, default=t.minimum_consecutive_frames)
     p.add_argument("--max-frames", type=int, default=None,
                    help="Limit number of frames to process (None = all)")
-    p.add_argument("--asso-func", type=str, default=t.get("asso_func", "diou"),
+    p.add_argument("--asso-func", type=str, default=t.asso_func,
                    help="OC-SORT association function: diou, hmiou, or iou")
-    p.add_argument("--brownian-pos-noise", type=float,
-                   default=t.get("brownian_pos_noise", 1.0),
+    p.add_argument("--brownian-pos-noise", type=float, default=t.brownian_pos_noise,
                    help="Scale factor on Kalman Q[cx], Q[cy]")
-    p.add_argument("--fps-out", type=int, default=v.get("fps_out", 30))
+    p.add_argument("--fps-out", type=int, default=cfg.visualization.fps_out)
 
     return p
 
 
 def main():
     config_path = Path(__file__).resolve().parents[1] / "config.yaml"
-    cfg = load_config(str(config_path))
+    cfg = load_config(config_path)
     args = build_parser(cfg).parse_args()
-
-    _t = cfg.get("tracker", {})
-    _p = cfg.get("preprocessing", {})
-    _r = cfg.get("roi", {})
-    _rf = cfg.get("roboflow", {})
-    _s = cfg.get("stitching", {})  # kept for expected_per_vial
-    inference_api_url = _rf.get("inference_api_url", "https://detect.roboflow.com")
-    detection_confidence_rfdetr = _t.get("detection_confidence_rfdetr", 0.4)
-    use_saved_roi = _r.get("use_saved_roi", True)
+    use_saved_roi = cfg.roi.use_saved_roi
 
     if args.output_dir is None:
         args.output_dir = _auto_output_dir(args.video)
@@ -154,7 +135,7 @@ def main():
     video_context = parse_video_context(args.video)
 
     cap = cv2.VideoCapture(video_path)
-    fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or cfg.video.fallback_fps)
     save_run_params(args.output_dir, "config", {
         "video": video_path,
         "video_fps": fps,
@@ -162,7 +143,7 @@ def main():
         "video_height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
         "video_frames": int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
         "tracker": {
-            "detection_confidence_rfdetr": detection_confidence_rfdetr,
+            "detection_confidence_rfdetr": cfg.tracker.detection_confidence_rfdetr,
             "confidence": args.confidence,
             "lost_track_buffer": args.lost_track_buffer,
             "min_matching_threshold": args.min_matching_threshold,
@@ -187,16 +168,16 @@ def main():
         if use_saved_roi and _stored_crop is not None:
             print(f"Found stored preprocessing params for: {_video_key}")
         else:
-            print(f"No stored preprocessing params for: {_video_key} — opening GUI...")
+            print(f"No stored preprocessing params for: {_video_key}: opening GUI...")
 
         video_path, crop_params = preprocess_bgsub_gui(
             video_path=video_path,
             out_mp4=pp_out,
             out_raw_mp4=raw_cropped_path,
-            gain=_p.get("bg_gain", 1.2),
-            white_level=_p.get("bg_white_level", 245),
-            bg_sample_stride=_p.get("bg_sample_stride", 1),
-            bg_percentile=_p.get("bg_percentile", 85.0),
+            gain=cfg.preprocessing.bg_gain,
+            white_level=cfg.preprocessing.bg_white_level,
+            bg_sample_stride=cfg.preprocessing.bg_sample_stride,
+            bg_percentile=cfg.preprocessing.bg_percentile,
             crop_params=_stored_crop if (use_saved_roi and _stored_crop is not None) else None,
             video_context=video_context,
         )
@@ -231,9 +212,9 @@ def main():
         print(f"Loaded {len(vials)} vials from library.")
     else:
         if not use_saved_roi:
-            print("use_saved_roi=False — opening GUI...")
+            print("use_saved_roi=False: opening GUI...")
         else:
-            print(f"No stored vial ROIs for: {_video_key} — opening GUI...")
+            print(f"No stored vial ROIs for: {_video_key}: opening GUI...")
         vials = draw_and_save_vial_rois(
             video_path=args.video,
             roi_json_path=roi_json,
@@ -258,8 +239,8 @@ def main():
         output_csv=ocsort_csv,
         api_key=args.api_key,
         model_id=args.model_id,
-        inference_api_url=inference_api_url,
-        detection_confidence_rfdetr=detection_confidence_rfdetr,
+        inference_api_url=cfg.roboflow.inference_api_url,
+        detection_confidence_rfdetr=cfg.tracker.detection_confidence_rfdetr,
         confidence=args.confidence,
         lost_track_buffer=args.lost_track_buffer,
         minimum_matching_threshold=args.min_matching_threshold,
@@ -291,7 +272,7 @@ def main():
         video_path=video_path,
         det_log_csv=det_log_csv,
         out_mp4=os.path.join(args.output_dir, f"{Path(video_path).stem}_detections_RF-DETR.mp4"),
-        fps_out=cfg.get("visualization", {}).get("fps_out", 30),
+        fps_out=cfg.visualization.fps_out,
     )
 
     # ------------------------------------------------------------------
@@ -323,7 +304,7 @@ def main():
         tracker=tracker,
         df_wide=df_wide,
         df_ordered=df_ordered,
-        n_expected=_s.get("expected_per_vial", 7) * len(vials),
+        n_expected=cfg.pipeline.expected_per_vial * len(vials),
         fps=fps,
         vial_rois=vials,
         config=cfg,
@@ -338,9 +319,9 @@ def main():
     if not args.no_overlay:
         print("\n=== Stage 5: Overlay videos ===")
 
-        _overlay_mode = cfg.get("visualization", {}).get("overlay_source", "raw_cropped")
+        _overlay_mode = cfg.visualization.overlay_source
         overlay_video = resolve_overlay_video(args.output_dir, _overlay_mode) or video_path
-        print(f"  overlay_source={_overlay_mode}  →  substrate: {overlay_video}")
+        print(f"  overlay_source={_overlay_mode} -> substrate: {overlay_video}")
 
         det_log_arg = det_log_csv if os.path.exists(det_log_csv) else None
 

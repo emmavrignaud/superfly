@@ -83,7 +83,8 @@ import plotly.graph_objects as go
 # regardless of which directory the script is called from.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.stitching import wide_to_long, build_tracklets, stitch, link_score
+from src.wide_long import wide_to_long
+from legacy.stitching import build_tracklets, stitch, link_score
 from src.metrics import compute_stitching_objectives
 from src.visualization import render_raw_overlay_video
 from utils import resolve_overlay_video

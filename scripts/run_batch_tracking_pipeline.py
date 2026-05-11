@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """
-Batch tracking pipeline — parity with notebooks/01_tracking_pipeline.ipynb.
+Batch tracking pipeline. Parity with notebooks/01_tracking_pipeline.ipynb.
 
 **Interactive order (per video):** for each job, preprocessing (if enabled in
-``config.yaml``) then vial ROIs — so you finish one video's GUIs before the
+``config.yaml``) then vial ROIs, so you finish one video's GUIs before the
 next. **Automated tail:** tracking → vial assignment → metrics → overlays is
 run **per video** end-to-end (simple, API-friendly).
 
@@ -49,6 +49,8 @@ matplotlib.use("Agg")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from utils import load_config  # noqa: E402
+
 ROI_LIBRARY_PATH = REPO_ROOT / "roi_library.json"
 
 
@@ -58,13 +60,6 @@ class VideoJob:
     output_dir: Path
     short_name: str
     video_key: str
-
-
-def load_yaml(path: Path) -> dict:
-    import yaml
-
-    with open(path) as f:
-        return yaml.safe_load(f)
 
 
 def _load_roi_library() -> dict:
@@ -207,46 +202,23 @@ def main() -> None:
 
     os.chdir(REPO_ROOT)
 
-    cfg = load_yaml(Path(args.config))
-    creds = load_yaml(Path(args.creds))
+    cfg = load_config(Path(args.config))
+    with open(Path(args.creds)) as f:
+        import yaml
+        creds = yaml.safe_load(f)
+
     api_key = args.api_key or creds.get("API_KEY")
     if not api_key:
         raise SystemExit("No API_KEY in creds file and no --api-key")
 
-    _rf = cfg.get("roboflow", {})
-    model_id = creds.get("MODEL_ID") or _rf.get("model_id")
-    if not model_id:
-        raise SystemExit(
-            "No model id: set roboflow.model_id in config.yaml or MODEL_ID in creds_config.yaml"
-        )
-    inference_api_url = _rf.get("inference_api_url", "https://detect.roboflow.com")
+    model_id = creds.get("MODEL_ID") or cfg.roboflow.model_id
 
     outputs_root = (REPO_ROOT / args.outputs_root).resolve()
     jobs = allocate_jobs(raw_list, outputs_root)
 
-    _t = cfg.get("tracker", {})
-    _s = cfg.get("stitching", {})
-    _p = cfg.get("preprocessing", {})
-    _r = cfg.get("roi", {})
-    use_saved_roi = _r.get("use_saved_roi", True)
+    use_saved_roi = cfg.roi.use_saved_roi
     show_plots = args.show_plots
-    diag_fps = float(_s.get("fps", 30))
-
-    detection_confidence_rfdetr = _t.get("detection_confidence_rfdetr", 0.4)
-    confidence = _t.get("confidence", 0.1)
-    lost_track_buffer = _t.get("lost_track_buffer", 90)
-    min_matching_threshold = _t.get("minimum_matching_threshold", 0.2)
-    min_consecutive_frames = _t.get("minimum_consecutive_frames", 3)
-    asso_func = _t.get("asso_func", "diou")
-    brownian_pos_noise = _t.get("brownian_pos_noise", 1.0)
-    vial_count_cap = _s.get("vial_count_cap", 7)
-    stop_mode = _s.get("stop_mode", "converge")
-    w_under = _s.get("w_under", 10.0)
-    w_over = _s.get("w_over", 2.0)
-    bg_gain = _p.get("bg_gain", 1.2)
-    bg_white_level = _p.get("bg_white_level", 245)
-    bg_percentile = _p.get("bg_percentile", 85.0)
-    bg_sample_stride = _p.get("bg_sample_stride", 1)
+    diag_fps = float(cfg.video.fallback_fps)
 
     print(f"Using model_id: {model_id}")
 
@@ -283,31 +255,12 @@ def main() -> None:
             "video": str(j.raw_video),
             "output_dir": str(j.output_dir),
             "short_name": j.short_name,
-            "video_fps": cap.get(cv2.CAP_PROP_FPS),
+            "video_fps": float(cap.get(cv2.CAP_PROP_FPS) or cfg.video.fallback_fps),
             "video_width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
             "video_height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
             "video_frames": int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
-            "tracker": {
-                "detection_confidence_rfdetr": detection_confidence_rfdetr,
-                "confidence": confidence,
-                "lost_track_buffer": lost_track_buffer,
-                "min_matching_threshold": min_matching_threshold,
-                "min_consecutive_frames": min_consecutive_frames,
-                "asso_func": asso_func,
-                "brownian_pos_noise": brownian_pos_noise,
-            },
-            "stitching": {
-                "stop_mode": stop_mode,
-                "w_under": w_under,
-                "w_over": w_over,
-                "vial_count_cap": vial_count_cap,
-            },
-            "preprocessing": {
-                "bg_gain": bg_gain,
-                "bg_white_level": bg_white_level,
-                "bg_percentile": bg_percentile,
-                "bg_sample_stride": bg_sample_stride,
-            },
+            "tracker": dict(cfg.tracker),
+            "preprocessing": dict(cfg.preprocessing),
             "roboflow": {"model_id": model_id},
         })
         cap.release()
@@ -315,7 +268,7 @@ def main() -> None:
     path_to_vid: dict[str, Path] = {}
     raw_cropped_by_job: dict[str, Path | None] = {}
 
-    # ── Phase A: per video — preprocessing (always; GUI vs library like run_tracking) + vial ROIs ─
+    # Phase A: per video, preprocessing (GUI vs library, like run_tracking) + vial ROIs
     for j in jobs:
         print(f"\n=== [{j.short_name}] preprocessing & vial ROIs ===")
         vc = parse_video_context(str(j.raw_video))
@@ -326,7 +279,7 @@ def main() -> None:
             print(f"  Using stored preprocessing params for {j.video_key}")
         else:
             if not use_saved_roi:
-                print(f"  roi.use_saved_roi=false — opening preprocessing GUI for {j.video_key}")
+                print(f"  roi.use_saved_roi=false: opening preprocessing GUI for {j.video_key}")
             else:
                 print(f"  Opening preprocessing GUI for {j.video_key}")
 
@@ -334,10 +287,10 @@ def main() -> None:
             video_path=str(j.raw_video),
             out_mp4=str(pp_out),
             out_raw_mp4=str(raw_cropped_out),
-            gain=bg_gain,
-            white_level=bg_white_level,
-            bg_sample_stride=bg_sample_stride,
-            bg_percentile=bg_percentile,
+            gain=cfg.preprocessing.bg_gain,
+            white_level=cfg.preprocessing.bg_white_level,
+            bg_sample_stride=cfg.preprocessing.bg_sample_stride,
+            bg_percentile=cfg.preprocessing.bg_percentile,
             crop_params=_stored_crop if (use_saved_roi and _stored_crop is not None) else None,
             video_context=vc,
         )
@@ -383,30 +336,46 @@ def main() -> None:
             _save_roi_library(library)
         save_run_params(str(j.output_dir), "roi", {k: list(v) for k, v in vials.items()})
 
-    v_cfg = cfg.get("visualization", {})
-
-    # ── Phase B: per video — track → order → metrics → overlays ─────────────
+    # Phase B: per video, track -> order -> metrics -> overlays
     for j in jobs:
-        print(f"\n=== [{j.short_name}] tracking → ordering → metrics → overlays ===")
+        print(f"\n=== [{j.short_name}] tracking, ordering, metrics, overlays ===")
         ptv = path_to_vid[j.video_key]
         wide_csv = j.output_dir / "ocsort_tracks.csv"
         det_log_csv = j.output_dir / "detections_raw.csv"
-        print("  RF-DETR + OC-SORT …")
-        df_wide, tracker = export_tracks_xy_tuple_csv_one_config(
+        relinked_csv = j.output_dir / "tracks_relinked.csv"
+        roi_json = j.output_dir / "vial_rois.json"
+        ocsort_long = j.output_dir / "ocsort_long.csv"
+        ordered_csv = j.output_dir / "ordered_tracks.csv"
+
+        # Vial ROIs are needed by the tracker (round-2 jump search) AND by
+        # diagnostics + overlays, so load them once up front.
+        with open(roi_json) as f:
+            vial_rois = {k: tuple(v) for k, v in json.load(f).items()}
+
+        print("  RF-DETR + OC-SORT ...")
+        t = cfg.tracker
+        df_wide, tracker, df_relinked = export_tracks_xy_tuple_csv_one_config(
             video_path=str(ptv),
             output_csv=str(wide_csv),
             api_key=api_key,
             model_id=model_id,
-            inference_api_url=inference_api_url,
-            detection_confidence_rfdetr=detection_confidence_rfdetr,
-            confidence=confidence,
-            lost_track_buffer=lost_track_buffer,
-            minimum_matching_threshold=min_matching_threshold,
-            minimum_consecutive_frames=min_consecutive_frames,
-            asso_func=asso_func,
-            brownian_pos_noise=brownian_pos_noise,
+            inference_api_url=cfg.roboflow.inference_api_url,
+            detection_confidence_rfdetr=t.detection_confidence_rfdetr,
+            confidence=t.confidence,
+            lost_track_buffer=t.lost_track_buffer,
+            minimum_matching_threshold=t.minimum_matching_threshold,
+            minimum_consecutive_frames=t.minimum_consecutive_frames,
+            asso_func=t.asso_func,
+            brownian_pos_noise=t.brownian_pos_noise,
+            aspect_weight=t.aspect_weight,
+            behavioral_weight=t.behavioral_weight,
+            jump_factor=t.jump_factor,
+            jump_iou_threshold=t.jump_iou_threshold,
+            jump_inertia=t.jump_inertia,
             det_log_csv=str(det_log_csv),
+            vial_rois=vial_rois,
             max_frames=args.max_frames,
+            relinked_csv=str(relinked_csv),
         )
 
         save_run_params(str(j.output_dir), "tracker_output", {
@@ -428,25 +397,17 @@ def main() -> None:
             out_mp4=str(j.output_dir / f"{j.short_name}_detections_RF-DETR.mp4"),
         )
 
+        # Mid-pipeline check (parity with notebook cell 10): no per-vial report.
         run_diagnostics(
             tracker=tracker,
             df_wide=df_wide,
-            df_stitched=None,
-            n_expected=42,
+            df_relinked=df_relinked,
+            n_expected=cfg.pipeline.expected_per_vial * len(vial_rois),
             fps=diag_fps,
             config=cfg,
-            output_dir=None,
-            show_plots=show_plots,
         )
 
-        roi_json = j.output_dir / "vial_rois.json"
-        ocsort_long = j.output_dir / "ocsort_long.csv"
-        ordered_csv = j.output_dir / "ordered_tracks.csv"
-
-        with open(roi_json) as f:
-            vial_rois = {k: tuple(v) for k, v in json.load(f).items()}
-
-        print("  Vial assignment + ordered IDs …")
+        print("  Vial assignment + ordered IDs ...")
         long_df = wide_to_long(pd.read_csv(wide_csv), out_csv=str(ocsort_long))
         df_ordered = assign_vials_and_ordered_ids(
             ocsort_csv=str(ocsort_long),
@@ -461,16 +422,19 @@ def main() -> None:
         })
         print(f"  ordered -> {ordered_csv}")
 
+        # Reload the tracker from the JSON log so this code path also works
+        # if the user reruns just the diagnostics on a previous run's outputs.
         with open(j.output_dir / "tracker_log.json") as f:
             _tl = json.load(f)
         mock_tracker = types.SimpleNamespace(**_tl)
 
-        n_expected = _s.get("expected_per_vial", 7) * len(vial_rois)
-        print("  full diagnostics (tracker from tracker_log.json) …")
+        n_expected = cfg.pipeline.expected_per_vial * len(vial_rois)
+        print("  full diagnostics (tracker rebuilt from tracker_log.json) ...")
         run_diagnostics(
             tracker=mock_tracker,
             df_wide=df_wide,
             df_ordered=df_ordered,
+            df_relinked=df_relinked,
             n_expected=n_expected,
             fps=diag_fps,
             vial_rois=vial_rois,
@@ -479,7 +443,7 @@ def main() -> None:
             show_plots=show_plots,
         )
 
-        _overlay_mode = v_cfg.get("overlay_source", "raw_cropped").lower()
+        _overlay_mode = cfg.visualization.overlay_source.lower()
         rc = raw_cropped_by_job.get(j.video_key)
         if _overlay_mode == "raw_cropped" and rc is not None and rc.exists():
             overlay_video = str(rc)

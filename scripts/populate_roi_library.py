@@ -31,7 +31,6 @@ import shutil
 import sys
 from pathlib import Path
 
-import yaml
 from PyQt5.QtWidgets import QApplication
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -39,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.preprocessing import preprocess_bgsub_gui
 from src.roi import draw_and_save_vial_rois
 from src.ui_context import WorkflowCompanion, parse_video_context
+from utils import load_config
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_ROOT = _REPO_ROOT / "2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m"
@@ -82,15 +82,8 @@ def main():
         print(f"ERROR: root folder not found: {root}")
         sys.exit(1)
 
-    cfg_path = _REPO_ROOT / "config.yaml"
-    with open(cfg_path) as f:
-        _cfg = yaml.safe_load(f)
-    _p = _cfg.get("preprocessing", {})
-    bg_gain = _p.get("bg_gain", 1.2)
-    bg_white_level = _p.get("bg_white_level", 245)
-    bg_percentile = _p.get("bg_percentile", 85.0)
-    bg_sample_stride = _p.get("bg_sample_stride", 1)
-    codec = _p.get("codec", "mp4v")
+    cfg = load_config(_REPO_ROOT / "config.yaml")
+    p = cfg.preprocessing
 
     data_raw = _REPO_ROOT / "data" / "raw"
     data_processed = _REPO_ROOT / "data" / "processed"
@@ -171,11 +164,11 @@ def main():
             pp_path, crop_params = preprocess_bgsub_gui(
                 video_path=str(video),
                 out_mp4=str(pp_dst),
-                gain=bg_gain,
-                white_level=bg_white_level,
-                codec=codec,
-                bg_sample_stride=bg_sample_stride,
-                bg_percentile=bg_percentile,
+                gain=p.bg_gain,
+                white_level=p.bg_white_level,
+                codec=p.codec,
+                bg_sample_stride=p.bg_sample_stride,
+                bg_percentile=p.bg_percentile,
                 crop_params=stored_crop,
                 video_context=video_context,
             )

@@ -15,14 +15,19 @@ aggregate_per_fly_features()   — collapses to one row per fly
 import numpy as np
 import pandas as pd
 from scipy.spatial import ConvexHull
-import yaml
 from pathlib import Path
 
-_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
-with open(_CONFIG_PATH) as f:
-    cfg = yaml.safe_load(f)
+# Module-level fps constant, read from config.yaml's video.fallback_fps.
+# Callers that need true per-video fps should pass it explicitly to the
+# functions that consume it (e.g. via fps columns added by
+# assign_vials_and_ordered_ids).
+import sys as _sys
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_REPO_ROOT))
+from utils import load_config as _load_config  # noqa: E402
 
-fps = cfg['stitching']['fps']
+fps = float(_load_config(_REPO_ROOT / "config.yaml").video.fallback_fps)
 
 def add_kinematics(df: pd.DataFrame, group_col: str = "ordered_id") -> pd.DataFrame:
     """

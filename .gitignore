@@ -1,17 +1,36 @@
+# Python
 __pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
+
+# Notebooks
 .ipynb_checkpoints/
+
+# Logs
 *.log
 
-# large / generated content
+# Editor / tooling
+.vscode/settings.json
+.DS_Store
+
+# Secrets and local-only configs
+creds_config.yaml
+
+# Generated outputs
+outputs/
 data/annotations/*
 data/tracked_videos/*
 media/plotly/*
 media/html/*
-venv/
-outputs/
-creds_config.yaml
 ignore_mds/
-.claude/settings.local.json
-.vscode/settings.json
 _test_ann.html
-roboflow_export*/
+
+# Roboflow exports (folders AND zips)
+roboflow_export*
+
+# Claude / agent scratch
+.claude/

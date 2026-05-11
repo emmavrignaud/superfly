@@ -9,6 +9,44 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+import yaml
+
+
+class Config(dict):
+    """A dict that also supports attribute-style access (cfg.section.key).
+
+    Constructed eagerly: any nested dict in the input becomes a Config too,
+    and any list of dicts becomes a list of Configs. Missing keys raise
+    AttributeError (the contract is enforced by tests/test_config_schema.py;
+    fallbacks live in config.yaml itself, not at every call site).
+
+    Still a real dict, so existing code that does ``cfg["section"]`` or
+    ``cfg.get("section")`` keeps working.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for k, v in list(self.items()):
+            if isinstance(v, dict) and not isinstance(v, Config):
+                self[k] = Config(v)
+            elif isinstance(v, list):
+                self[k] = [Config(x) if isinstance(x, dict) else x for x in v]
+
+    def __getattr__(self, key: str):
+        try:
+            return self[key]
+        except KeyError as e:
+            raise AttributeError(
+                f"Config has no key {key!r}. "
+                f"Available: {sorted(self.keys())}"
+            ) from e
+
+
+def load_config(path: str | Path) -> Config:
+    """Load a YAML file and return it wrapped in a Config for attribute access."""
+    with open(path) as f:
+        return Config(yaml.safe_load(f) or {})
+
 
 def resolve_overlay_video(
     run_dir: str | Path,

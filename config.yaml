@@ -10,6 +10,10 @@ roboflow:
   # Rule: copy the hostname from the official inference example Roboflow gives you after deploy — do not guess.
   inference_api_url: "https://serverless.roboflow.com"
 
+video:
+  # Properties of the input video. Used by tracking + diagnostics.
+  fallback_fps: 30   # used only when cv2.CAP_PROP_FPS is missing/unreadable
+
 tracker:
   # RF-DETR detections + OC-SORT association into tracklets.
   detection_confidence_rfdetr: 0.4   # RF-DETR output threshold
@@ -27,38 +31,10 @@ tracker:
   jump_iou_threshold: 0.05          # looser IoU threshold for jump round
   jump_inertia: 0.05                # reduced OCM weight for jump round (direction less reliable after a jump)
 
-stitching:
-  # Iterative Hungarian linking. Each round, candidate matches are accepted as a
-  # cost-ordered prefix that minimizes Σ link_scores + asymmetric deviance penalty.
-  # Cost = weighted sum of extrapolation + direction + behavioral terms.
-  stitching_mode: per_vial       # per_vial | general
-  stop_mode: converge            # converge (run until the hungarian round adds no new merges) | cap (run until the number of IDs in a vial reaches the vial_count_cap) | fixed (provide a number :)) 
-  max_rounds: 10                 # used when stop_mode == fixed
-  w_under: 15                    # penalty per extra ID above expected (under-merging)
-  w_over: 2.0                    # penalty per missing ID below expected (over-merging)
-  vial_count_cap: 7              # per_vial + stop_mode=cap: stop at this many IDs per vial
-  general_count_cap: 56          # general + stop_mode=cap: stop at this many total IDs
-  fps: 30                        # video fps (for px→px/s)
-  pause_threshold: 1.0           # px/s below this = pause
-  edge_fraction: 0.10            # wall-proximity zone as fraction of vial w/h
-  min_points_for_scale: 10       # min tracklet length to contribute to feature scales
-  expected_per_vial: 7           # ground-truth fly count per vial
-  short_track_frac: 0.10         # tracklets below this × num_frames flagged as short
-  link_score_weights:            # 0 disables a term
-    extrap: 0.4
-    direction: 0.3
-    behavioral: 0.3                # TODO: add gap penalty
-  direction_weights:             # sub-weights inside direction term (sum = 1.0)
-    heading_vs_gap: 0.7         # A's final heading vs. A→B gap vector
-    overall_vs_overall: 0.30     # A's overall direction vs. B's
-  behavioral_weights:            # per-feature weights for behavioral dissimilarity
-    median_velocity: 1.0
-    pause_fraction: 1.0
-    mean_turning_angle: 1.0
-    mean_angular_velocity: 1.0
-    mean_acceleration: 1.0
-    n_large_displacements: 1.0
-    tortuosity: 1.0
+pipeline:
+  # Cross-cutting parameters for the active tracking pipeline.
+  # (Post-hoc stitching parameters now live in legacy/stitching_config.yaml.)
+  expected_per_vial: 7   # ground-truth fly count per vial; used by run_diagnostics
 
 relink:
   # Second-round re-linking: swap tracklet segments at frames where ≥2 trackers
