@@ -676,13 +676,17 @@ def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc
     # link_trk_states is a list of dicts built in ocsort.update(); None = disabled.
     if link_trk_states is not None and len(link_trk_states) > 0:
         lc = link_cost_batch(detections, link_trk_states, weights=link_weights)
-        # Normalise to [0, 1] and convert to a bonus (lower cost = higher bonus)
-        lc_max = lc.max()
-        if lc_max > 0:
-            lc_bonus = 1.0 - lc / lc_max
-        else:
-            lc_bonus = np.zeros_like(lc)
-        bonus = bonus + lc_bonus
+        # Skip when there are zero detections this frame: lc has shape (0, n_trk),
+        # so .max() raises ValueError on the zero-size array. With no detections
+        # there is nothing to score, and the matched_indices block below already
+        # handles min(iou_matrix.shape) == 0 correctly.
+        if lc.size > 0:
+            lc_max = lc.max()
+            if lc_max > 0:
+                lc_bonus = 1.0 - lc / lc_max
+            else:
+                lc_bonus = np.zeros_like(lc)
+            bonus = bonus + lc_bonus
 
     if min(iou_matrix.shape) > 0:
         a = (iou_matrix > iou_threshold).astype(np.int32)

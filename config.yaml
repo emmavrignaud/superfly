@@ -3,7 +3,7 @@
 roboflow:
   # Roboflow hosted model id: ``<workspace>/<version>`` (same string Roboflow shows for the model).
   # Optional override: set MODEL_ID in creds_config.yaml (same format).
-  model_id: "flies-123/2"
+  model_id: "flies-123/5"
   # Base URL for InferenceHTTPClient (must match Roboflow's deploy snippet for YOUR project):
   #   - https://serverless.roboflow.com  → Serverless Hosted API (Roboflow docs / deploy UI often show this host).
   #   - https://detect.roboflow.com      → Older hosted inference host; only use if YOUR Roboflow example code still uses detect.roboflow.com.
