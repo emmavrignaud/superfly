@@ -1,14 +1,14 @@
 {
   "schema_version": 2,
   "created_at": "2026-04-27T21:53:38",
-  "last_opened_at": "2026-05-08T00:10:10",
+  "last_opened_at": "2026-05-10T18:20:01",
   "last_saved_at": "2026-05-08T00:12:15",
-  "last_exported_at": "2026-05-04T00:02:00",
-  "labeler_git_commit": "5e4d3c84ed570d61e88fa9da531f114d7f5c2312",
+  "last_exported_at": "2026-05-10T18:20:25",
+  "labeler_git_commit": "eeda4cdc5d135c5a9364d6e4c8d2fd9df387618f",
   "sources": {
-    "video": "data/manual_labelling/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4",
-    "raw_detections_csv": "data/manual_labelling/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped/detections_raw.csv",
-    "tracks_csv": "data/manual_labelling/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped/tracks_long.csv"
+    "video": "C:/Users/emmav/Downloads/superfly/data/manual_labelling/combined_annotations/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4",
+    "raw_detections_csv": "C:/Users/emmav/Downloads/superfly/data/manual_labelling/combined_annotations/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped/detections_raw.csv",
+    "tracks_csv": "C:/Users/emmav/Downloads/superfly/data/manual_labelling/combined_annotations/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped/tracks_long.csv"
   },
   "video": {
     "frame_count": 363,
@@ -26,9 +26,9 @@
     "wrote": []
   },
   "annotation_counts": {
-    "total": 7385,
-    "human": 2297,
-    "ocsort": 5088,
-    "tracks": 34
+    "total": 11874,
+    "human": 1408,
+    "ocsort": 10466,
+    "tracks": 64
   }
 }

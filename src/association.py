@@ -328,13 +328,20 @@ def associate_detections_to_trackers(detections,trackers,iou_threshold = 0.3):
     return matches, unmatched_detections.astype(int), unmatched_trackers.astype(int)
 
 
-def _filter_matches(matched_indices, iou_matrix, iou_threshold, num_dets, num_trks):
+def _filter_matches(matched_indices, iou_matrix, iou_threshold, num_dets, num_trks,
+                    composite_matrix=None):
     """Shared helper to split matched_indices into matches/unmatched based on IOU threshold.
 
     Returns (matches, unmatched_dets, unmatched_trks, match_scores) where
-    match_scores[i] is the IoU value for matches[i] — used by OCSort to record
-    per-frame association confidence in each tracker's observation_log.
+    match_scores[i] is the composite association score for matches[i] — used by
+    OCSort to record per-frame association confidence in each tracker's observation_log.
+
+    composite_matrix : the full cost matrix (iou + behavioural + angle bonuses) used
+        for the Hungarian assignment. When provided, match_scores reflect the actual
+        decision quality rather than raw IoU alone. Threshold filtering still uses
+        iou_matrix so the acceptance criterion is unchanged.
     """
+    score_matrix = composite_matrix if composite_matrix is not None else iou_matrix
     if matched_indices.shape[0] > 0:
         unmatched_dets = np.setdiff1d(np.arange(num_dets), matched_indices[:,0])
         unmatched_trks = np.setdiff1d(np.arange(num_trks), matched_indices[:,1])
@@ -343,7 +350,7 @@ def _filter_matches(matched_indices, iou_matrix, iou_threshold, num_dets, num_tr
         unmatched_dets = np.concatenate([unmatched_dets, matched_indices[low_iou_mask, 0]])
         unmatched_trks = np.concatenate([unmatched_trks, matched_indices[low_iou_mask, 1]])
         matches = matched_indices[~low_iou_mask]
-        match_scores = iou_vals[~low_iou_mask].tolist()
+        match_scores = score_matrix[matches[:,0], matches[:,1]].tolist()
     else:
         unmatched_dets = np.arange(num_dets)
         unmatched_trks = np.arange(num_trks)
@@ -688,16 +695,19 @@ def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc
                 lc_bonus = np.zeros_like(lc)
             bonus = bonus + lc_bonus
 
+    composite = iou_matrix + bonus + angle_diff_cost
+
     if min(iou_matrix.shape) > 0:
         a = (iou_matrix > iou_threshold).astype(np.int32)
         if a.sum(1).max() == 1 and a.sum(0).max() == 1:
             matched_indices = np.stack(np.where(a), axis=1)
         else:
-            matched_indices = linear_assignment(-(iou_matrix + bonus + angle_diff_cost))
+            matched_indices = linear_assignment(-composite)
     else:
         matched_indices = np.empty(shape=(0,2))
 
-    return _filter_matches(matched_indices, iou_matrix, iou_threshold, len(detections), len(trackers))
+    return _filter_matches(matched_indices, iou_matrix, iou_threshold, len(detections), len(trackers),
+                           composite_matrix=composite)
 
 
 # ---------------------------------------------------------------------------

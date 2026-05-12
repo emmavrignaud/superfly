@@ -15,7 +15,7 @@ from tempfile import TemporaryDirectory
 import pandas as pd
 
 from labeler.color_engine import track_color_hex, track_color_rgb
-from labeler.data_model import (
+from labeler.robo_export import (
     Annotation,
     AnnotationStore,
     SOURCE_HUMAN,
@@ -150,14 +150,14 @@ class TestMatching(unittest.TestCase):
     def test_unmatched_outside_tolerance(self):
         raw = {0: load_raw_detections.__wrapped__ if False else None}  # unused
         # Hand-build a tiny case: one raw det at (100,100), suggestion at (200,200)
-        from labeler.data_model import Detection
+        from labeler.robo_export import Detection
         raw_by_frame = {0: [Detection(0, 0, 100, 100, 95, 95, 105, 105, 0.9)]}
         ocs_by_frame = {0: [(7, 200.0, 200.0)]}
         anns = match_ocsort_to_raw(raw_by_frame, ocs_by_frame, tolerance_px=5.0)
         self.assertEqual(len(anns), 0)
 
     def test_greedy_nearest_first(self):
-        from labeler.data_model import Detection
+        from labeler.robo_export import Detection
         # Two raw dets near each other; one suggestion much closer to det 0.
         raw_by_frame = {0: [
             Detection(0, 0, 100, 100, 95, 95, 105, 105, 0.9),

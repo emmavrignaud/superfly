@@ -477,6 +477,7 @@ class OCSort(object):
     def __init__(self, det_thresh, max_age=30, min_hits=3,
         iou_threshold=0.3, delta_t=3, asso_func="iou", inertia=0.2, use_byte=False,
         brownian_pos_noise=1.0, vial_rois=None, aspect_weight=0.0, behavioral_weight=0.0,
+        behavioral_weight_overlap=None,
         jump_factor=2.0, jump_iou_threshold=0.05, jump_inertia=0.05,
         expected_count=None, w_under=15.0, w_over=2.0,
         overlap_iou_scale=0.1, edge_fraction=0.1,
@@ -513,6 +514,10 @@ class OCSort(object):
         self.vial_rois = vial_rois  # {vial_id: (x0,y0,x1,y1)} or None
         self.aspect_weight = aspect_weight
         self.behavioral_weight = behavioral_weight
+        # When detections overlap, use a boosted weight so behavioral consistency
+        # dominates over IoU (which becomes unreliable during overlaps).
+        # Falls back to behavioral_weight if not set.
+        self.behavioral_weight_overlap = behavioral_weight_overlap if behavioral_weight_overlap is not None else behavioral_weight
         self.jump_factor = jump_factor
         self.jump_iou_threshold = jump_iou_threshold
         self.jump_inertia = jump_inertia
@@ -694,7 +699,7 @@ class OCSort(object):
             dets, trks, self.iou_threshold, velocities, k_observations, self.inertia, self.asso_func, self.aspect_weight,
             vial_mask=vial_mask,
             trk_profiles=trk_profiles, trk_last_centers=trk_last_centers,
-            behavioral_weight=self.behavioral_weight,
+            behavioral_weight=(self.behavioral_weight_overlap if overlap_det_mask.any() else self.behavioral_weight),
             link_trk_states=all_trk_states,
             overlap_det_mask=overlap_det_mask,
             overlap_iou_scale=self.overlap_iou_scale)
@@ -760,7 +765,7 @@ class OCSort(object):
                 vial_mask=jump_vial_mask,
                 trk_profiles=jump_profiles,
                 trk_last_centers=jump_last_centers,
-                behavioral_weight=self.behavioral_weight,
+                behavioral_weight=(self.behavioral_weight_overlap if (jump_overlap_mask is not None and jump_overlap_mask.any()) else self.behavioral_weight),
                 link_trk_states=jump_trk_states,
                 overlap_det_mask=jump_overlap_mask,
                 overlap_iou_scale=self.overlap_iou_scale,

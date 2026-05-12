@@ -27,9 +27,17 @@ tracker:
   brownian_pos_noise: 15             # Kalman Q[cx,cy] scale; ↑ tolerates saccades
   aspect_weight: 0.05               # bonus for matching boxes of similar aspect ratio; 0 = disabled, try 0.05–0.2
   behavioral_weight: 0.05           # bonus for speed-plausibility + scale-consistency; 0 = disabled, try 0.05–0.15
+  behavioral_weight_overlap: 0.30   # behavioural weight used only when detections overlap; None falls back to behavioral_weight
   jump_factor: 2.0                  # round-2 velocity scale + bbox inflation (how far/wide to search)
   jump_iou_threshold: 0.05          # looser IoU threshold for jump round
   jump_inertia: 0.05                # reduced OCM weight for jump round (direction less reliable after a jump)
+  inertia: 0.2                      # round-1 direction consistency weight (OCM); ↑ penalises detections not in tracker's heading direction
+  delta_t: 3                        # frames lookback to compute tracker velocity direction for OCM
+  overlap_iou_scale: 0.1            # IoU is multiplied by this when detections overlap; suppresses positional signal so behavioral bonus dominates
+  edge_fraction: 0.1                # detections within this fraction of vial wall excluded from overlap handling
+  expected_count: null              # total expected flies (e.g. 42); enables count-aware spawning when set; null = disabled
+  w_under: 15.0                     # spawning penalty per tracker below expected_count (heavy — missing a fly is bad)
+  w_over: 2.0                       # spawning penalty per tracker above expected_count (light — ghost tracks are tolerable)
 
 pipeline:
   # Cross-cutting parameters for the active tracking pipeline.
@@ -41,16 +49,16 @@ relink:
   # simultaneously had a low association score (below their own per-track median).
   min_length: 10                    # min observations for a tracker to be considered
   inconsistency_threshold: 0.4     # reserved for future use (currently unused)
-  swap_threshold: 0.2              # min total cost improvement to accept a swap
-  confidence_weight: 1.0           # how strongly the split-frame IoU penalises swapping; 0 = ignore
+  swap_threshold: 0.05             # min total cost improvement to accept a swap
+  confidence_weight: 0.0           # how strongly the split-frame IoU penalises swapping; 0 = ignore (high IoU at overlap is a false signal)
   behavioral_weights:
-    median_speed:          1.0
+    median_speed:          0.3     # weak signal for slow/old flies — down-weighted
     pause_fraction:        1.0
-    mean_turning_angle:    1.0
-    mean_angular_velocity: 1.0
+    mean_turning_angle:    2.0     # overlap often causes path deflection — up-weighted
+    mean_angular_velocity: 1.5
     mean_acceleration:     1.0
     n_large_displacements: 1.0
-    tortuosity:            1.0
+    tortuosity:            2.0     # overlap deflects trajectory — up-weighted
 
 preprocessing:
   # Per-pixel percentile background, divided out and rescaled to white.
