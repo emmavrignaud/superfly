@@ -299,7 +299,23 @@ def main():
         "track_count": int(df_ordered["ordered_id"].nunique()),
     })
 
-    # Metrics report
+    # HOTA scoring (no-op if no ground truth exists for this video).
+    # Run BEFORE the metrics report so the report can include the HOTA section
+    # from <output_dir>/hota.json. Never break the pipeline if scoring fails.
+    try:
+        from parameter_tuning.score_run import score_run
+        _hota = score_run(args.output_dir, print_results=False)
+        if _hota is not None:
+            _row = next((r for r in _hota["summary"] if r["video"] != "COMBINED_SEQ"),
+                        _hota["summary"][0])
+            print(f"  HOTA: {_row['HOTA']:.3f}  (DetA {_row['DetA']:.3f}, "
+                  f"AssA {_row['AssA']:.3f}, LocA {_row['LocA']:.3f})")
+        else:
+            print("  HOTA: no GT available for this video; skipped")
+    except Exception as e:
+        print(f"  HOTA scoring skipped: {e}")
+
+    # Metrics report (picks up hota.json automatically if score_run wrote one)
     run_diagnostics(
         tracker=tracker,
         df_wide=df_wide,

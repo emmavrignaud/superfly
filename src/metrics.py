@@ -1220,6 +1220,75 @@ _HTML_STYLE = """
 """
 
 
+def _hota_payload(output_dir) -> dict | None:
+    """Read <output_dir>/hota.json if present, else return None.
+
+    Decouples report rendering from the scorer: as long as score_run ran
+    before run_diagnostics, the report picks up the HOTA section
+    automatically.
+    """
+    hota_path = Path(output_dir) / "hota.json"
+    if not hota_path.exists():
+        return None
+    try:
+        return json.loads(hota_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"[metrics] failed to read hota.json: {exc}")
+        return None
+
+
+def _hota_section_html(hota: dict) -> str:
+    """Render the HOTA section as an HTML table. Caller has guaranteed hota is non-None."""
+    rows = hota.get("summary") or []
+    if not rows:
+        return ""
+    cells = []
+    for r in rows:
+        cells.append(
+            "<tr>"
+            f"<td>{_html_escape(str(r.get('video', '')))}</td>"
+            f"<td>{r.get('HOTA', float('nan')):.3f}</td>"
+            f"<td>{r.get('DetA', float('nan')):.3f}</td>"
+            f"<td>{r.get('AssA', float('nan')):.3f}</td>"
+            f"<td>{r.get('LocA', float('nan')):.3f}</td>"
+            "</tr>"
+        )
+    gt = _html_escape(str(hota.get("gt_csv", "")))
+    return (
+        '<h2>HOTA (ground-truth evaluation)</h2>\n'
+        f'<p style="margin:0 0 8px 0; font-size:12px; color:#666;">GT: <code>{gt}</code></p>\n'
+        '<table class="report-table" style="border-collapse:collapse; font-family:monospace;">'
+        '<thead><tr>'
+        '<th style="text-align:left; padding:4px 8px;">video</th>'
+        '<th style="text-align:right; padding:4px 8px;">HOTA</th>'
+        '<th style="text-align:right; padding:4px 8px;">DetA</th>'
+        '<th style="text-align:right; padding:4px 8px;">AssA</th>'
+        '<th style="text-align:right; padding:4px 8px;">LocA</th>'
+        '</tr></thead><tbody>'
+        + "".join(cells) +
+        '</tbody></table>\n'
+    )
+
+
+def _hota_section_md(hota: dict) -> str:
+    rows = hota.get("summary") or []
+    if not rows:
+        return ""
+    lines = ["## HOTA (ground-truth evaluation)\n",
+             f"> GT: `{hota.get('gt_csv', '')}`\n",
+             "| video | HOTA | DetA | AssA | LocA |",
+             "|---|---:|---:|---:|---:|"]
+    for r in rows:
+        lines.append(
+            f"| {r.get('video', '')} "
+            f"| {r.get('HOTA', float('nan')):.3f} "
+            f"| {r.get('DetA', float('nan')):.3f} "
+            f"| {r.get('AssA', float('nan')):.3f} "
+            f"| {r.get('LocA', float('nan')):.3f} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
                  relink_text=""):
     """
@@ -1228,10 +1297,14 @@ def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
       metrics_report.md            — markdown with PNG refs
       metrics_xy_trajectories.png  — static XY plot
       metrics_pipeline.png         — static pipeline plot
+
+    If <output_dir>/hota.json exists (written by parameter_tuning.score_run),
+    a HOTA section is appended to both the HTML and MD report. Absent → omitted.
     """
     os.makedirs(output_dir, exist_ok=True)
     out_path = Path(output_dir)
     hero_video_path = _ensure_hero_video(out_path)
+    hota = _hota_payload(output_dir)
 
     xy_png       = os.path.join(output_dir, "metrics_xy_trajectories.png")
     pipeline_png = os.path.join(output_dir, "metrics_pipeline.png")
@@ -1259,6 +1332,8 @@ def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
 {_landing_page_hero_html(hero_video_path)}
 
 {config_block}
+
+{_hota_section_html(hota) if hota is not None else ''}
 
 <table class="report-two-col" role="presentation">
 <tr>
@@ -1296,6 +1371,9 @@ def _save_report(output_dir, summary_text, config, fig_xy, fig_pipeline,
         md.append("```json")
         md.append(json.dumps(config, indent=2, default=str))
         md.append("```\n")
+
+    if hota is not None:
+        md.append(_hota_section_md(hota))
 
     md.append("## Tracker Summary\n")
     md.append("```")

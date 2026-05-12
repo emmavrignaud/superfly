@@ -22,7 +22,7 @@ creds_config.yaml
 
 # Generated outputs
 outputs/
-data/annotations/*
+#data/annotations/* # vestige (someone's got fancy English here)
 data/tracked_videos/*
 media/plotly/*
 media/html/*
@@ -34,3 +34,4 @@ roboflow_export*
 
 # Claude / agent scratch
 .claude/
+data/manual_labelling/
