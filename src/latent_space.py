@@ -7,6 +7,7 @@ Latent-space analysis helpers for ordered_tracks-based genotype studies.
 from __future__ import annotations
 
 import json
+import sys as _sys
 from pathlib import Path
 
 import numpy as np
@@ -16,42 +17,41 @@ import plotly.graph_objects as go
 from scipy.spatial.distance import pdist, squareform
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.manifold import TSNE
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.preprocessing import StandardScaler
-import yaml
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_REPO_ROOT))
+
+from src.classification import genotype_category_order
 from src.features import extract_behavioral_features, aggregate_per_fly_features
+from src.plot_colors import genotype_color_map_for_dataframe
 from src.representation_learning import fit_autoencoder_latent
+from utils import load_config as _load_config  # noqa: E402
 
 
-_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
-
-
-def _latent_cfg() -> dict:
-    if not _CONFIG_PATH.exists():
-        return {}
-    with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return (yaml.safe_load(f) or {}).get("latent_space", {})
+_CFG = _load_config(_REPO_ROOT / "config.yaml").latent_space
 
 
 def maybe_apply_autoencoder(X: np.ndarray, name: str) -> tuple[np.ndarray, dict]:
-    cfg = _latent_cfg()
-    method = str(cfg.get("representation_method", "baseline")).strip().lower()
+    method = str(_CFG.representation_method).strip().lower()
     if method != "autoencoder":
         return X, {"used_autoencoder": False, "representation_method": method}
-    ae_cfg = cfg.get("autoencoder", {}) or {}
+    ae = _CFG.autoencoder
     Z, info = fit_autoencoder_latent(
         X=X,
-        latent_dim=int(ae_cfg.get("latent_dim", 64)),
-        hidden_dims=tuple(ae_cfg.get("hidden_dims", [512, 256])),
-        epochs=int(ae_cfg.get("epochs", 300)),
-        batch_size=int(ae_cfg.get("batch_size", 64)),
-        learning_rate=float(ae_cfg.get("learning_rate", 1e-3)),
-        weight_decay=float(ae_cfg.get("weight_decay", 1e-5)),
-        val_fraction=float(ae_cfg.get("val_fraction", 0.2)),
-        patience=int(ae_cfg.get("patience", 30)),
-        seed=int(cfg.get("seed", 42)),
-        verbose=bool(ae_cfg.get("verbose", True)),
+        latent_dim=int(ae.latent_dim),
+        hidden_dims=tuple(ae.hidden_dims),
+        epochs=int(ae.epochs),
+        batch_size=int(ae.batch_size),
+        learning_rate=float(ae.learning_rate),
+        weight_decay=float(ae.weight_decay),
+        val_fraction=float(ae.val_fraction),
+        patience=int(ae.patience),
+        seed=int(_CFG.seed),
+        verbose=bool(ae.verbose),
     )
     out = {"representation_method": method}
     out.update(info)
@@ -232,43 +232,154 @@ def build_hist_kinematics_matrix(
 
 
 def maybe_apply_pca(X: np.ndarray) -> tuple[np.ndarray, dict]:
-    cfg = _latent_cfg()
-    use_pca = bool(cfg.get("use_pca", True))
-    target = float(cfg.get("pca_explained_variance", 0.95))
-    if not use_pca or X.size == 0:
+    """Optional pre-embedding PCA whitening on the high-dim feature matrix.
+
+    Toggle and target variance live under ``latent_space.embedding.{use_pca,
+    pca_explained_variance}`` in config.yaml. The returned info dict always
+    carries ``explained_variance`` (1.0 when PCA is off, since X passes
+    through unchanged) so downstream reports can persist the number.
+    """
+    emb = _CFG.embedding
+    if not bool(emb.use_pca) or X.size == 0:
         return X, {"use_pca": False, "n_components": X.shape[1] if X.ndim == 2 else 0, "explained_variance": 1.0}
-    pca = PCA(n_components=target, svd_solver="full", random_state=42)
+    pca = PCA(n_components=float(emb.pca_explained_variance), svd_solver="full", random_state=int(_CFG.seed))
     Xt = pca.fit_transform(X)
     return Xt, {
         "use_pca": True,
+        "target_variance": float(emb.pca_explained_variance),
         "n_components": int(pca.n_components_),
         "explained_variance": float(np.sum(pca.explained_variance_ratio_)),
     }
 
 
-def umap_embed(X: np.ndarray, n_neighbors: int = 5, min_dist: float = 0.3) -> np.ndarray:
+def _embed_umap(X: np.ndarray, seed: int) -> tuple[np.ndarray, dict]:
+    """UMAP backend. Falls back to PCA if umap-learn is not installed."""
+    u = _CFG.embedding.umap
+    n_components = int(u.n_components)
     try:
-        import umap
-    except Exception as exc:
-        # Keep notebook execution unblocked when umap-learn is missing.
-        print("[latent_space] umap-learn not found; falling back to PCA(2) embedding.")
-        if X.shape[1] < 2:
-            return np.pad(X, ((0, 0), (0, max(0, 2 - X.shape[1]))), mode="constant")[:, :2]
-        return PCA(n_components=2, random_state=42).fit_transform(X)
+        import umap as _umap
+    except Exception:
+        print("[latent_space] umap-learn not found; falling back to PCA embedding.")
+        return _embed_pca(X, seed, n_components_override=n_components, fallback_reason="umap_unavailable")
 
-    cfg = _latent_cfg()
-    n_components = int(cfg.get("umap_n_components", 2))
-    model = umap.UMAP(
-        n_neighbors=n_neighbors,
-        min_dist=min_dist,
-        metric="euclidean",
+    model = _umap.UMAP(
+        n_neighbors=int(u.n_neighbors),
+        min_dist=float(u.min_dist),
+        metric=str(u.metric),
         n_components=n_components,
-        random_state=42,
+        random_state=seed,
     )
-    return model.fit_transform(X)
+    Y = model.fit_transform(X)
+    return np.asarray(Y), {
+        "method": "umap",
+        "n_components": n_components,
+        "n_neighbors": int(u.n_neighbors),
+        "min_dist": float(u.min_dist),
+        "metric": str(u.metric),
+    }
 
 
-def make_umap_figure(emb: np.ndarray, meta: pd.DataFrame, title: str) -> go.Figure:
+def _embed_tsne(X: np.ndarray, seed: int) -> tuple[np.ndarray, dict]:
+    """t-SNE backend. Clamps perplexity to a legal value for tiny N."""
+    t = _CFG.embedding.tsne
+    n_components = int(t.n_components)
+
+    N = X.shape[0]
+    requested = float(t.perplexity)
+    perplexity = requested
+    if N <= 1:
+        return X[:, :n_components] if X.shape[1] >= n_components else X, {
+            "method": "tsne",
+            "n_components": n_components,
+            "skipped": "n_samples<=1",
+        }
+    if perplexity >= N:
+        perplexity = max(2.0, float(N - 1))
+        print(f"[latent_space] tsne.perplexity {requested} >= n_samples={N}; clamping to {perplexity}.")
+
+    lr_raw = t.learning_rate
+    if isinstance(lr_raw, str) and lr_raw.strip().lower() == "auto":
+        learning_rate = "auto"
+    else:
+        learning_rate = float(lr_raw)
+
+    model = TSNE(
+        n_components=n_components,
+        perplexity=perplexity,
+        learning_rate=learning_rate,
+        init=str(t.init),
+        metric=str(t.metric),
+        random_state=seed,
+    )
+    Y = model.fit_transform(X)
+    return np.asarray(Y), {
+        "method": "tsne",
+        "n_components": n_components,
+        "perplexity": perplexity,
+        "learning_rate": str(learning_rate),
+        "init": str(t.init),
+        "metric": str(t.metric),
+    }
+
+
+def _embed_pca(
+    X: np.ndarray,
+    seed: int,
+    n_components_override: int | None = None,
+    fallback_reason: str | None = None,
+) -> tuple[np.ndarray, dict]:
+    """PCA backend - parameter-free baseline, also used as UMAP's fallback."""
+    n_components = int(n_components_override if n_components_override is not None else _CFG.embedding.pca.n_components)
+    if X.size == 0:
+        return X, {"method": "pca", "n_components": n_components, "skipped": "empty"}
+    # PCA needs n_components <= min(n_samples, n_features). Cap it.
+    nc = min(n_components, X.shape[0], X.shape[1])
+    model = PCA(n_components=nc, random_state=seed)
+    Y = model.fit_transform(X)
+    info = {
+        "method": "pca",
+        "n_components": int(nc),
+        "explained_variance": float(np.sum(model.explained_variance_ratio_)),
+    }
+    if fallback_reason is not None:
+        info["fallback_from"] = fallback_reason
+    return np.asarray(Y), info
+
+
+def embed(X: np.ndarray) -> tuple[np.ndarray, dict]:
+    """Dispatch to the embedding method named in config.yaml.
+
+    Returns (Y, info). Y has shape (n_samples, n_components) and info is a
+    dict that always contains "method" and "n_components" plus
+    method-specific tuning values.
+
+    This is visualisation only; classifiers (LDA / Logistic / SVC) operate on
+    the pre-embedding feature matrix, not on Y.
+    """
+    method = str(_CFG.embedding.method).strip().lower()
+    seed = int(_CFG.seed)
+    if method == "umap":
+        return _embed_umap(X, seed)
+    if method == "tsne":
+        return _embed_tsne(X, seed)
+    if method == "pca":
+        return _embed_pca(X, seed)
+    raise ValueError(
+        f"latent_space.embedding.method must be 'umap', 'tsne', or 'pca'; got {method!r}"
+    )
+
+
+def make_embedding_figure(
+    emb: np.ndarray,
+    meta: pd.DataFrame,
+    title: str,
+    method: str | None = None,
+) -> go.Figure:
+    """3D scatter of the low-dim embedding, coloured by genotype.
+
+    If the embedding has fewer than 3 components it is zero-padded so the
+    scatter still renders (the padded axes carry no information).
+    """
     if emb.shape[1] < 3:
         emb = np.pad(emb, ((0, 0), (0, 3 - emb.shape[1])), mode="constant")
     d = pd.DataFrame(
@@ -281,6 +392,13 @@ def make_umap_figure(emb: np.ndarray, meta: pd.DataFrame, title: str) -> go.Figu
             "ordered_id": meta["ordered_id"].values,
         }
     )
+    full_title = f"{title} ({method})" if method else title
+    pref = genotype_category_order(meta)
+    color_discrete_map = genotype_color_map_for_dataframe(d, pref)
+    cat_g = [g for g in pref if g in set(d["genotype"].astype(str))]
+    for g in sorted(set(d["genotype"].astype(str)) - set(cat_g)):
+        cat_g.append(g)
+
     fig = px.scatter_3d(
         d,
         x="component_1",
@@ -288,15 +406,17 @@ def make_umap_figure(emb: np.ndarray, meta: pd.DataFrame, title: str) -> go.Figu
         z="component_3",
         color="genotype",
         hover_data=["ordered_id", "run"],
-        title=title,
+        category_orders={"genotype": cat_g},
+        color_discrete_map=color_discrete_map,
+        title=full_title,
     )
     fig.update_traces(marker=dict(size=4, opacity=0.85))
     fig.update_layout(
         height=620,
         scene=dict(
-            xaxis_title="Embedding component 1",
-            yaxis_title="Embedding component 2",
-            zaxis_title="Embedding component 3",
+            xaxis_title=f"{method or 'Embedding'} component 1",
+            yaxis_title=f"{method or 'Embedding'} component 2",
+            zaxis_title=f"{method or 'Embedding'} component 3",
         ),
     )
     return fig
@@ -416,21 +536,23 @@ def run_latent_space_analysis(df_raw: pd.DataFrame) -> dict:
     X1, m1, T = build_xy_plus_features_matrix(df_feat, df_fly)
     X1_eff, pca1 = maybe_apply_pca(X1)
     X1_repr, repr1 = maybe_apply_autoencoder(X1_eff, "analysis1")
-    emb1 = umap_embed(X1_repr)
-    fig1 = make_umap_figure(
+    emb1, embed1_info = embed(X1_repr)
+    fig1 = make_embedding_figure(
         emb1,
         m1,
         "Fly trajectory and kinematic embedding",
+        method=embed1_info.get("method"),
     )
 
     X2, m2, edges = build_hist_kinematics_matrix(df_feat)
     X2_eff, pca2 = maybe_apply_pca(X2)
     X2_repr, repr2 = maybe_apply_autoencoder(X2_eff, "analysis2")
-    emb2 = umap_embed(X2_repr)
-    fig2 = make_umap_figure(
+    emb2, embed2_info = embed(X2_repr)
+    fig2 = make_embedding_figure(
         emb2,
         m2,
         "Fly kinematic distribution embedding",
+        method=embed2_info.get("method"),
     )
 
     perma1 = {
@@ -463,7 +585,9 @@ def run_latent_space_analysis(df_raw: pd.DataFrame) -> dict:
         "analysis1": {
             "X": X1_repr,
             "meta": m1,
-            "umap_fig": fig1,
+            "embedding_fig": fig1,
+            "umap_fig": fig1,                # deprecated alias; prefer embedding_fig
+            "embedding": embed1_info,
             "permanova": perma1,
             "pca": pca1,
             "representation": repr1,
@@ -472,7 +596,9 @@ def run_latent_space_analysis(df_raw: pd.DataFrame) -> dict:
         "analysis2": {
             "X": X2_repr,
             "meta": m2,
-            "umap_fig": fig2,
+            "embedding_fig": fig2,
+            "umap_fig": fig2,                # deprecated alias; prefer embedding_fig
+            "embedding": embed2_info,
             "permanova": perma2,
             "pca": pca2,
             "representation": repr2,

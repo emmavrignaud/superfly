@@ -14,6 +14,25 @@ video:
   # Properties of the input video. Used by tracking + diagnostics.
   fallback_fps: 30   # used only when cv2.CAP_PROP_FPS is missing/unreadable
 
+calibration:
+  # World-space calibration for behavioural features (consumed by src/features.py).
+  # Measure px_per_cm once per camera setup, e.g. via vial ROI width and a known
+  # vial inner diameter: px_per_cm = vial_width_px / vial_diameter_cm.
+  px_per_cm: 29.0
+  # Output units for kinematic features. Any combination is valid:
+  #   length_unit: cm  | px
+  #   time_unit:   s   | frame
+  # Defaults to cm + s: velocity in cm/s, acceleration in cm/s^2, area in cm^2.
+  length_unit: cm
+  time_unit:   s
+
+features:
+  # When true, kinematics add velocity_x / velocity_y (signed), acceleration
+  # from those components, axis-wise cumulative path length, and per-fly
+  # aggregates for x, y, and magnitude families (velocity, acceleration,
+  # distance). Scalar features (pause, angles, tortuosity, area) stay single-column.
+  kinematic_three_families: true
+
 tracker:
   # RF-DETR detections + OC-SORT association into tracklets.
   detection_confidence_rfdetr: 0.4   # RF-DETR output threshold
@@ -38,6 +57,18 @@ tracker:
   expected_count: null              # total expected flies (e.g. 42); enables count-aware spawning when set; null = disabled
   w_under: 15.0                     # spawning penalty per tracker below expected_count (heavy — missing a fly is bad)
   w_over: 2.0                       # spawning penalty per tracker above expected_count (light — ghost tracks are tolerable)
+
+watershed:
+  # Splits RF-DETR bboxes that look like they contain multiple touching flies.
+  # A bbox is "suspicious" when area > median + k * MAD (MAD = robust spread).
+  # Example: median=400 px², MAD=60, k=3 -> flag anything over 580 px².
+  enabled: true
+  area_outlier_k: 3.0            # how far above typical before we try to split
+  max_flies_per_blob: 3          # cap on pieces produced per split
+  min_distance_factor: 0.5       # peak separation = factor * sqrt(median_area); 0.5 -> 10 px for a 400-px² fly
+  min_region_area_fraction: 0.2  # reject split if any piece is under this fraction of median area
+  debug: false                   # writes before/after PNGs to <run_dir>/watershed_debug/. Disk only, never inline
+  debug_max_images: 50           # keeps all successes; fills remainder with rejections
 
 pipeline:
   # Cross-cutting parameters for the active tracking pipeline.
@@ -89,12 +120,33 @@ roi:
   snap_threshold_pct: 0.005   # snap zone as fraction of last box height
   snap_enabled: true          # press 'S' in GUI to toggle per-vial
 latent_space:
-  # Latent-space preprocessing and dimensionality controls.
-  use_pca: true
-  pca_explained_variance: 0.95
+  # Latent-space preprocessing, representation, and embedding controls.
   representation_method: baseline   # baseline | autoencoder
-  umap_n_components: 3
   seed: 42
+
+  # Low-dim embedding for the 3D scatter only (NOT used by classifiers).
+  # Switch method to compare layouts. Each backend has its own block below.
+  embedding:
+    method: umap                # umap | tsne | pca
+    # Pre-embedding PCA whitening, applied to the feature matrix before umap/tsne.
+    # Keeps it off by default since the feature count is small; turn on if
+    # you ever push features above ~50 or want to denoise the input.
+    use_pca: false
+    pca_explained_variance: 0.95
+    umap:
+      n_neighbors: 5           # local neighbourhood size; lower = tighter clusters
+      min_dist: 0.1             # min separation in layout; lower = denser blobs
+      metric: euclidean
+      n_components: 3
+    tsne:
+      perplexity: 5            # rule of thumb: <= N/3 for small N
+      learning_rate: auto       # "auto" -> max(N/12, 50); else a float
+      init: pca                 # pca = deterministic + better global structure
+      metric: euclidean
+      n_components: 3
+    pca:
+      n_components: 3           # parameter-free sanity baseline
+
   autoencoder:
     latent_dim: 64
     hidden_dims: [512, 256]
@@ -105,3 +157,51 @@ latent_space:
     val_fraction: 0.2
     patience: 30
     verbose: true
+
+classification:
+  # Genotype classifier. One method is active everywhere (this file, CLI, notebook,
+  # and the pooled / per-trial HTML report). Switch via ``method`` below.
+  # The active method's sub-block supplies its hyperparameters; other blocks
+  # are ignored. Cross-validation folds are set per-call (cv argument).
+  method: svc            # svc | lda | logistic
+  svc:
+    kernel: rbf          # rbf | linear | poly | sigmoid
+    C: 1.0               # inverse regularisation strength
+    gamma: scale         # "scale" | "auto" | float
+    # Optional grid search over C and gamma using the same CV scheme as the
+    # outer evaluation (stratified or group). When enabled, ``C`` / ``gamma``
+    # above are ignored and the best combo is logged to stdout + report.
+    grid_search:
+      enabled: true
+      C:     [0.01,0.1, 1.0, 10.0, 100.0]
+      gamma: [scale, auto, 0.01, 0.1, 1.0, 10.0]
+  lda:
+    solver: svd          # svd | lsqr | eigen
+  logistic:
+    C: 1.0
+    max_iter: 1000
+    solver: lbfgs        # lbfgs | liblinear | saga
+
+  # Mirror/rotate each fly's path; each transform = one extra training example per fly.
+  augmentation:
+    enabled: true
+    # identity = original; flip_x/flip_y/flip_xy = mirror left-right/up-down/180; rot<deg> = rotate (e.g. rot15, rot-30).
+    transforms: [identity, flip_x, flip_y, flip_xy]
+
+  # Cut each fly's path into 1/mask_fraction blocks; each copy drops one block.
+  masking:
+    enabled: true
+    mask_fraction: 0.10    # 0.10 -> 10 copies per fly (each missing a different 10% chunk)
+
+  # Add squares and pairwise products of features as extra columns (more flexible classifier, slower).
+  polynomial:
+    enabled: true
+    degree: [2,3,4,5,6,7]                # 1 = off, 2 = +squares & pairs, 3 = +triples; list -> grid-search
+    interaction_only: false  # true = skip squares/cubes, keep cross-products only
+    include_bias: false      # adds a constant "1" column; almost never useful
+
+  # Exploratory genotype / WT-vs-mutant boxplots only. Caller df is never modified.
+  boxplot_trim:
+    enabled: true
+    n_std: 3.0            # keep values in [mean - n_std*σ, mean + n_std*σ] on a local copy
+    ddof: 1               # 1 = sample σ; 0 = population σ
