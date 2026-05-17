@@ -27,14 +27,19 @@ All parameters have defaults from config.yaml.  Use --help for full list.
 import argparse
 import json
 import os
-import re
 import shutil
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from utils import save_run_params, resolve_overlay_video, load_config
+from utils import (
+    load_config,
+    make_run_output_dir,
+    resolve_overlay_video,
+    save_config_snapshot,
+    save_run_params,
+)
 
 ROI_LIBRARY_PATH = Path(__file__).resolve().parents[1] / "roi_library.json"
 
@@ -50,20 +55,6 @@ def _save_roi_library(library: dict) -> None:
     ROI_LIBRARY_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(ROI_LIBRARY_PATH, "w") as f:
         json.dump(library, f, indent=2)
-
-
-def _auto_output_dir(video_path: str) -> str:
-    """Generate outputs/run_N_<day>DPE_n<NNN> from the video path."""
-    m = re.search(r"(\d+)\s+DPE[/\\](\d+)", video_path)
-    if m:
-        short = f"{m.group(1)}DPE_n{m.group(2).zfill(3)}"
-    else:
-        short = Path(video_path).stem[:20]
-    base_tpl = str(Path("outputs") / f"run_{{N}}_{short}")
-    n = 0
-    while Path(base_tpl.format(N=n)).exists():
-        n += 1
-    return base_tpl.format(N=n)
 
 
 def build_parser(cfg) -> argparse.ArgumentParser:
@@ -106,7 +97,7 @@ def main():
     use_saved_roi = cfg.roi.use_saved_roi
 
     if args.output_dir is None:
-        args.output_dir = _auto_output_dir(args.video)
+        args.output_dir = make_run_output_dir(args.video)
         print(f"Auto output-dir: {args.output_dir}")
 
     import cv2
@@ -134,23 +125,15 @@ def main():
     _library   = _load_roi_library()
     video_context = parse_video_context(args.video)
 
+    save_config_snapshot(args.output_dir, config_path)
     cap = cv2.VideoCapture(video_path)
     fps = float(cap.get(cv2.CAP_PROP_FPS) or cfg.video.fallback_fps)
-    save_run_params(args.output_dir, "config", {
-        "video": video_path,
-        "video_fps": fps,
-        "video_width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-        "video_height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-        "video_frames": int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
-        "tracker": {
-            "detection_confidence_rfdetr": cfg.tracker.detection_confidence_rfdetr,
-            "confidence": args.confidence,
-            "lost_track_buffer": args.lost_track_buffer,
-            "min_matching_threshold": args.min_matching_threshold,
-            "min_consecutive_frames": args.min_consecutive_frames,
-            "asso_func": args.asso_func,
-            "brownian_pos_noise": args.brownian_pos_noise,
-        },
+    save_run_params(args.output_dir, "video", {
+        "path": video_path,
+        "fps": fps,
+        "width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+        "height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+        "frames": int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
     })
     cap.release()
 
@@ -250,6 +233,7 @@ def main():
         brownian_pos_noise=args.brownian_pos_noise,
         det_log_csv=det_log_csv,
         vial_rois=vials,
+        watershed_cfg=dict(cfg.watershed) if hasattr(cfg, "watershed") else None,
     )
     print(f"  shape: {df_wide.shape}")
     save_run_params(args.output_dir, "tracker_output", {

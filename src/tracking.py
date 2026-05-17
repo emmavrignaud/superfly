@@ -8,6 +8,11 @@ If a detection cache CSV (det_log_csv) already exists on disk, RF-DETR is
 skipped entirely and detections are loaded from the cache — useful for
 re-running the tracker with different association parameters without paying
 the API cost again.
+
+Optional watershed splitting (watershed_cfg) runs after detection collection,
+before the tracker sees anything: oversized bboxes that likely contain >1
+fly are split via marker-controlled watershed. Post-split detections are
+what gets written to the cache.
 """
 
 import logging
@@ -57,6 +62,7 @@ def export_tracks_xy_tuple_csv_one_config(
     relink_swap_threshold: float = 0.2,
     relink_confidence_weight: float = 1.0,
     relinked_csv: str | None = None,
+    watershed_cfg: dict | None = None,
 ) -> tuple[pd.DataFrame, object, "pd.DataFrame | None"]:
     """
     Run RF-DETR + OC-SORT for one configuration and write a wide CSV where:
@@ -86,18 +92,19 @@ def export_tracks_xy_tuple_csv_one_config(
     if fps_assumed is None:
         fps_assumed = float(fps) if fps and fps > 0 else 30.0
 
-    # ── Detection source ─────────────────────────────────────────────────────
+    # ── Phase 1: Detection collection (cache or RF-DETR) ─────────────────────
     use_cache = det_log_csv is not None and os.path.exists(det_log_csv)
+    det_by_frame: dict[int, np.ndarray] = {}
 
     if use_cache:
         print(f"Detection cache found — skipping RF-DETR: {det_log_csv}")
         det_cache = pd.read_csv(det_log_csv)
-        # group by frame for fast per-frame lookup
         det_by_frame = {
-            frame_idx: grp[["x1", "y1", "x2", "y2", "conf"]].values
+            int(frame_idx): grp[["x1", "y1", "x2", "y2", "conf"]].values.astype(np.float32)
             for frame_idx, grp in det_cache.groupby("frame")
         }
-        n_frames = int(det_cache["frame"].max()) + 1
+        n_frames = int(det_cache["frame"].max()) + 1 if len(det_cache) else 0
+        cap.release()
     else:
         from inference_sdk import InferenceHTTPClient
         from inference_sdk.http.entities import InferenceConfiguration
@@ -106,10 +113,55 @@ def export_tracks_xy_tuple_csv_one_config(
             api_key=api_key,
         )
         client.configure(InferenceConfiguration(confidence_threshold=detection_confidence_rfdetr))
-        det_by_frame = None
-        n_frames = None
 
-    # ── Tracker ───────────────────────────────────────────────────────────────
+        frame_idx = 0
+        while True:
+            if max_frames is not None and frame_idx >= max_frames:
+                break
+            ok, frame = cap.read()
+            if not ok:
+                break
+            result = client.infer(frame, model_id=model_id)
+            dets = sv.Detections.from_inference(result)
+            if len(dets) > 0:
+                det_by_frame[frame_idx] = np.hstack(
+                    [dets.xyxy, dets.confidence[:, None]]
+                ).astype(np.float32)
+            frame_idx += 1
+        n_frames = frame_idx
+        cap.release()
+
+    # ── Phase 2: Watershed split (optional) ─────────────────────────────────
+    if watershed_cfg and watershed_cfg.get("enabled", False):
+        from .watershed_split import apply_watershed_splits
+        debug_dir = None
+        if watershed_cfg.get("debug", False) and det_log_csv is not None:
+            debug_dir = os.path.join(os.path.dirname(det_log_csv) or ".", "watershed_debug")
+        det_by_frame = apply_watershed_splits(
+            det_by_frame=det_by_frame,
+            video_path=video_path,
+            cfg=watershed_cfg,
+            debug_dir=debug_dir,
+        )
+
+    # Write det_log_csv when we produced fresh detections (cache miss) or
+    # when watershed mutated them. Skip when cache hit and watershed off,
+    # so a re-run with the same dets doesn't churn the file.
+    watershed_on = bool(watershed_cfg and watershed_cfg.get("enabled", False))
+    if det_log_csv is not None and (not use_cache or watershed_on):
+        rows = []
+        for f in sorted(det_by_frame.keys()):
+            for x1, y1, x2, y2, conf in det_by_frame[f]:
+                rows.append({"frame": int(f),
+                             "x1": float(x1), "y1": float(y1),
+                             "x2": float(x2), "y2": float(y2),
+                             "conf": float(conf)})
+        pd.DataFrame(rows, columns=["frame", "x1", "y1", "x2", "y2", "conf"]).to_csv(
+            det_log_csv, index=False
+        )
+        print(f"Saved detection cache: {det_log_csv}  ({len(rows)} detections)")
+
+    # ── Phase 3: Tracker ─────────────────────────────────────────────────────
     tracker = OCSort(
         det_thresh=confidence,
         max_age=lost_track_buffer,
@@ -142,36 +194,11 @@ def export_tracks_xy_tuple_csv_one_config(
 
     rows = []
     all_track_ids = set()
-    det_log_rows = []
-    frame_idx = 0
 
-    while True:
+    for frame_idx in range(n_frames):
         if max_frames is not None and frame_idx >= max_frames:
             break
-
-        if use_cache:
-            if frame_idx >= n_frames:
-                break
-            det_array = det_by_frame.get(frame_idx, np.empty((0, 5)))
-        else:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            result = client.infer(frame, model_id=model_id)
-            dets = sv.Detections.from_inference(result)
-            if len(dets) > 0:
-                det_array = np.hstack([dets.xyxy, dets.confidence[:, None]])
-                for bbox, conf in zip(dets.xyxy.tolist(), dets.confidence.tolist()):
-                    det_log_rows.append({
-                        "frame": frame_idx,
-                        "x1": bbox[0], "y1": bbox[1],
-                        "x2": bbox[2], "y2": bbox[3],
-                        "conf": conf,
-                    })
-            else:
-                det_array = np.empty((0, 5))
-
-        frame_row = {"frame": frame_idx}
+        det_array = det_by_frame.get(frame_idx, np.empty((0, 5), dtype=np.float32))
 
         # Filter detections to vials only — discard anything whose centre
         # falls outside every vial ROI so spurious out-of-vial detections
@@ -184,9 +211,9 @@ def export_tracks_xy_tuple_csv_one_config(
                 in_vial |= (cx >= x0) & (cx <= x1) & (cy >= y0) & (cy <= y1)
             det_array = det_array[in_vial]
 
+        frame_row = {"frame": frame_idx}
         if len(det_array) > 0:
             tracks = tracker.update(det_array, [img_h, img_w], [img_h, img_w])
-
             if tracks is not None and len(tracks) > 0:
                 if tracks.ndim == 1:
                     tracks = tracks[None, :]
@@ -201,19 +228,12 @@ def export_tracks_xy_tuple_csv_one_config(
             tracker.update(np.empty((0, 5)), [img_h, img_w], [img_h, img_w])
 
         rows.append(frame_row)
-        frame_idx += 1
-
-    cap.release()
 
     df = pd.DataFrame(rows)
     id_cols = [f"id{tid}" for tid in sorted(all_track_ids)]
     df = df.reindex(columns=["frame"] + id_cols)
     df.to_csv(output_csv, index=False, na_rep="")
     print(f"Saved: {output_csv}  (frames={len(df)}, tracks={len(id_cols)})")
-
-    if not use_cache and det_log_csv is not None:
-        pd.DataFrame(det_log_rows).to_csv(det_log_csv, index=False)
-        print(f"Saved detection cache: {det_log_csv}  ({len(det_log_rows)} detections)")
 
     # ── Second-round re-linking ───────────────────────────────────────────────
     swaps = tracker.relink()
@@ -223,18 +243,15 @@ def export_tracks_xy_tuple_csv_one_config(
         print("Relink: no swaps accepted.")
 
     if relinked_csv is not None:
-        # Build long-format relinked CSV applying the swaps to observation_log.
-        # For each tracker, walk its observation_log. If a swap involves this
-        # tracker, detections from swap_frame onward belong to the partner's ID.
-        id_map: dict[int, list] = {}  # 1-based id → list of (frame, x, y, orig_id)
-        swap_lookup: dict[int, tuple[int, int]] = {}  # id_a → (id_b, swap_frame)
+        id_map: dict[int, list] = {}
+        swap_lookup: dict[int, tuple[int, int]] = {}
         for id_a, id_b, swap_frame in swaps:
             swap_lookup[id_a] = (id_b, swap_frame)
             swap_lookup[id_b] = (id_a, swap_frame)
 
         for trk in tracker.trackers:
             obs = getattr(trk, "observation_log", [])
-            orig_id = trk.id + 1  # 1-based
+            orig_id = trk.id + 1
             swap_info = swap_lookup.get(orig_id)
             for frame_i, bbox, *_ in sorted(obs, key=lambda t: t[0]):
                 cx = float((bbox[0] + bbox[2]) / 2.0)

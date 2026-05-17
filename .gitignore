@@ -35,3 +35,4 @@ roboflow_export*
 # Claude / agent scratch
 .claude/
 data/manual_labelling/
+data/raw/

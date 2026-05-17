@@ -67,7 +67,7 @@ watershed:
   max_flies_per_blob: 3          # cap on pieces produced per split
   min_distance_factor: 0.5       # peak separation = factor * sqrt(median_area); 0.5 -> 10 px for a 400-px² fly
   min_region_area_fraction: 0.2  # reject split if any piece is under this fraction of median area
-  debug: false                   # writes before/after PNGs to <run_dir>/watershed_debug/. Disk only, never inline
+  debug: true                   # writes before/after PNGs to <run_dir>/watershed_debug/. Disk only, never inline
   debug_max_images: 50           # keeps all successes; fills remainder with rejections
 
 pipeline:

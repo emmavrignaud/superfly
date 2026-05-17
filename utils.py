@@ -105,6 +105,50 @@ def resolve_overlay_video(
     return None
 
 
+def make_run_output_dir(
+    raw_video: str | Path,
+    outputs_root: str | Path = "outputs",
+) -> str:
+    """Auto-incremented run directory: outputs/run_N_<DPE>DPE_n<NNN>.
+
+    Suffix is derived from the "<N> DPE/<NNN>" pattern in the video path
+    (e.g. "13 DPE/002" -> "13DPE_n002"). Falls back to the video stem
+    (truncated to 20 chars) when the pattern is absent. The numeric N is one
+    more than the largest existing run_* directory under outputs_root.
+    """
+    import re
+    raw_video = str(raw_video)
+    outputs_root = Path(outputs_root)
+    outputs_root.mkdir(parents=True, exist_ok=True)
+
+    m = re.search(r"(\d+)\s+DPE[/\\](\d+)", raw_video)
+    suffix = f"{m.group(1)}DPE_n{m.group(2).zfill(3)}" if m else Path(raw_video).stem[:20]
+
+    existing = [d for d in outputs_root.iterdir() if d.is_dir() and d.name.startswith("run_")]
+    next_n = max(
+        (int(d.name.split("_")[1]) for d in existing if d.name.split("_")[1].isdigit()),
+        default=0,
+    ) + 1
+    out = outputs_root / f"run_{next_n}_{suffix}"
+    out.mkdir(parents=True, exist_ok=True)
+    return str(out)
+
+
+def save_config_snapshot(
+    out_dir: str | Path,
+    config_path: str | Path = "config.yaml",
+) -> None:
+    """Copy the active config.yaml verbatim into the run directory.
+
+    Pairs with save_run_params: per-stage outputs go to run_params.json,
+    the full config snapshot goes to config.yaml beside it.
+    """
+    src = Path(config_path)
+    dst = Path(out_dir) / "config.yaml"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+
+
 def save_run_params(out_dir: str, stage: str, params: dict) -> None:
     """
     Incrementally merge `params` under `stage` into outputs/run_N/run_params.json.

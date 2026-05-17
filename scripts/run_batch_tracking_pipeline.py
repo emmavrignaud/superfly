@@ -49,7 +49,12 @@ matplotlib.use("Agg")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from utils import load_config  # noqa: E402
+from utils import (  # noqa: E402
+    load_config,
+    make_run_output_dir,
+    save_config_snapshot,
+    save_run_params,
+)
 
 ROI_LIBRARY_PATH = REPO_ROOT / "roi_library.json"
 
@@ -108,40 +113,17 @@ def discover_from_dpe_root(dpe_root: Path) -> list[Path]:
     return [_pick_converted_mp4(sub) for sub in subdirs]
 
 
-def _max_existing_run_index(outputs_root: Path) -> int:
-    if not outputs_root.is_dir():
-        return 0
-    best = 0
-    for d in outputs_root.iterdir():
-        if not d.is_dir() or not d.name.startswith("run_"):
-            continue
-        parts = d.name.split("_")
-        if len(parts) >= 2 and parts[1].isdigit():
-            best = max(best, int(parts[1]))
-    return best
-
-
 def allocate_jobs(videos: list[Path], outputs_root: Path) -> list[VideoJob]:
-    outputs_root.mkdir(parents=True, exist_ok=True)
-    next_n = _max_existing_run_index(outputs_root) + 1
-    jobs: list[VideoJob] = []
-    for i, raw in enumerate(videos):
-        raw = raw.resolve()
-        m = re.search(r"(\d+)\s+DPE[/\\](\d+)", str(raw))
-        if m:
-            tail = f"{m.group(1)}DPE_n{m.group(2).zfill(3)}"
-            out_name = f"run_{next_n + i}_{tail}"
-        else:
-            out_name = f"run_{next_n + i}"
-        jobs.append(
-            VideoJob(
-                raw_video=raw,
-                output_dir=(outputs_root / out_name).resolve(),
-                short_name=short_name_from_path(raw),
-                video_key=raw.stem,
-            )
+    """Reserve one auto-incremented run dir per video (dirs created eagerly)."""
+    return [
+        VideoJob(
+            raw_video=raw.resolve(),
+            output_dir=Path(make_run_output_dir(raw.resolve(), outputs_root)).resolve(),
+            short_name=short_name_from_path(raw),
+            video_key=raw.stem,
         )
-    return jobs
+        for raw in videos
+    ]
 
 
 def _link_or_copy(src: Path, dst: Path) -> None:
@@ -224,7 +206,6 @@ def main() -> None:
 
     import cv2
     import pandas as pd
-    from utils import save_run_params
 
     from src.preprocessing import preprocess_bgsub_gui
     from src.tracking import export_tracks_xy_tuple_csv_one_config
@@ -245,23 +226,20 @@ def main() -> None:
         print(f"  {j.raw_video}  ->  {j.output_dir}")
     print()
 
-    # ── Stage 0: init each run folder + config snapshot ─────────────────────
+    # Stage 0: init each run folder + config snapshot
     for j in jobs:
         j.output_dir.mkdir(parents=True, exist_ok=True)
-        dest_video = j.output_dir / j.raw_video.name
-        _link_or_copy(j.raw_video, dest_video)
+        _link_or_copy(j.raw_video, j.output_dir / j.raw_video.name)
+        save_config_snapshot(str(j.output_dir), args.config)
         cap = cv2.VideoCapture(str(j.raw_video))
-        save_run_params(str(j.output_dir), "config", {
-            "video": str(j.raw_video),
-            "output_dir": str(j.output_dir),
+        save_run_params(str(j.output_dir), "video", {
+            "path": str(j.raw_video),
             "short_name": j.short_name,
-            "video_fps": float(cap.get(cv2.CAP_PROP_FPS) or cfg.video.fallback_fps),
-            "video_width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-            "video_height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-            "video_frames": int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
-            "tracker": dict(cfg.tracker),
-            "preprocessing": dict(cfg.preprocessing),
-            "roboflow": {"model_id": model_id},
+            "fps": float(cap.get(cv2.CAP_PROP_FPS) or cfg.video.fallback_fps),
+            "width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            "height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            "frames": int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
+            "model_id": model_id,
         })
         cap.release()
 
@@ -376,6 +354,7 @@ def main() -> None:
             vial_rois=vial_rois,
             max_frames=args.max_frames,
             relinked_csv=str(relinked_csv),
+            watershed_cfg=dict(cfg.watershed) if hasattr(cfg, "watershed") else None,
         )
 
         save_run_params(str(j.output_dir), "tracker_output", {
@@ -398,6 +377,9 @@ def main() -> None:
         )
 
         # Mid-pipeline check (parity with notebook cell 10): no per-vial report.
+        # show_plots=False keeps Plotly from opening a browser tab inside a
+        # headless batch run (the same diagnostics get re-emitted once per
+        # job into outputs/.../diagnostics/, where the user can inspect them).
         run_diagnostics(
             tracker=tracker,
             df_wide=df_wide,
@@ -405,6 +387,7 @@ def main() -> None:
             n_expected=cfg.pipeline.expected_per_vial * len(vial_rois),
             fps=diag_fps,
             config=cfg,
+            show_plots=False,
         )
 
         print("  Vial assignment + ordered IDs ...")
