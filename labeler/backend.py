@@ -14,7 +14,7 @@ import cv2
 from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 
 from .color_engine import track_color_hex
-from .robo_export import (
+from .data_model import (
     AnnotationStore,
     Annotation,
     Detection,

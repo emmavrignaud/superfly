@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from .robo_export import (
+from .data_model import (
     Annotation,
     AnnotationStore,
     Detection,
