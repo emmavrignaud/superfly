@@ -51,7 +51,7 @@ tracker:
   jump_iou_threshold: 0.05          # looser IoU threshold for jump round
   jump_inertia: 0.05                # reduced OCM weight for jump round (direction less reliable after a jump)
   inertia: 0.2                      # round-1 direction consistency weight (OCM); ↑ penalises detections not in tracker's heading direction
-  delta_t: 3                        # frames lookback to compute tracker velocity direction for OCM
+  delta_t: 3                        # frames lookback to compute tracker velocity direction for OCM; -1 = use full history (frame_idx)
   overlap_iou_scale: 0.1            # IoU is multiplied by this when detections overlap; suppresses positional signal so behavioral bonus dominates
   edge_fraction: 0.1                # detections within this fraction of vial wall excluded from overlap handling
   expected_count: null              # total expected flies (e.g. 42); enables count-aware spawning when set; null = disabled

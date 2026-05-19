@@ -605,8 +605,9 @@ class OCSort(object):
         velocities = np.array(
             [trk.velocity if trk.velocity is not None else _zero_vel for trk in self.trackers])
         last_boxes = np.array([trk.last_observation for trk in self.trackers])
+        _dt = self.frame_count if self.delta_t < 0 else self.delta_t
         k_observations = np.array(
-            [k_previous_obs(trk.observations, trk.age, self.delta_t) for trk in self.trackers])
+            [k_previous_obs(trk.observations, trk.age, _dt) for trk in self.trackers])
 
         # Behavioral profiles for each active tracker (None if < 2 observations)
         trk_profiles = [trk.behavioral_profile for trk in self.trackers]
@@ -807,7 +808,7 @@ class OCSort(object):
                     if x0 <= cx <= x1 and y0 <= cy <= y1:
                         vial_roi = roi
                         break
-            trk = KalmanBoxTracker(dets[i, :], delta_t=self.delta_t,
+            trk = KalmanBoxTracker(dets[i, :], delta_t=max(self.delta_t, 1),
                                    brownian_pos_noise=self.brownian_pos_noise,
                                    vial_roi=vial_roi, fps=self.fps)
             trk.frame_born = self.frame_count
@@ -912,7 +913,8 @@ class OCSort(object):
         _zero_vel = np.array((0, 0))
         velocities = np.array([trk.velocity if trk.velocity is not None else _zero_vel for trk in self.trackers])
         last_boxes = np.array([trk.last_observation for trk in self.trackers])
-        k_observations = np.array([k_previous_obs(trk.observations, trk.age, self.delta_t) for trk in self.trackers])
+        _dt = self.frame_count if self.delta_t < 0 else self.delta_t
+        k_observations = np.array([k_previous_obs(trk.observations, trk.age, _dt) for trk in self.trackers])
 
         matched, unmatched_dets, unmatched_trks = associate_kitti\
               (dets, trks, cates, self.iou_threshold, velocities, k_observations, self.inertia)
