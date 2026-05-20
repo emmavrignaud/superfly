@@ -24,7 +24,7 @@ from src.ui_context import VideoContext, build_context_chips, build_window_title
 
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QHBoxLayout, QLabel,
-    QPushButton, QSizePolicy, QVBoxLayout,
+    QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
 from PyQt5.QtCore import Qt, QPoint, QRect, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
@@ -38,6 +38,16 @@ def _roi_cfg() -> dict:
         return {}
     with open(p) as f:
         return yaml.safe_load(f).get("roi", {})
+
+
+def _default_fly_count() -> int:
+    """Read pipeline.expected_per_vial from config as default spinbox value."""
+    p = Path(__file__).parent.parent / "config.yaml"
+    if not p.exists():
+        return 7
+    with open(p) as f:
+        cfg = yaml.safe_load(f)
+    return int(cfg.get("pipeline", {}).get("expected_per_vial", 7))
 
 
 # ─── Stylesheet (Catppuccin Mocha) ────────────────────────────────────────────
@@ -132,6 +142,7 @@ class _MultiROICanvas(QLabel):
         self._active_h_guides: List[int] = []   # h-guide y values active this frame
         self._active_v_guide: Optional[int] = None  # v-guide x snapped at press time
         self._cursor_vid: Optional[QPoint] = None   # current mouse in video coords
+        self._fly_counts: List[int] = []
 
     # ── public ────────────────────────────────────────────────────────────────
 
@@ -145,6 +156,10 @@ class _MultiROICanvas(QLabel):
 
     def get_rois(self):
         return list(self._rois)
+
+    def set_fly_counts(self, counts: List[int]) -> None:
+        self._fly_counts = list(counts)
+        self._repaint()
 
     def toggle_snap(self) -> bool:
         self.snap_enabled = not self.snap_enabled
@@ -345,7 +360,10 @@ class _MultiROICanvas(QLabel):
             font.setBold(True)
             p.setFont(font)
             p.setPen(QColor(colour))
-            p.drawText(a.x() + 6, a.y() + 20, str(idx + 1))
+            label = str(idx + 1)
+            if idx < len(self._fly_counts):
+                label = f"{idx + 1}  [{self._fly_counts[idx]} flies]"
+            p.drawText(a.x() + 6, a.y() + 20, label)
 
         # ── in-progress drag — dashed peach ──────────────────────────────
         if self._drawing and self._p0 and self._p1:
@@ -406,12 +424,15 @@ class _MultiROICanvas(QLabel):
 class _VialROIDialog(QDialog):
     def __init__(self, frame_bgr: np.ndarray,
                  snap_threshold_pct: float, snap_enabled: bool,
+                 default_fly_count: int = 7,
                  video_context: VideoContext | None = None,
                  parent=None):
         super().__init__(parent)
         self._snap_threshold_pct = snap_threshold_pct
         self._snap_enabled       = snap_enabled
+        self._default_fly_count  = default_fly_count
         self.video_context       = video_context
+        self._fc_pairs: List[tuple] = []   # (QLabel, QSpinBox) per vial
         self._build()
         self.canvas.set_frame(frame_bgr)
 
@@ -451,6 +472,18 @@ class _VialROIDialog(QDialog):
         self._refresh_status(0)
         root.addWidget(self.status_lbl)
 
+        # ── Fly count row (hidden until first ROI is drawn) ───────────────
+        self._fc_container = QWidget()
+        self._fc_layout = QHBoxLayout(self._fc_container)
+        self._fc_layout.setContentsMargins(0, 2, 0, 2)
+        self._fc_layout.setSpacing(10)
+        _lbl = QLabel("Flies per vial:")
+        _lbl.setObjectName("status")
+        self._fc_layout.addWidget(_lbl)
+        self._fc_layout.addStretch()
+        self._fc_container.setVisible(False)
+        root.addWidget(self._fc_container)
+
         btn_row = QHBoxLayout()
         self.btn_undo  = QPushButton("Undo")
         self.btn_reset = QPushButton("Reset")
@@ -477,9 +510,39 @@ class _VialROIDialog(QDialog):
             f"    {self._snap_badge()}  (S to toggle)"
         )
 
+    def _sync_fly_spinboxes(self, n: int) -> None:
+        """Keep one (label, spinbox) pair per drawn ROI."""
+        # Remove extras (from the end, inserted before the stretch)
+        while len(self._fc_pairs) > n:
+            lbl, sb = self._fc_pairs.pop()
+            lbl.deleteLater()
+            sb.deleteLater()
+
+        # Add new ones
+        while len(self._fc_pairs) < n:
+            idx = len(self._fc_pairs)
+            lbl = QLabel(f"Vial {idx + 1}:")
+            lbl.setObjectName("status")
+            sb = QSpinBox()
+            sb.setRange(1, 200)
+            sb.setValue(self._default_fly_count)
+            sb.valueChanged.connect(self._update_canvas_counts)
+            # Insert before the trailing stretch (last item)
+            pos = self._fc_layout.count() - 1
+            self._fc_layout.insertWidget(pos, lbl)
+            self._fc_layout.insertWidget(pos + 1, sb)
+            self._fc_pairs.append((lbl, sb))
+
+        self._fc_container.setVisible(n > 0)
+        self._update_canvas_counts()
+
+    def _update_canvas_counts(self) -> None:
+        self.canvas.set_fly_counts([sb.value() for _, sb in self._fc_pairs])
+
     def _on_rois_changed(self, rois: list) -> None:
         n = len(rois)
         self._refresh_status(n)
+        self._sync_fly_spinboxes(n)
         self.btn_done.setEnabled(n > 0)
         self.btn_undo.setEnabled(n > 0)
 
@@ -503,6 +566,10 @@ class _VialROIDialog(QDialog):
 
     def get_rois(self):
         return self.canvas.get_rois()
+
+    def get_fly_counts(self) -> List[int]:
+        """Per-vial fly count in draw order (same order as get_rois())."""
+        return [sb.value() for _, sb in self._fc_pairs]
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────
@@ -565,14 +632,16 @@ def draw_and_save_vial_rois(
 
     app = QApplication.instance() or QApplication(sys.argv)
 
-    cfg               = _roi_cfg()
+    cfg                = _roi_cfg()
     snap_threshold_pct = cfg.get("snap_threshold_pct", 0.02)
     snap_enabled       = cfg.get("snap_enabled", True)
+    fly_count_default  = _default_fly_count()
 
     dlg      = _VialROIDialog(
         frame,
         snap_threshold_pct,
         snap_enabled,
+        default_fly_count=fly_count_default,
         video_context=video_context,
     )
     accepted = dlg.exec_()
@@ -580,16 +649,53 @@ def draw_and_save_vial_rois(
     if not accepted:
         raise RuntimeError("ROI selection cancelled")
 
-    rois = dlg.get_rois()
-    rois_sorted = sorted(rois, key=lambda r: (r[0] + r[2]) / 2.0)
-    roi_dict    = {f"vial{i}": tuple(r) for i, r in enumerate(rois_sorted, start=1)}
+    rois       = dlg.get_rois()
+    fly_counts = dlg.get_fly_counts()   # aligned with rois (draw order)
+
+    # Sort left-to-right by centre x, keeping fly counts aligned
+    indexed_sorted = sorted(enumerate(rois), key=lambda t: (t[1][0] + t[1][2]) / 2.0)
+
+    roi_dict  = {}
+    save_data = {}
+    for i, (orig_idx, r) in enumerate(indexed_sorted, start=1):
+        key = f"vial{i}"
+        roi_dict[key]  = tuple(r)
+        save_data[key] = {"bbox": list(r), "n_flies": fly_counts[orig_idx]}
 
     os.makedirs(os.path.dirname(roi_json_path) or ".", exist_ok=True)
     with open(roi_json_path, "w") as f:
-        json.dump({k: list(v) for k, v in roi_dict.items()}, f, indent=2)
+        json.dump(save_data, f, indent=2)
 
     print("Saved ROIs to:", roi_json_path)
     return roi_dict
+
+
+def load_vial_rois(
+    path: str,
+) -> Tuple[Dict[str, Tuple[int, int, int, int]], Dict[str, int]]:
+    """
+    Load vial ROIs from a JSON file, handling both old and new formats.
+
+    Old format: ``{"vial1": [x0, y0, x1, y1], ...}``
+    New format: ``{"vial1": {"bbox": [x0, y0, x1, y1], "n_flies": 7}, ...}``
+
+    Returns
+    -------
+    bbox_dict   : {vial_id: (x0, y0, x1, y1)}
+    n_flies_dict: {vial_id: int}  — 0 for vials loaded from old-format files
+    """
+    with open(path) as f:
+        raw = json.load(f)
+    bbox_dict: Dict[str, Tuple[int, int, int, int]] = {}
+    n_flies_dict: Dict[str, int] = {}
+    for k, v in raw.items():
+        if isinstance(v, dict):
+            bbox_dict[k]    = tuple(map(int, v["bbox"]))
+            n_flies_dict[k] = int(v.get("n_flies", 0))
+        else:
+            bbox_dict[k]    = tuple(map(int, v))
+            n_flies_dict[k] = 0
+    return bbox_dict, n_flies_dict
 
 
 def assign_ordered_ids_left_to_right(
@@ -628,8 +734,7 @@ def assign_vials_and_ordered_ids(
     -------
     pd.DataFrame — the ordered_tracks DataFrame (also saved to out_csv).
     """
-    with open(roi_json, "r") as f:
-        vial_rois = {k: tuple(map(int, v)) for k, v in json.load(f).items()}
+    vial_rois, _ = load_vial_rois(roi_json)
 
     def assign_vial(x, y):
         for vid, (x0, y0, x1, y1) in vial_rois.items():

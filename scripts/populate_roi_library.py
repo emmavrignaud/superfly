@@ -190,15 +190,15 @@ def main():
             app.processEvents()
             print("  Opening vial ROI GUI...")
             tmp_roi_json = pp_dst.parent / "_vial_rois_tmp.json"
-            vials = draw_and_save_vial_rois(
+            draw_and_save_vial_rois(
                 video_path=str(video),
                 roi_json_path=str(tmp_roi_json),
                 video_context=video_context,
             )
-            if tmp_roi_json.exists():
-                tmp_roi_json.unlink()
-
-            dictionary[key]["vial_rois"] = {k: list(v) for k, v in vials.items()}
+            # Read the full saved JSON (includes n_flies) before deleting
+            with open(tmp_roi_json) as _f:
+                dictionary[key]["vial_rois"] = json.load(_f)
+            tmp_roi_json.unlink()
             _save_dictionary(dictionary, dict_path)
             print(f"  Saved {len(vials)} vial ROIs.")
 

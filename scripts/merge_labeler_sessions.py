@@ -91,7 +91,8 @@ def _load_vial_boxes(roi_library_path: Path) -> dict[int, tuple[int, int, int, i
     boxes: dict[int, tuple[int, int, int, int]] = {}
     for name, box in entry["vial_rois"].items():
         n = int(name.removeprefix("vial"))
-        x0, y0, x1, y1 = box
+        coords = box["bbox"] if isinstance(box, dict) else box
+        x0, y0, x1, y1 = coords
         boxes[n] = (int(x0), int(y0), int(x1), int(y1))
     return boxes
 

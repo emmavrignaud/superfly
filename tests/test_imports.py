@@ -21,6 +21,7 @@ EXPECTED_PUBLIC_NAMES = [
     "wide_to_long",
     # roi
     "draw_and_save_vial_rois",
+    "load_vial_rois",
     "assign_ordered_ids_left_to_right",
     "assign_vials_and_ordered_ids",
     # features

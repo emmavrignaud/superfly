@@ -210,7 +210,7 @@ def main() -> None:
     from src.preprocessing import preprocess_bgsub_gui
     from src.tracking import export_tracks_xy_tuple_csv_one_config
     from src.stitching import wide_to_long
-    from src.roi import draw_and_save_vial_rois, assign_vials_and_ordered_ids
+    from src.roi import draw_and_save_vial_rois, assign_vials_and_ordered_ids, load_vial_rois
     from src.visualization import (
         render_vial_overlay_video,
         render_raw_overlay_video,
@@ -298,9 +298,9 @@ def main() -> None:
         _stored_vials = library.get(j.video_key, {}).get("vial_rois")
         if use_saved_roi and _stored_vials is not None:
             print(f"  Loaded vial ROIs from library for {j.video_key}")
-            vials = {k: tuple(v) for k, v in _stored_vials.items()}
             with open(roi_json, "w") as f:
-                json.dump({k: list(v) for k, v in vials.items()}, f, indent=2)
+                json.dump(_stored_vials, f, indent=2)
+            vials, _ = load_vial_rois(str(roi_json))
         else:
             print(f"  Opening vial ROI GUI for {j.video_key}")
             vials = draw_and_save_vial_rois(
@@ -310,7 +310,8 @@ def main() -> None:
             )
             if j.video_key not in library:
                 library[j.video_key] = {}
-            library[j.video_key]["vial_rois"] = {k: list(v) for k, v in vials.items()}
+            with open(roi_json) as _f:
+                library[j.video_key]["vial_rois"] = json.load(_f)
             _save_roi_library(library)
         save_run_params(str(j.output_dir), "roi", {k: list(v) for k, v in vials.items()})
 
@@ -327,8 +328,8 @@ def main() -> None:
 
         # Vial ROIs are needed by the tracker (round-2 jump search) AND by
         # diagnostics + overlays, so load them once up front.
-        with open(roi_json) as f:
-            vial_rois = {k: tuple(v) for k, v in json.load(f).items()}
+        vial_rois, _n_flies_per_vial = load_vial_rois(str(roi_json))
+        _n_expected_total = sum(_n_flies_per_vial.values()) or cfg.pipeline.expected_per_vial * len(vial_rois)
 
         print("  RF-DETR + OC-SORT ...")
         t = cfg.tracker
@@ -384,7 +385,7 @@ def main() -> None:
             tracker=tracker,
             df_wide=df_wide,
             df_relinked=df_relinked,
-            n_expected=cfg.pipeline.expected_per_vial * len(vial_rois),
+            n_expected=_n_expected_total,
             fps=diag_fps,
             config=cfg,
             show_plots=False,
@@ -411,7 +412,7 @@ def main() -> None:
             _tl = json.load(f)
         mock_tracker = types.SimpleNamespace(**_tl)
 
-        n_expected = cfg.pipeline.expected_per_vial * len(vial_rois)
+        n_expected = _n_expected_total
         print("  full diagnostics (tracker rebuilt from tracker_log.json) ...")
         run_diagnostics(
             tracker=mock_tracker,

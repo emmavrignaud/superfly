@@ -24,6 +24,7 @@ from src.stitching import (
 
 from src.roi import (
     draw_and_save_vial_rois,
+    load_vial_rois,
     assign_ordered_ids_left_to_right,
     assign_vials_and_ordered_ids,
 )
@@ -68,6 +69,7 @@ __all__ = [
     "wide_to_long",
     # roi
     "draw_and_save_vial_rois",
+    "load_vial_rois",
     "assign_ordered_ids_left_to_right",
     "assign_vials_and_ordered_ids",
     # features

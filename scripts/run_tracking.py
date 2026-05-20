@@ -57,6 +57,20 @@ def _save_roi_library(library: dict) -> None:
         json.dump(library, f, indent=2)
 
 
+def _n_expected_from_rois(roi_json: str, cfg) -> int:
+    """
+    Return total expected fly count.  Uses per-vial n_flies from the JSON when
+    available (new format); falls back to pipeline.expected_per_vial × n_vials
+    for old-format files.
+    """
+    from src.roi import load_vial_rois
+    bbox_dict, n_flies_dict = load_vial_rois(roi_json)
+    total = sum(n_flies_dict.values())
+    if total > 0:
+        return total
+    return cfg.pipeline.expected_per_vial * len(bbox_dict)
+
+
 def build_parser(cfg) -> argparse.ArgumentParser:
     t = cfg.tracker
     p = argparse.ArgumentParser(
@@ -106,7 +120,7 @@ def main():
     from src.ui_context import parse_video_context
     from src.tracking import export_tracks_xy_tuple_csv_one_config
     from src.stitching import wide_to_long
-    from src.roi import draw_and_save_vial_rois, assign_vials_and_ordered_ids
+    from src.roi import draw_and_save_vial_rois, assign_vials_and_ordered_ids, load_vial_rois
     from src.visualization import render_detections_video, render_vial_overlay_video, render_raw_overlay_video
     from src.metrics import run_diagnostics
 
@@ -189,9 +203,9 @@ def main():
     _stored_vials = _library.get(_video_key, {}).get("vial_rois")
     if use_saved_roi and _stored_vials is not None:
         print(f"Found stored vial ROIs for: {_video_key}")
-        vials = {k: tuple(v) for k, v in _stored_vials.items()}
         with open(roi_json, "w") as f:
-            json.dump({k: list(v) for k, v in vials.items()}, f, indent=2)
+            json.dump(_stored_vials, f, indent=2)
+        vials, _ = load_vial_rois(roi_json)
         print(f"Loaded {len(vials)} vials from library.")
     else:
         if not use_saved_roi:
@@ -206,7 +220,9 @@ def main():
 
         if _video_key not in _library:
             _library[_video_key] = {}
-        _library[_video_key]["vial_rois"] = {k: list(v) for k, v in vials.items()}
+        # Save the full new-format JSON content (includes n_flies when available)
+        with open(roi_json) as _f:
+            _library[_video_key]["vial_rois"] = json.load(_f)
         _save_roi_library(_library)
 
     save_run_params(args.output_dir, "roi", {k: list(v) for k, v in vials.items()})
@@ -304,7 +320,7 @@ def main():
         tracker=tracker,
         df_wide=df_wide,
         df_ordered=df_ordered,
-        n_expected=cfg.pipeline.expected_per_vial * len(vials),
+        n_expected=_n_expected_from_rois(roi_json, cfg),
         fps=fps,
         vial_rois=vials,
         config=cfg,
