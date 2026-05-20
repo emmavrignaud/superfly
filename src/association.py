@@ -633,7 +633,153 @@ def link_cost_batch(
     return cost
 
 
-def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc_weight, asso_func=iou_batch, aspect_weight=0.0, vial_mask=None, trk_profiles=None, trk_last_centers=None, behavioral_weight=0.0, link_trk_states=None, link_weights=None, overlap_det_mask=None, overlap_iou_scale=0.1):
+def behavioral_fingerprint_bonus(
+    detections: np.ndarray,
+    trk_obs_windows: list,
+    trk_profiles: list,
+    weights: dict,
+) -> np.ndarray:
+    """
+    Per-feature behavioral fingerprint bonus for each (detection, tracker) pair.
+
+    Uses the tracker's recent observation window to compute implied kinematics
+    for each candidate detection, then scores how well those implied kinematics
+    match the tracker's running behavioral profile.
+
+    Features (all scores in [0, 1]):
+      speed         — implied step distance vs tracker median speed
+      scale         — detection bbox area vs tracker median scale
+      turning_angle — implied heading change vs tracker mean turning angle
+                      (requires len(obs) >= 2)
+      pause         — whether detection implies a pause vs tracker pause fraction
+                      (requires len(obs) >= 2)
+      acceleration  — implied speed change vs tracker mean acceleration
+                      (requires len(obs) >= 2)
+
+    Parameters
+    ----------
+    detections       : (n_det, 5) array [x1,y1,x2,y2,score]
+    trk_obs_windows  : list of n_trk lists, each a list of recent bbox arrays
+                       [x1,y1,x2,y2] (most recent last)
+    trk_profiles     : list of n_trk profile dicts (or None for new trackers)
+    weights          : dict with keys "speed", "scale", "turning_angle",
+                       "pause", "acceleration"
+
+    Returns
+    -------
+    bonus : (n_det, n_trk) float array
+    """
+    n_det = len(detections)
+    n_trk = len(trk_profiles)
+    bonus = np.zeros((n_det, n_trk), dtype=float)
+
+    if n_det == 0 or n_trk == 0:
+        return bonus
+
+    total_weight = sum(weights.values())
+    if total_weight == 0.0:
+        return bonus
+
+    det_cx = (detections[:, 0] + detections[:, 2]) / 2.0  # (n_det,)
+    det_cy = (detections[:, 1] + detections[:, 3]) / 2.0
+    det_areas = (
+        (detections[:, 2] - detections[:, 0]) *
+        (detections[:, 3] - detections[:, 1])
+    )  # (n_det,)
+
+    w_speed  = weights.get("speed",         0.0)
+    w_scale  = weights.get("scale",         0.0)
+    w_turn   = weights.get("turning_angle", 0.0)
+    w_pause  = weights.get("pause",         0.0)
+    w_accel  = weights.get("acceleration",  0.0)
+
+    for j, (obs, prof) in enumerate(zip(trk_obs_windows, trk_profiles)):
+        if prof is None or len(obs) == 0:
+            continue
+
+        last_bbox = obs[-1]
+        last_cx = (last_bbox[0] + last_bbox[2]) / 2.0
+        last_cy = (last_bbox[1] + last_bbox[3]) / 2.0
+
+        has_direction = len(obs) >= 2
+        if has_direction:
+            prev_bbox = obs[-2]
+            prev_cx = (prev_bbox[0] + prev_bbox[2]) / 2.0
+            prev_cy = (prev_bbox[1] + prev_bbox[3]) / 2.0
+            last_dx = last_cx - prev_cx
+            last_dy = last_cy - prev_cy
+            last_speed = float(np.sqrt(last_dx ** 2 + last_dy ** 2))
+        else:
+            last_speed = 0.0
+
+        # implied speed: distance from tracker's last centre to each detection
+        implied_speed = np.sqrt(
+            (det_cx - last_cx) ** 2 + (det_cy - last_cy) ** 2
+        )  # (n_det,)
+
+        col = np.zeros(n_det, dtype=float)
+
+        # --- speed score ---
+        if w_speed != 0.0:
+            med_speed = prof["median_speed"]
+            speed_score = np.maximum(
+                0.0,
+                1.0 - np.abs(implied_speed - med_speed) / (med_speed + 1.0),
+            )
+            col += w_speed * speed_score
+
+        # --- scale score ---
+        if w_scale != 0.0:
+            med_scale = prof["median_scale"]
+            scale_score = np.maximum(
+                0.0,
+                1.0 - np.abs(det_areas - med_scale) / (det_areas + med_scale + 1e-6),
+            )
+            col += w_scale * scale_score
+
+        # --- direction-dependent features ---
+        if has_direction and (w_turn != 0.0 or w_pause != 0.0 or w_accel != 0.0):
+            # implied direction vector: last_centre → detection
+            det_dx = det_cx - last_cx  # (n_det,)
+            det_dy = det_cy - last_cy
+            det_norm = np.sqrt(det_dx ** 2 + det_dy ** 2) + 1e-9
+
+            if w_turn != 0.0:
+                last_norm = np.sqrt(last_dx ** 2 + last_dy ** 2) + 1e-9
+                cos_angle = np.clip(
+                    (det_dx * last_dx + det_dy * last_dy) / (det_norm * last_norm),
+                    -1.0, 1.0,
+                )
+                implied_turning = np.degrees(np.arccos(cos_angle))  # [0, 180]
+                mean_turn = prof["mean_turning_angle"]
+                turning_score = np.maximum(
+                    0.0,
+                    1.0 - np.abs(implied_turning - mean_turn) / 180.0,
+                )
+                col += w_turn * turning_score
+
+            if w_pause != 0.0:
+                is_pause = (implied_speed < 1.0).astype(float)
+                pause_frac = prof["pause_fraction"]
+                pause_score = 1.0 - np.abs(is_pause - pause_frac)
+                col += w_pause * pause_score
+
+            if w_accel != 0.0:
+                implied_accel = implied_speed - last_speed
+                mean_accel = prof["mean_acceleration"]
+                accel_score = np.maximum(
+                    0.0,
+                    1.0 - np.abs(implied_accel - mean_accel) /
+                         (abs(mean_accel) + 1.0),
+                )
+                col += w_accel * accel_score
+
+        bonus[:, j] = col
+
+    return bonus
+
+
+def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc_weight, asso_func=iou_batch, aspect_weight=0.0, vial_mask=None, trk_profiles=None, trk_last_centers=None, behavioral_weight=0.0, behavioral_weights=None, trk_obs_windows=None, link_trk_states=None, link_weights=None, overlap_det_mask=None, overlap_iou_scale=0.1):
     if(len(trackers)==0):
         return np.empty((0,2),dtype=int), np.arange(len(detections)), np.empty((0,5),dtype=int), []
 
@@ -656,8 +802,14 @@ def associate(detections, trackers, iou_threshold, velocities, previous_obs, vdc
     # Aspect ratio bonus: same shape → small bonus, different shape → 0
     bonus = aspect_ratio_bonus_batch(detections, trackers, aspect_weight)
 
-    # Behavioral consistency bonus: speed plausibility + scale consistency
-    if trk_profiles is not None and trk_last_centers is not None:
+    # Behavioral fingerprint bonus: per-feature weighted consistency scores.
+    # When trk_obs_windows and behavioral_weights are provided, use the richer
+    # multi-feature fingerprint; otherwise fall back to the legacy scalar path.
+    if trk_obs_windows is not None and behavioral_weights is not None:
+        bonus = bonus + behavioral_fingerprint_bonus(
+            detections, trk_obs_windows, trk_profiles or [], behavioral_weights
+        )
+    elif trk_profiles is not None and trk_last_centers is not None:
         bonus = bonus + behavioral_consistency_batch(
             detections, trk_profiles, trk_last_centers, behavioral_weight
         )

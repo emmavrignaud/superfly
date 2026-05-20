@@ -12,6 +12,7 @@ venv/
 
 # Logs
 *.log
+*.txt
 
 # Editor / tooling
 .vscode/settings.json

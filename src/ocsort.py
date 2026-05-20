@@ -465,6 +465,11 @@ def _select_prefix(costs, n_active, expected, w_under, w_over):
     return best_k
 
 
+def _scale_weights(weights: dict, scale: float) -> dict:
+    """Return a copy of weights with every value multiplied by scale."""
+    return {k: v * scale for k, v in weights.items()}
+
+
 ASSO_FUNCS = {  "iou": iou_batch,
                 "giou": giou_batch,
                 "ciou": ciou_batch,
@@ -476,8 +481,9 @@ ASSO_FUNCS = {  "iou": iou_batch,
 class OCSort(object):
     def __init__(self, det_thresh, max_age=30, min_hits=3,
         iou_threshold=0.3, delta_t=3, asso_func="iou", inertia=0.2, use_byte=False,
-        brownian_pos_noise=1.0, vial_rois=None, aspect_weight=0.0, behavioral_weight=0.0,
-        behavioral_weight_overlap=None,
+        brownian_pos_noise=1.0, vial_rois=None, aspect_weight=0.0,
+        behavioral_weights=None,
+        overlap_weight_scale=6.0,
         jump_factor=2.0, jump_iou_threshold=0.05, jump_inertia=0.05,
         expected_count=None, w_under=15.0, w_over=2.0,
         overlap_iou_scale=0.1, edge_fraction=0.1,
@@ -488,17 +494,22 @@ class OCSort(object):
         """
         Sets key parameters for SORT
 
-        expected_count    : total expected number of flies across all vials. When set,
+        expected_count      : total expected number of flies across all vials. When set,
             _select_prefix is applied when spawning new trackers so the active
             tracker count is steered toward this target. None = disabled (spawn all).
-        w_under           : penalty per tracker below expected_count (fragmentation cost).
-        w_over            : penalty per tracker above expected_count (false-positive cost).
-        overlap_iou_scale : when two detections in the same vial overlap (IoU > 0),
+        w_under             : penalty per tracker below expected_count (fragmentation cost).
+        w_over              : penalty per tracker above expected_count (false-positive cost).
+        overlap_iou_scale   : when two detections in the same vial overlap (IoU > 0),
             their IoU contribution to the association cost matrix is multiplied by
             this factor. 0.1 = trust IoU 10x less, letting link_cost_batch
             (trajectory extrapolation) dominate instead.
-        edge_fraction     : detections within this fraction of the vial width/height
+        edge_fraction       : detections within this fraction of the vial width/height
             from a wall are excluded from overlap handling (wall-adjacent flies).
+        behavioral_weights  : dict of per-feature weights for the behavioral fingerprint
+            bonus in the live cost matrix. Keys: "speed", "scale", "turning_angle",
+            "pause", "acceleration". None uses a sensible default.
+        overlap_weight_scale: multiplier applied to all behavioral_weights when
+            detections overlap. Boosts behavioral signal when IoU is unreliable.
         """
         self.max_age = max_age
         self.min_hits = min_hits
@@ -513,11 +524,18 @@ class OCSort(object):
         self.brownian_pos_noise = brownian_pos_noise
         self.vial_rois = vial_rois  # {vial_id: (x0,y0,x1,y1)} or None
         self.aspect_weight = aspect_weight
-        self.behavioral_weight = behavioral_weight
-        # When detections overlap, use a boosted weight so behavioral consistency
-        # dominates over IoU (which becomes unreliable during overlaps).
-        # Falls back to behavioral_weight if not set.
-        self.behavioral_weight_overlap = behavioral_weight_overlap if behavioral_weight_overlap is not None else behavioral_weight
+        # Per-feature weights for the behavioral fingerprint bonus in the live
+        # cost matrix. Defaults provide a gentle speed + scale signal equivalent
+        # to the legacy behavioral_weight=0.05 (0.5 × 0.05 per feature).
+        self.behavioral_weights = behavioral_weights if behavioral_weights is not None else {
+            "speed":         0.025,
+            "scale":         0.025,
+            "turning_angle": 0.0,
+            "pause":         0.0,
+            "acceleration":  0.0,
+        }
+        # Multiplier applied to all behavioral_weights when detections overlap.
+        self.overlap_weight_scale = overlap_weight_scale
         self.jump_factor = jump_factor
         self.jump_iou_threshold = jump_iou_threshold
         self.jump_inertia = jump_inertia
@@ -618,6 +636,14 @@ class OCSort(object):
             for trk in self.trackers
         ])
 
+        # Recent observation windows for behavioral fingerprint matching.
+        # Each entry is a list of raw bbox arrays [x1,y1,x2,y2], most recent last,
+        # limited to the last _dt observations so cost stays proportional to history used.
+        trk_obs_windows = []
+        for trk in self.trackers:
+            obs = [b for _, b, *_ in sorted(trk.observation_log, key=lambda t: t[0])]
+            trk_obs_windows.append(obs[-_dt:] if _dt > 0 else obs)
+
         # Build tracker state dicts for link_cost_batch — built once here and
         # reused in both round 1 and the jump round (jump round subsets by index).
         all_trk_states = []
@@ -700,7 +726,11 @@ class OCSort(object):
             dets, trks, self.iou_threshold, velocities, k_observations, self.inertia, self.asso_func, self.aspect_weight,
             vial_mask=vial_mask,
             trk_profiles=trk_profiles, trk_last_centers=trk_last_centers,
-            behavioral_weight=(self.behavioral_weight_overlap if overlap_det_mask.any() else self.behavioral_weight),
+            behavioral_weights=_scale_weights(
+                self.behavioral_weights,
+                self.overlap_weight_scale if overlap_det_mask.any() else 1.0,
+            ),
+            trk_obs_windows=trk_obs_windows,
             link_trk_states=all_trk_states,
             overlap_det_mask=overlap_det_mask,
             overlap_iou_scale=self.overlap_iou_scale)
@@ -755,8 +785,9 @@ class OCSort(object):
             jump_velocities   = velocities[unmatched_trks]
             jump_k_obs        = k_observations[unmatched_trks]
 
-            # Subset all_trk_states for the unmatched trackers only.
-            jump_trk_states = [all_trk_states[t] for t in unmatched_trks]
+            # Subset all_trk_states and obs_windows for the unmatched trackers only.
+            jump_trk_states  = [all_trk_states[t]   for t in unmatched_trks]
+            jump_obs_windows = [trk_obs_windows[t]  for t in unmatched_trks]
 
             jump_matched, jump_ud, jump_ut, jump_scores = associate(
                 left_dets, jump_boxes,
@@ -766,7 +797,11 @@ class OCSort(object):
                 vial_mask=jump_vial_mask,
                 trk_profiles=jump_profiles,
                 trk_last_centers=jump_last_centers,
-                behavioral_weight=(self.behavioral_weight_overlap if (jump_overlap_mask is not None and jump_overlap_mask.any()) else self.behavioral_weight),
+                behavioral_weights=_scale_weights(
+                    self.behavioral_weights,
+                    self.overlap_weight_scale if (jump_overlap_mask is not None and jump_overlap_mask.any()) else 1.0,
+                ),
+                trk_obs_windows=jump_obs_windows,
                 link_trk_states=jump_trk_states,
                 overlap_det_mask=jump_overlap_mask,
                 overlap_iou_scale=self.overlap_iou_scale,

@@ -44,8 +44,8 @@ def export_tracks_xy_tuple_csv_one_config(
     det_log_csv: str | None = None,
     vial_rois: dict | None = None,
     aspect_weight: float = 0.0,
-    behavioral_weight: float = 0.0,
-    behavioral_weight_overlap: float | None = None,
+    behavioral_weights: dict | None = None,
+    overlap_weight_scale: float = 6.0,
     jump_factor: float = 2.0,
     jump_iou_threshold: float = 0.05,
     jump_inertia: float = 0.05,
@@ -56,14 +56,8 @@ def export_tracks_xy_tuple_csv_one_config(
     w_over: float = 2.0,
     overlap_iou_scale: float = 0.1,
     edge_fraction: float = 0.1,
-    relink_behavioral_weights: dict | None = None,
-    relink_min_length: int = 10,
-    relink_inconsistency_threshold: float = 0.4,
-    relink_swap_threshold: float = 0.2,
-    relink_confidence_weight: float = 1.0,
-    relinked_csv: str | None = None,
     watershed_cfg: dict | None = None,
-) -> tuple[pd.DataFrame, object, "pd.DataFrame | None"]:
+) -> tuple[pd.DataFrame, object]:
     """
     Run RF-DETR + OC-SORT for one configuration and write a wide CSV where:
       - rows    = frame index
@@ -74,11 +68,9 @@ def export_tracks_xy_tuple_csv_one_config(
     detections are loaded from the cache. This lets you re-run the tracker
     with different association parameters at zero API cost.
 
-    Returns (df, tracker, df_relinked):
-      df           — the wide-format DataFrame that was saved to output_csv
-      tracker      — the OCSort object (carries detection_log and suppressed_tracks)
-      df_relinked  — long-format relinked DataFrame (frame, x, y, original_id,
-                     relinked_id), or None if relinked_csv was not specified
+    Returns (df, tracker):
+      df      — the wide-format DataFrame that was saved to output_csv
+      tracker — the OCSort object (carries detection_log and suppressed_tracks)
     """
     from .ocsort import OCSort
 
@@ -174,8 +166,8 @@ def export_tracks_xy_tuple_csv_one_config(
         brownian_pos_noise=brownian_pos_noise,
         vial_rois=vial_rois,
         aspect_weight=aspect_weight,
-        behavioral_weight=behavioral_weight,
-        behavioral_weight_overlap=behavioral_weight_overlap,
+        behavioral_weights=behavioral_weights,
+        overlap_weight_scale=overlap_weight_scale,
         jump_factor=jump_factor,
         jump_iou_threshold=jump_iou_threshold,
         jump_inertia=jump_inertia,
@@ -185,11 +177,6 @@ def export_tracks_xy_tuple_csv_one_config(
         overlap_iou_scale=overlap_iou_scale,
         edge_fraction=edge_fraction,
         fps=fps_assumed,
-        relink_behavioral_weights=relink_behavioral_weights,
-        relink_min_length=relink_min_length,
-        relink_inconsistency_threshold=relink_inconsistency_threshold,
-        relink_swap_threshold=relink_swap_threshold,
-        relink_confidence_weight=relink_confidence_weight,
     )
 
     rows = []
@@ -235,46 +222,30 @@ def export_tracks_xy_tuple_csv_one_config(
     df.to_csv(output_csv, index=False, na_rep="")
     print(f"Saved: {output_csv}  (frames={len(df)}, tracks={len(id_cols)})")
 
-    # ── Second-round re-linking ───────────────────────────────────────────────
-    swaps = tracker.relink()
-    if swaps:
-        print(f"Relink: {len(swaps)} swap(s) accepted: {swaps}")
-    else:
-        print("Relink: no swaps accepted.")
+    # Save observation logs — needed for post-hoc relink grid search without
+    # re-running the tracker.  Format: list of {id, log: [[frame, [x1,y1,x2,y2], score], ...]}
+    obs_log_path = output_csv.replace(".csv", "_obs_logs.json")
+    _save_observation_logs(tracker, obs_log_path)
 
-    if relinked_csv is not None:
-        id_map: dict[int, list] = {}
-        swap_lookup: dict[int, tuple[int, int]] = {}
-        for id_a, id_b, swap_frame in swaps:
-            swap_lookup[id_a] = (id_b, swap_frame)
-            swap_lookup[id_b] = (id_a, swap_frame)
+    return df, tracker
 
-        for trk in tracker.trackers:
-            obs = getattr(trk, "observation_log", [])
-            orig_id = trk.id + 1
-            swap_info = swap_lookup.get(orig_id)
-            for frame_i, bbox, *_ in sorted(obs, key=lambda t: t[0]):
-                cx = float((bbox[0] + bbox[2]) / 2.0)
-                cy = float((bbox[1] + bbox[3]) / 2.0)
-                if swap_info is not None:
-                    partner_id, swap_frame = swap_info
-                    relinked_id = partner_id if frame_i >= swap_frame else orig_id
-                else:
-                    relinked_id = orig_id
-                id_map.setdefault(orig_id, []).append({
-                    "frame": frame_i,
-                    "x": cx,
-                    "y": cy,
-                    "original_id": orig_id,
-                    "relinked_id": relinked_id,
-                })
 
-        relink_rows = [row for rows_list in id_map.values() for row in rows_list]
-        df_relinked = pd.DataFrame(relink_rows, columns=["frame", "x", "y", "original_id", "relinked_id"])
-        df_relinked = df_relinked.sort_values(["frame", "relinked_id"]).reset_index(drop=True)
-        df_relinked.to_csv(relinked_csv, index=False)
-        print(f"Saved relinked tracks: {relinked_csv}  ({len(df_relinked)} rows)")
-    else:
-        df_relinked = None
+def _save_observation_logs(tracker, path: str) -> None:
+    """Write each tracker's observation_log to a JSON file.
 
-    return df, tracker, df_relinked
+    Each entry: {"id": int, "log": [[frame_idx, [x1,y1,x2,y2], score], ...]}
+    Only includes KalmanBoxTracker objects (active at end of video).
+    Suppressed tracks are dicts without observation_log so they are skipped.
+    """
+    import json
+    records = []
+    for trk in tracker.trackers:
+        log = [
+            [int(f), [float(b[0]), float(b[1]), float(b[2]), float(b[3])], float(s) if s is not None else None]
+            for f, b, s in trk.observation_log
+        ]
+        if log:
+            records.append({"id": int(trk.id) + 1, "log": log})  # 1-based to match CSV
+    with open(path, "w") as fh:
+        json.dump(records, fh)
+    print(f"Saved observation logs: {path}  ({len(records)} trackers)")

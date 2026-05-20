@@ -45,8 +45,13 @@ tracker:
   asso_func: diou                    # iou | giou | diou | ciou | hmiou
   brownian_pos_noise: 15             # Kalman Q[cx,cy] scale; ↑ tolerates saccades
   aspect_weight: 0.05               # bonus for matching boxes of similar aspect ratio; 0 = disabled, try 0.05–0.2
-  behavioral_weight: 0.05           # bonus for speed-plausibility + scale-consistency; 0 = disabled, try 0.05–0.15
-  behavioral_weight_overlap: 0.30   # behavioural weight used only when detections overlap; None falls back to behavioral_weight
+  behavioral_weights:
+    speed:         0.025   # speed consistency bonus (was behavioral_weight × 0.5)
+    scale:         0.025   # bbox scale consistency bonus (was behavioral_weight × 0.5)
+    turning_angle: 0.0     # turning angle consistency (new; tune via Optuna)
+    pause:         0.0     # pause behaviour consistency (new; tune via Optuna)
+    acceleration:  0.0     # acceleration consistency (new; tune via Optuna)
+  overlap_weight_scale: 6.0  # multiply all behavioral weights when detections overlap (was behavioral_weight_overlap / behavioral_weight = 0.30 / 0.05)
   jump_factor: 2.0                  # round-2 velocity scale + bbox inflation (how far/wide to search)
   jump_iou_threshold: 0.05          # looser IoU threshold for jump round
   jump_inertia: 0.05                # reduced OCM weight for jump round (direction less reliable after a jump)
@@ -75,21 +80,9 @@ pipeline:
   # (Post-hoc stitching parameters now live in legacy/stitching_config.yaml.)
   expected_per_vial: 7   # ground-truth fly count per vial; used by run_diagnostics
 
-relink:
-  # Second-round re-linking: swap tracklet segments at frames where ≥2 trackers
-  # simultaneously had a low association score (below their own per-track median).
-  min_length: 10                    # min observations for a tracker to be considered
-  inconsistency_threshold: 0.4     # reserved for future use (currently unused)
-  swap_threshold: 0.05             # min total cost improvement to accept a swap
-  confidence_weight: 0.0           # how strongly the split-frame IoU penalises swapping; 0 = ignore (high IoU at overlap is a false signal)
-  behavioral_weights:
-    median_speed:          0.3     # weak signal for slow/old flies — down-weighted
-    pause_fraction:        1.0
-    mean_turning_angle:    2.0     # overlap often causes path deflection — up-weighted
-    mean_angular_velocity: 1.5
-    mean_acceleration:     1.0
-    n_large_displacements: 1.0
-    tortuosity:            2.0     # overlap deflects trajectory — up-weighted
+# relink: section removed — post-hoc ID-swap correction has been superseded by
+# per-feature behavioral_weights built into the live cost matrix (see tracker: above).
+# The relink() method is still available on OCSort for experimental use.
 
 preprocessing:
   # Per-pixel percentile background, divided out and rescaled to white.
