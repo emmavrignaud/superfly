@@ -20,7 +20,31 @@ Usage (from repo root):
     --ocsort   (deprecated alias for --tracks)
 
     example: (run from repo root! hhhhhhh don't be like me and cd into labeler/ )
-            python -B -m labeler.main --video C:/Users/emmav/Downloads/superfly/outputs/run_104/2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped.mp4 --raw C:/Users/emmav/Downloads/superfly/outputs/run_80_13DPE_n002/detections_raw.csv --tracks C:/Users/emmav/Downloads/superfly/outputs/run_104/ordered_tracks.csv --fresh
+            python -m labeler.main --video C:/Users/emmav/Downloads/superfly/outputs/run_104/2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped.mp4 --raw C:/Users/emmav/Downloads/superfly/outputs/run_80_13DPE_n002/detections_raw.csv --tracks C:/Users/emmav/Downloads/superfly/outputs/run_104/ordered_tracks.csv --fresh
+
+    13d_002 (run_112):
+        python -m labeler.main --video C:/Users/emmav/Downloads/superfly/outputs/run_112/2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped.mp4 --raw C:/Users/emmav/Downloads/superfly/outputs/run_112/detections_raw.csv --tracks C:/Users/emmav/Downloads/superfly/outputs/run_112/ocsort_tracks.csv --annotator emma
+
+    13d_002 — resume existing annotation session (WORKING COMMAND — must use run_104 video + run_80 raw, NO --tracks):
+        python -m labeler.main --video C:/Users/emmav/Downloads/superfly/outputs/run_104/2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped.mp4 --raw C:/Users/emmav/Downloads/superfly/outputs/run_80_13DPE_n002/detections_raw.csv --resume C:/Users/emmav/Downloads/superfly/data/manual_labelling/2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped/2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped.labeler.json
+
+    31d_005 (run_114_31DPE_n005):
+        python -m labeler.main --video C:/Users/emmav/Downloads/superfly/outputs/run_114_31DPE_n005/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4 --raw C:/Users/emmav/Downloads/superfly/outputs/run_114_31DPE_n005/detections_raw.csv --tracks C:/Users/emmav/Downloads/superfly/outputs/run_114_31DPE_n005/ocsort_tracks.csv --annotator emma
+
+    ── GT verification (cleaned/removed files) ──────────────────────────────────
+    Use --fresh and --out-dir to a temp folder so you don't overwrite existing sessions.
+
+    13d_002 cleaned (41 IDs — should look complete):
+        python -m labeler.main --video C:/Users/emmav/Downloads/superfly/outputs/run_112/2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped.mp4 --raw C:/Users/emmav/Downloads/superfly/outputs/run_112/detections_raw.csv --tracks C:/Users/emmav/Downloads/superfly/parameter_tuning/data/ground_truth_13d_002_cleaned.csv --out-dir C:/Users/emmav/Downloads/superfly/parameter_tuning/data/verify_13d_cleaned --fresh
+
+    13d_002 removed (10 IDs — should all be stray single/few-frame clicks):
+        python -m labeler.main --video C:/Users/emmav/Downloads/superfly/outputs/run_112/2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped.mp4 --raw C:/Users/emmav/Downloads/superfly/outputs/run_112/detections_raw.csv --tracks C:/Users/emmav/Downloads/superfly/parameter_tuning/data/ground_truth_13d_002_removed.csv --out-dir C:/Users/emmav/Downloads/superfly/parameter_tuning/data/verify_13d_removed --fresh
+
+    31d_005 cleaned (53 IDs — should look complete):
+        python -m labeler.main --video C:/Users/emmav/Downloads/superfly/outputs/run_114_31DPE_n005/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4 --raw C:/Users/emmav/Downloads/superfly/outputs/run_114_31DPE_n005/detections_raw.csv --tracks C:/Users/emmav/Downloads/superfly/parameter_tuning/data/ground_truth_31d_005_cleaned.csv --out-dir C:/Users/emmav/Downloads/superfly/parameter_tuning/data/verify_31d_cleaned --fresh
+
+    31d_005 removed (11 IDs — should all be stray single/few-frame clicks, including ID 6364):
+        python -m labeler.main --video C:/Users/emmav/Downloads/superfly/outputs/run_114_31DPE_n005/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4 --raw C:/Users/emmav/Downloads/superfly/outputs/run_114_31DPE_n005/detections_raw.csv --tracks C:/Users/emmav/Downloads/superfly/parameter_tuning/data/ground_truth_31d_005_removed.csv --out-dir C:/Users/emmav/Downloads/superfly/parameter_tuning/data/verify_31d_removed --fresh
 
 The --tracks CSV may be either:
   - long-format  (e.g. ordered_tracks.csv: frame, x, y, ordered_id, ...)

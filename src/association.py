@@ -655,6 +655,8 @@ def behavioral_fingerprint_bonus(
                       (requires len(obs) >= 2)
       acceleration  — implied speed change vs tracker mean acceleration
                       (requires len(obs) >= 2)
+      tortuosity    — implied path tortuosity over the obs window vs tracker
+                      profile tortuosity (requires len(obs) >= 2)
 
     Parameters
     ----------
@@ -663,7 +665,7 @@ def behavioral_fingerprint_bonus(
                        [x1,y1,x2,y2] (most recent last)
     trk_profiles     : list of n_trk profile dicts (or None for new trackers)
     weights          : dict with keys "speed", "scale", "turning_angle",
-                       "pause", "acceleration"
+                       "pause", "acceleration", "tortuosity"
 
     Returns
     -------
@@ -687,11 +689,12 @@ def behavioral_fingerprint_bonus(
         (detections[:, 3] - detections[:, 1])
     )  # (n_det,)
 
-    w_speed  = weights.get("speed",         0.0)
-    w_scale  = weights.get("scale",         0.0)
-    w_turn   = weights.get("turning_angle", 0.0)
-    w_pause  = weights.get("pause",         0.0)
-    w_accel  = weights.get("acceleration",  0.0)
+    w_speed      = weights.get("speed",         0.0)
+    w_scale      = weights.get("scale",         0.0)
+    w_turn       = weights.get("turning_angle", 0.0)
+    w_pause      = weights.get("pause",         0.0)
+    w_accel      = weights.get("acceleration",  0.0)
+    w_tortuosity = weights.get("tortuosity",    0.0)
 
     for j, (obs, prof) in enumerate(zip(trk_obs_windows, trk_profiles)):
         if prof is None or len(obs) == 0:
@@ -773,6 +776,30 @@ def behavioral_fingerprint_bonus(
                          (abs(mean_accel) + 1.0),
                 )
                 col += w_accel * accel_score
+
+            if w_tortuosity != 0.0:
+                # Implied tortuosity: total path through obs window + candidate
+                # detection, divided by straight-line from obs[0] to detection.
+                obs_cxs = np.array([(b[0] + b[2]) / 2.0 for b in obs])
+                obs_cys = np.array([(b[1] + b[3]) / 2.0 for b in obs])
+                obs_path = float(
+                    np.sqrt(np.diff(obs_cxs) ** 2 + np.diff(obs_cys) ** 2).sum()
+                )
+                last_steps = np.sqrt(
+                    (det_cx - last_cx) ** 2 + (det_cy - last_cy) ** 2
+                )
+                total_paths = obs_path + last_steps
+                straight = (
+                    np.sqrt(
+                        (det_cx - obs_cxs[0]) ** 2 + (det_cy - obs_cys[0]) ** 2
+                    ) + 1e-6
+                )
+                implied_tort = total_paths / straight
+                prof_tort = prof.get("tortuosity", 1.0)
+                tort_score = np.maximum(
+                    0.0, 1.0 - np.abs(implied_tort - prof_tort) / 5.0
+                )
+                col += w_tortuosity * tort_score
 
         bonus[:, j] = col
 

@@ -1,4 +1,15 @@
 {
+  "2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted": {
+    "video_path": "C:\\Users\\emmav\\Downloads\\superfly\\outputs\\run_114_31DPE_n005\\2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted.mp4",
+    "vial_rois": {
+      "vial1": {"bbox": [3,   3,  80, 451], "n_flies": 7},
+      "vial2": {"bbox": [125, 1, 198, 451], "n_flies": 6},
+      "vial3": {"bbox": [243, 1, 318, 451], "n_flies": 6},
+      "vial4": {"bbox": [367, 0, 446, 451], "n_flies": 5},
+      "vial5": {"bbox": [488, 1, 564, 451], "n_flies": 7},
+      "vial6": {"bbox": [610, 0, 686, 451], "n_flies": 7}
+    }
+  },
   "2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_003-converted": {
     "preprocessing": {
       "x": 200,
