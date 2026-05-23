@@ -23,9 +23,11 @@ import contextlib
 import io
 import itertools
 import json
+import os
 import sys
 import tempfile
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +123,30 @@ FIXED_PARAMS: dict[str, Any] = {
 }
 
 
+# ── Per-sequence cache ────────────────────────────────────────────────────────
+# Built lazily on first access in each worker process. Avoids re-parsing the
+# same detections / GT / ROI files millions of times across the combo loop.
+_SEQ_CACHE: dict[str, dict] = {}
+
+
+def _get_seq_cache(seq: str) -> dict:
+    if seq in _SEQ_CACHE:
+        return _SEQ_CACHE[seq]
+    scfg = SEQUENCES[seq]
+    with open(scfg["roi_json"]) as f:
+        vial_rois = {k: tuple(v) for k, v in json.load(f).items()}
+    gt_lines = _load_gt_mot(seq)
+    dets = pd.read_csv(scfg["det_csv"])
+    dets["cx"] = ((dets["x1"] + dets["x2"]) / 2.0).round(2)
+    dets["cy"] = ((dets["y1"] + dets["y2"]) / 2.0).round(2)
+    dets = dets.sort_values("conf", ascending=False).drop_duplicates(
+        subset=["frame", "cx", "cy"], keep="first"
+    )
+    dets = dets[["frame", "cx", "cy", "x1", "y1", "x2", "y2"]].reset_index(drop=True)
+    _SEQ_CACHE[seq] = {"vial_rois": vial_rois, "gt_lines": gt_lines, "dets": dets, "scfg": scfg}
+    return _SEQ_CACHE[seq]
+
+
 # ── MOT helpers ────────────────────────────────────────────────────────────────
 
 def _load_gt_mot(seq: str) -> list[str]:
@@ -144,15 +170,14 @@ def _mot_lines(df: pd.DataFrame, *, c7: float) -> list[str]:
     return lines
 
 
-def _tracker_mot_lines(wide_df: pd.DataFrame, det_csv: Path) -> list[str]:
+def _tracker_mot_lines(wide_df: pd.DataFrame, dets: pd.DataFrame) -> list[str]:
     """
     Convert wide tracker output to MOT lines.
 
     1. Melt wide → long (frame, track_id, x, y)
-    2. Join to detections_raw.csv on (frame, round(cx,2), round(cy,2)) to recover bboxes
+    2. Join to cached detections on (frame, round(cx,2), round(cy,2)) to recover bboxes
     3. Return MOT-format lines
     """
-    # Melt
     id_cols = [c for c in wide_df.columns if c != "frame" and pd.notna(wide_df[c]).any()]
     long = wide_df.melt(id_vars="frame", value_vars=id_cols,
                         var_name="raw_id", value_name="pos")
@@ -160,21 +185,11 @@ def _tracker_mot_lines(wide_df: pd.DataFrame, det_csv: Path) -> list[str]:
     long["track_id"] = long["raw_id"].str.extract(r"(\d+)").astype(int)
     long["x"] = long["pos"].str.extract(r"\(([^,]+),").astype(float)
     long["y"] = long["pos"].str.extract(r",\s*([^)]+)\)").astype(float)
-
-    # Load detections, compute centroid at 2dp (matches tracker's "{:.2f}" format)
-    dets = pd.read_csv(det_csv)
-    dets["cx"] = ((dets["x1"] + dets["x2"]) / 2.0).round(2)
-    dets["cy"] = ((dets["y1"] + dets["y2"]) / 2.0).round(2)
-    # Keep best-conf detection per (frame, cx, cy) to handle duplicates
-    dets = dets.sort_values("conf", ascending=False).drop_duplicates(
-        subset=["frame", "cx", "cy"], keep="first"
-    )
-
     long["x_r"] = long["x"].round(2)
     long["y_r"] = long["y"].round(2)
 
     merged = long.merge(
-        dets[["frame", "cx", "cy", "x1", "y1", "x2", "y2"]],
+        dets,
         left_on=["frame", "x_r", "y_r"],
         right_on=["frame", "cx", "cy"],
         how="inner",   # drop rows where no detection found (Kalman-only frames)
@@ -185,13 +200,12 @@ def _tracker_mot_lines(wide_df: pd.DataFrame, det_csv: Path) -> list[str]:
 
 # ── Per-combo evaluation ────────────────────────────────────────────────────────
 
-def _run_combo(
-    params: dict,
-    wide_csv: str,
-    gt_txt: Path,
-    tr_txt: Path,
-) -> dict[str, float]:
-    """Run one parameter combination; return dict of metric values per sequence."""
+def _run_combo(params: dict) -> dict[str, float]:
+    """Run one parameter combination; return dict of metric values per sequence.
+
+    Self-contained: builds its own temp files so this function is safe to call
+    concurrently from a process pool.
+    """
     # Look up behavioral weight preset; drop bw_preset from tracker kwargs.
     preset = BW_PRESETS[params["bw_preset"]]
     behavioral_weights = {k: v for k, v in preset.items() if k != "name"}
@@ -199,42 +213,49 @@ def _run_combo(
     all_params = {**FIXED_PARAMS, **flat_params, "behavioral_weights": behavioral_weights}
     seq_results: dict[str, dict] = {}
 
-    for seq, scfg in SEQUENCES.items():
-        vial_rois = {k: tuple(v) for k, v in json.load(open(scfg["roi_json"])).items()}
-        all_params["expected_count"] = scfg["expected_count"]
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        wide_csv = str(tmp_dir / "wide.csv")
+        gt_txt = tmp_dir / "gt.txt"
+        tr_txt = tmp_dir / "tr.txt"
 
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            wide_df, _ = export_tracks_xy_tuple_csv_one_config(
-                video_path=str(scfg["video"]),
-                output_csv=wide_csv,
-                api_key="",
-                model_id="",
-                det_log_csv=str(scfg["det_csv"]),
-                vial_rois=vial_rois,
-                fps_assumed=scfg["fps"],
-                **all_params,
+        for seq in SEQUENCES:
+            cache = _get_seq_cache(seq)
+            scfg = cache["scfg"]
+            all_params["expected_count"] = scfg["expected_count"]
+
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                wide_df, _ = export_tracks_xy_tuple_csv_one_config(
+                    video_path=str(scfg["video"]),
+                    output_csv=wide_csv,
+                    api_key="",
+                    model_id="",
+                    det_log_csv=str(scfg["det_csv"]),
+                    vial_rois=cache["vial_rois"],
+                    fps_assumed=scfg["fps"],
+                    **all_params,
+                )
+
+            tr_lines = _tracker_mot_lines(wide_df, cache["dets"])
+            if not tr_lines:
+                seq_results[seq] = {"HOTA": 0.0, "DetA": 0.0, "AssA": 0.0, "IDSW": 9999}
+                continue
+
+            gt_txt.write_text("\n".join(cache["gt_lines"]) + "\n", encoding="utf-8")
+            tr_txt.write_text("\n".join(tr_lines) + "\n", encoding="utf-8")
+
+            r = evaluate_mot_sequence(
+                gt_path=gt_txt, tracker_path=tr_txt,
+                metrics=["HOTA", "CLEAR"],
             )
-
-        tr_lines = _tracker_mot_lines(wide_df, scfg["det_csv"])
-        if not tr_lines:
-            seq_results[seq] = {"HOTA": 0.0, "DetA": 0.0, "AssA": 0.0, "IDSW": 9999}
-            continue
-
-        gt_txt.write_text("\n".join(_load_gt_mot(seq)) + "\n", encoding="utf-8")
-        tr_txt.write_text("\n".join(tr_lines) + "\n", encoding="utf-8")
-
-        r = evaluate_mot_sequence(
-            gt_path=gt_txt, tracker_path=tr_txt,
-            metrics=["HOTA", "CLEAR"],
-        )
-        seq_results[seq] = {
-            "HOTA": float(r.HOTA.HOTA),
-            "DetA": float(r.HOTA.DetA),
-            "AssA": float(r.HOTA.AssA),
-            "IDSW": int(r.CLEAR.IDSW),
-            "MOTA": float(r.CLEAR.MOTA),
-        }
+            seq_results[seq] = {
+                "HOTA": float(r.HOTA.HOTA),
+                "DetA": float(r.HOTA.DetA),
+                "AssA": float(r.HOTA.AssA),
+                "IDSW": int(r.CLEAR.IDSW),
+                "MOTA": float(r.CLEAR.MOTA),
+            }
 
     row: dict[str, Any] = dict(params)
     row["bw_name"] = preset["name"]
@@ -253,6 +274,15 @@ def _run_combo(
 
 # ── Main ────────────────────────────────────────────────────────────────────────
 
+def _safe_run(params: dict):
+    """Module-level wrapper so ProcessPoolExecutor can pickle it."""
+    try:
+        return _run_combo(params)
+    except Exception as e:
+        print(f"  ERROR in combo {params}: {e}", flush=True)
+        return None
+
+
 def _combo_key(params: dict) -> str:
     return "|".join(f"{k}={v}" for k, v in sorted(params.items()))
 
@@ -266,6 +296,8 @@ def main() -> None:
                         help="Total number of parallel jobs")
     parser.add_argument("--merge", action="store_true",
                         help="Merge all per-job CSVs into a single sorted results file and exit")
+    parser.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 1)),
+                        help="Worker processes within this job (default: os.cpu_count())")
     args = parser.parse_args()
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -320,44 +352,47 @@ def main() -> None:
         print()
 
     all_rows = list(existing_rows)
+    pending = [p for p in chunk if _combo_key(p) not in done_keys]
+    n_pending = len(pending)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_dir  = Path(tmp)
-        wide_csv = str(tmp_dir / "wide.csv")
-        gt_txt   = tmp_dir / "gt.txt"
-        tr_txt   = tmp_dir / "tr.txt"
+    print(f"Workers    : {args.workers}\n")
 
-        t0 = time.time()
-        done_this_run = 0
+    t0 = time.time()
+    done_this_run = 0
 
-        for i, params in enumerate(chunk):
-            ck = _combo_key(params)
-            if ck in done_keys:
+    def _flush() -> None:
+        pd.DataFrame(all_rows).to_csv(job_csv, index=False)
+
+    if args.workers <= 1:
+        results_iter = ((p, _safe_run(p)) for p in pending)
+    else:
+        ex = ProcessPoolExecutor(max_workers=args.workers)
+        futures = {ex.submit(_safe_run, p): p for p in pending}
+        results_iter = ((futures[f], f.result()) for f in as_completed(futures))
+
+    try:
+        for i, (params, row) in enumerate(results_iter, start=1):
+            if row is None:
+                print(f"  [{i:4d}/{n_pending}] ERROR: params={params}")
                 continue
-
-            try:
-                row = _run_combo(params, wide_csv, gt_txt, tr_txt)
-            except Exception as e:
-                print(f"  [{i+1:4d}/{n}] ERROR: {e}  params={params}")
-                continue
-
             all_rows.append(row)
-            done_keys.add(ck)
+            done_keys.add(_combo_key(params))
             done_this_run += 1
-
-            # Incremental save to per-job file
-            pd.DataFrame(all_rows).to_csv(job_csv, index=False)
+            _flush()
 
             elapsed = time.time() - t0
             rate    = done_this_run / elapsed
-            remaining = n - len(done_keys)
+            remaining = n_pending - done_this_run
             eta     = remaining / rate if rate > 0 else float("inf")
             print(
-                f"[{i+1:4d}/{n}]  HOTA={row['HOTA_combined']:.3f}  "
+                f"[{i:4d}/{n_pending}]  HOTA={row['HOTA_combined']:.3f}  "
                 f"AssA={row['AssA_combined']:.3f}  IDSW={row['IDSW_total']:4d}  "
                 f"| {' '.join(f'{k}={v}' for k, v in params.items())}  "
                 f"(ETA {eta/60:.1f}m)"
             )
+    finally:
+        if args.workers > 1:
+            ex.shutdown(wait=True)
 
     print(f"\nJob {args.job_id} done. Results: {job_csv}")
     print("Once all jobs finish, run:  python parameter_tuning/grid_search.py --merge")
