@@ -627,8 +627,18 @@ class OCSort(object):
         k_observations = np.array(
             [k_previous_obs(trk.observations, trk.age, _dt) for trk in self.trackers])
 
+        # Behavioral fingerprinting active? When all weights are zero the
+        # bonus term multiplies out to nothing, so skip the expensive profile
+        # and obs-window builds (~65% of per-frame work).
+        _bw_active = self.behavioral_weights is not None and any(
+            abs(v) > 0 for v in self.behavioral_weights.values()
+        )
+
         # Behavioral profiles for each active tracker (None if < 2 observations)
-        trk_profiles = [trk.behavioral_profile for trk in self.trackers]
+        if _bw_active:
+            trk_profiles = [trk.behavioral_profile for trk in self.trackers]
+        else:
+            trk_profiles = [None] * len(self.trackers)
         trk_last_centers = np.array([
             ((trk.last_observation[0] + trk.last_observation[2]) / 2.0,
              (trk.last_observation[1] + trk.last_observation[3]) / 2.0)
@@ -639,10 +649,13 @@ class OCSort(object):
         # Recent observation windows for behavioral fingerprint matching.
         # Each entry is a list of raw bbox arrays [x1,y1,x2,y2], most recent last,
         # limited to the last _dt observations so cost stays proportional to history used.
-        trk_obs_windows = []
-        for trk in self.trackers:
-            obs = [b for _, b, *_ in sorted(trk.observation_log, key=lambda t: t[0])]
-            trk_obs_windows.append(obs[-_dt:] if _dt > 0 else obs)
+        if _bw_active:
+            trk_obs_windows = []
+            for trk in self.trackers:
+                obs = [b for _, b, *_ in sorted(trk.observation_log, key=lambda t: t[0])]
+                trk_obs_windows.append(obs[-_dt:] if _dt > 0 else obs)
+        else:
+            trk_obs_windows = [[] for _ in self.trackers]
 
         # Build tracker state dicts for link_cost_batch — built once here and
         # reused in both round 1 and the jump round (jump round subsets by index).
@@ -655,7 +668,7 @@ class OCSort(object):
                 "last_cx":  tcx,
                 "last_cy":  tcy,
                 "velocity": trk.velocity,
-                "profile":  trk.behavioral_profile,
+                "profile":  trk.behavioral_profile if _bw_active else None,
                 "gap":      trk.time_since_update,
                 "vial_roi": trk.vial_roi,
                 "history":  trk.history_observations,
@@ -729,8 +742,8 @@ class OCSort(object):
             behavioral_weights=_scale_weights(
                 self.behavioral_weights,
                 self.overlap_weight_scale if overlap_det_mask.any() else 1.0,
-            ),
-            trk_obs_windows=trk_obs_windows,
+            ) if _bw_active else None,
+            trk_obs_windows=trk_obs_windows if _bw_active else None,
             link_trk_states=all_trk_states,
             overlap_det_mask=overlap_det_mask,
             overlap_iou_scale=self.overlap_iou_scale)
@@ -800,8 +813,8 @@ class OCSort(object):
                 behavioral_weights=_scale_weights(
                     self.behavioral_weights,
                     self.overlap_weight_scale if (jump_overlap_mask is not None and jump_overlap_mask.any()) else 1.0,
-                ),
-                trk_obs_windows=jump_obs_windows,
+                ) if _bw_active else None,
+                trk_obs_windows=jump_obs_windows if _bw_active else None,
                 link_trk_states=jump_trk_states,
                 overlap_det_mask=jump_overlap_mask,
                 overlap_iou_scale=self.overlap_iou_scale,
