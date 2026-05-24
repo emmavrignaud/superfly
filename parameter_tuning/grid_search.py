@@ -45,16 +45,16 @@ OUTPUTS = ROOT.parent / "outputs"
 
 SEQUENCES: dict[str, dict] = {
     "13d_002": {
-        "video":          OUTPUTS / "run_112" / "2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped.mp4",
-        "det_csv":        OUTPUTS / "run_112" / "detections_raw.csv",
-        "roi_json":       OUTPUTS / "run_112" / "vial_rois.json",
+        "video":          OUTPUTS / "run_131_13DPE_n002" / "2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped.mp4",
+        "det_csv":        OUTPUTS / "run_131_13DPE_n002" / "detections_raw.csv",
+        "roi_json":       OUTPUTS / "run_131_13DPE_n002" / "vial_rois.json",
         "fps":            29.88,
         "expected_count": 38,
     },
     "31d_005": {
-        "video":          OUTPUTS / "run_114_31DPE_n005" / "2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4",
-        "det_csv":        OUTPUTS / "run_114_31DPE_n005" / "detections_raw.csv",
-        "roi_json":       OUTPUTS / "run_114_31DPE_n005" / "vial_rois.json",
+        "video":          OUTPUTS / "run_132_31DPE_n005" / "2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4",
+        "det_csv":        OUTPUTS / "run_132_31DPE_n005" / "detections_raw.csv",
+        "roi_json":       OUTPUTS / "run_132_31DPE_n005" / "vial_rois.json",
         "fps":            29.893,
         "expected_count": 38,
     },
