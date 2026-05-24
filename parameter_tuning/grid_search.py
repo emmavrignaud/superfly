@@ -74,40 +74,29 @@ BW_PRESETS: list[dict] = [
     {"name": "off",          "speed": 0.00, "turning_angle": 0.00, "pause": 0.00, "acceleration": 0.00, "tortuosity": 0.00},
     {"name": "speed_only",   "speed": 1.00, "turning_angle": 0.00, "pause": 0.00, "acceleration": 0.00, "tortuosity": 0.00},
     {"name": "speed_turn",   "speed": 0.50, "turning_angle": 0.50, "pause": 0.00, "acceleration": 0.00, "tortuosity": 0.00},
-    {"name": "speed_tort",   "speed": 0.50, "turning_angle": 0.00, "pause": 0.00, "acceleration": 0.00, "tortuosity": 0.50},
     {"name": "speed_pause",  "speed": 0.50, "turning_angle": 0.00, "pause": 0.50, "acceleration": 0.00, "tortuosity": 0.00},
-    {"name": "kinematics",   "speed": 0.50, "turning_angle": 0.00, "pause": 0.00, "acceleration": 0.50, "tortuosity": 0.00},
-    {"name": "path_shape",   "speed": 0.00, "turning_angle": 0.50, "pause": 0.00, "acceleration": 0.00, "tortuosity": 0.50},
-    {"name": "speed_heavy",  "speed": 0.60, "turning_angle": 0.10, "pause": 0.10, "acceleration": 0.10, "tortuosity": 0.10},
     {"name": "equal_all",    "speed": 0.20, "turning_angle": 0.20, "pause": 0.20, "acceleration": 0.20, "tortuosity": 0.20},
-    {"name": "no_speed",     "speed": 0.00, "turning_angle": 0.25, "pause": 0.25, "acceleration": 0.25, "tortuosity": 0.25},
     {"name": "pause_heavy",  "speed": 0.20, "turning_angle": 0.10, "pause": 0.50, "acceleration": 0.10, "tortuosity": 0.10},
-    {"name": "tort_heavy",   "speed": 0.20, "turning_angle": 0.10, "pause": 0.10, "acceleration": 0.10, "tortuosity": 0.50},
 ]
 
 # ── Parameter grid ─────────────────────────────────────────────────────────────
-# Total combos = 4×5×4×4×4×4×3×3×4×3×12×3×2 = 39,813,120
+# Total combos = 4×4×4×4×4×3×3×6×3 = 165,888
 PARAM_GRID: dict[str, list] = {
     # Core association
     "confidence":                 [0.0,  0.10, 0.25, 0.55],
-    "minimum_matching_threshold": [0.01, 0.05, 0.10, 0.25, 0.50],
+    "minimum_matching_threshold": [0.05, 0.10, 0.25, 0.50],
     "inertia":                    [0.0,  0.10, 0.25, 0.50],
-    # Kalman noise
-    "brownian_pos_noise":         [5,    15,   30,   50  ],
     # OCM direction lookback (-1 = full frame history)
     "delta_t":                    [3,    10,   30,   -1  ],
-    # Jump round (all three swept together — they interact)
+    # Jump factor (iou_threshold and inertia fixed — see FIXED_PARAMS)
     "jump_factor":                [1.0,  2.0,  3.0,  4.0 ],
-    "jump_iou_threshold":         [0.01, 0.05, 0.20       ],
-    "jump_inertia":               [0.0,  0.05, 0.20       ],
     # Overlap handling
-    "overlap_weight_scale":       [1.0,  3.0,  6.0,  10.0],
+    "overlap_weight_scale":       [1.0,  3.0,  10.0      ],
     "overlap_iou_scale":          [0.05, 0.10, 0.20       ],
     # Behavioral fingerprint preset (index into BW_PRESETS)
     "bw_preset":                  list(range(len(BW_PRESETS))),
     # Count-aware spawning penalties
     "w_under":                    [5.0,  15.0, 30.0],
-    "w_over":                     [1.0,  2.0       ],
 }
 
 # Everything else held at current config values.
@@ -120,6 +109,11 @@ FIXED_PARAMS: dict[str, Any] = {
     "aspect_weight":               0.05,
     "edge_fraction":               0.1,
     "watershed_cfg":               None,   # disabled — tuning tracker params, not detector
+    # Removed from grid — weak discriminators fixed at sensible defaults
+    "brownian_pos_noise":          15,
+    "jump_iou_threshold":          0.05,
+    "jump_inertia":                0.05,
+    "w_over":                      2.0,
 }
 
 
