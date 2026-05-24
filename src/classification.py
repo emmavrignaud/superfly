@@ -310,7 +310,7 @@ def run_cross_validation(
             cv=splitter,
             scoring="accuracy",
             refit=True,
-            n_jobs=1,
+            n_jobs=-1,
         )
         search.fit(X, y, **fit_kwargs)
 

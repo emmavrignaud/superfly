@@ -189,7 +189,7 @@ classification:
   # Add squares and pairwise products of features as extra columns (more flexible classifier, slower).
   polynomial:
     enabled: true
-    degree: [2,3,4,5,6,7]                # 1 = off, 2 = +squares & pairs, 3 = +triples; list -> grid-search
+    degree: [3,4,7]                # 1 = off, 2 = +squares & pairs, 3 = +triples; list -> grid-search
     interaction_only: false  # true = skip squares/cubes, keep cross-products only
     include_bias: false      # adds a constant "1" column; almost never useful
 
