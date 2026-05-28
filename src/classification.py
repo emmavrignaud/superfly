@@ -90,7 +90,13 @@ def map_vial_to_genotype(run_dir: str) -> pd.DataFrame:
     vial_to_genotype = {f"vial{i + 1}": genotypes[i] for i in range(len(genotypes))}
 
     csv_path = os.path.join(run_dir, "ordered_tracks.csv")
-    df = pd.read_csv(csv_path)
+    if not os.path.exists(csv_path):
+        # Older runs used compact_tracks.csv with compact_id instead of ordered_id
+        csv_path = os.path.join(run_dir, "compact_tracks.csv")
+        df = pd.read_csv(csv_path)
+        df = df.rename(columns={"compact_id": "ordered_id"})
+    else:
+        df = pd.read_csv(csv_path)
     df["genotype"] = df["vial_id"].map(vial_to_genotype)
     return df
 

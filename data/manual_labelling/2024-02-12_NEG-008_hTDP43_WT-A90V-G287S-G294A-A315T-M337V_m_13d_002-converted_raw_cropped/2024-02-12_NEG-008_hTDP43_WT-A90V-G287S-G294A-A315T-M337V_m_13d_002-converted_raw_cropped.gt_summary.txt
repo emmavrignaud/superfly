@@ -1,4 +1,4 @@
-# Ground-truth export summary — 2026-05-10T17:07:55
+# Ground-truth export summary — 2026-05-20T14:50:58
 # CSV: 2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped.gt.csv
 
 frames in video        : 324

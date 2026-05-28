@@ -1,0 +1,35 @@
+{
+  "schema_version": 2,
+  "created_at": "2026-05-20T13:47:09",
+  "last_opened_at": "2026-05-20T13:47:09",
+  "last_saved_at": null,
+  "last_exported_at": null,
+  "labeler_git_commit": "7779061243404f9d4962ec95795323c4dd41f697",
+  "sources": {
+    "video": "C:/Users/emmav/Downloads/superfly/outputs/run_112/2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped.mp4",
+    "raw_detections_csv": "C:/Users/emmav/Downloads/superfly/outputs/run_112/detections_raw.csv",
+    "tracks_csv": "C:/Users/emmav/Downloads/superfly/parameter_tuning/data/ground_truth_13d_002_cleaned.csv"
+  },
+  "video": {
+    "frame_count": 324,
+    "fps": 29.88,
+    "width": 744,
+    "height": 426
+  },
+  "copy_actions": {
+    "copied": [
+      "2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted_raw_cropped.mp4",
+      "detections_raw.csv"
+    ],
+    "skipped": [],
+    "wrote": [
+      "tracks_long.csv"
+    ]
+  },
+  "annotation_counts": {
+    "total": 0,
+    "human": 0,
+    "ocsort": 0,
+    "tracks": 0
+  }
+}

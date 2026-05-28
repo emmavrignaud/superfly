@@ -114,13 +114,13 @@ roi:
   snap_enabled: true          # press 'S' in GUI to toggle per-vial
 latent_space:
   # Latent-space preprocessing, representation, and embedding controls.
-  representation_method: baseline   # baseline | autoencoder
+  representation_method: multitask   # baseline | autoencoder
   seed: 42
 
   # Low-dim embedding for the 3D scatter only (NOT used by classifiers).
   # Switch method to compare layouts. Each backend has its own block below.
   embedding:
-    method: umap                # umap | tsne | pca
+    method: tsne                # umap | tsne | pca  (umap requires umap-learn; tsne always available)
     # Pre-embedding PCA whitening, applied to the feature matrix before umap/tsne.
     # Keeps it off by default since the feature count is small; turn on if
     # you ever push features above ~50 or want to denoise the input.
@@ -132,7 +132,7 @@ latent_space:
       metric: euclidean
       n_components: 3
     tsne:
-      perplexity: 5            # rule of thumb: <= N/3 for small N
+      perplexity: 20           # ~sqrt(N) for ~100-200 flies; 5 was too small
       learning_rate: auto       # "auto" -> max(N/12, 50); else a float
       init: pca                 # pca = deterministic + better global structure
       metric: euclidean
@@ -150,6 +150,12 @@ latent_space:
     val_fraction: 0.2
     patience: 30
     verbose: true
+
+  multitask:
+    # Supervision weights for the multitask autoencoder.
+    # Set representation_method: multitask above to activate.
+    n_age_classes: 4   # 13d=0, 28d=1, 31d=2, 41d=3
+    age_weight: 1.0    # scale of CE age loss relative to reconstruction MSE
 
 classification:
   # Genotype classifier. One method is active everywhere (this file, CLI, notebook,
@@ -188,7 +194,7 @@ classification:
 
   # Add squares and pairwise products of features as extra columns (more flexible classifier, slower).
   polynomial:
-    enabled: true
+    enabled: false
     degree: [3,4,7]                # 1 = off, 2 = +squares & pairs, 3 = +triples; list -> grid-search
     interaction_only: false  # true = skip squares/cubes, keep cross-products only
     include_bias: false      # adds a constant "1" column; almost never useful

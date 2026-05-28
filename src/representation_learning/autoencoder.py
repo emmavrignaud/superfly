@@ -1,11 +1,200 @@
 """
 Dense autoencoder utilities for per-fly vector representations.
+Implemented in pure numpy + scipy — no PyTorch dependency.
+
+fit_autoencoder_latent    — reconstruction-only
+fit_multitask_autoencoder — reconstruction + age classification head
 """
 
 from __future__ import annotations
 
 import numpy as np
 
+
+# ---------------------------------------------------------------------------
+# Internals: numpy Adam + MLP layers
+# ---------------------------------------------------------------------------
+
+def _relu(x: np.ndarray) -> np.ndarray:
+    return np.maximum(0.0, x)
+
+
+def _relu_back(grad: np.ndarray, pre: np.ndarray) -> np.ndarray:
+    return grad * (pre > 0)
+
+
+def _softmax(x: np.ndarray) -> np.ndarray:
+    e = np.exp(x - x.max(axis=1, keepdims=True))
+    return e / e.sum(axis=1, keepdims=True)
+
+
+def _he_init(rng: np.random.Generator, fan_in: int, fan_out: int) -> np.ndarray:
+    return rng.standard_normal((fan_in, fan_out)) * np.sqrt(2.0 / fan_in)
+
+
+class _AdamState:
+    """Per-parameter Adam moment accumulators."""
+    def __init__(self, shapes: list[tuple]):
+        self.m = [np.zeros(s) for s in shapes]
+        self.v = [np.zeros(s) for s in shapes]
+        self.t = 0
+
+    def step(
+        self,
+        params: list[np.ndarray],
+        grads: list[np.ndarray],
+        lr: float,
+        b1: float = 0.9,
+        b2: float = 0.999,
+        eps: float = 1e-8,
+        wd: float = 0.0,
+    ) -> None:
+        self.t += 1
+        for i, (p, g) in enumerate(zip(params, grads)):
+            if wd > 0:
+                g = g + wd * p
+            self.m[i] = b1 * self.m[i] + (1 - b1) * g
+            self.v[i] = b2 * self.v[i] + (1 - b2) * g ** 2
+            m_hat = self.m[i] / (1 - b1 ** self.t)
+            v_hat = self.v[i] / (1 - b2 ** self.t)
+            p -= lr * m_hat / (np.sqrt(v_hat) + eps)
+
+
+def _build_params(
+    rng: np.random.Generator,
+    in_dim: int,
+    hidden_dims: tuple,
+    latent_dim: int,
+) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    """Initialise encoder + decoder weight matrices and bias vectors."""
+    enc_dims = [in_dim] + list(hidden_dims) + [latent_dim]
+    dec_dims = [latent_dim] + list(reversed(hidden_dims)) + [in_dim]
+    all_dims = enc_dims + dec_dims[1:]   # share nothing; decoder is separate
+
+    Ws, bs = [], []
+    for a, b in zip(all_dims[:-1], all_dims[1:]):
+        Ws.append(_he_init(rng, a, b))
+        bs.append(np.zeros(b))
+    return Ws, bs
+
+
+def _forward(
+    x: np.ndarray,
+    Ws: list[np.ndarray],
+    bs: list[np.ndarray],
+    n_enc: int,
+) -> tuple[np.ndarray, np.ndarray, list[np.ndarray]]:
+    """
+    Full encoder→decoder forward pass.
+
+    Returns (x_hat, z, pre_activations).
+    pre_activations[i] is the pre-ReLU value at layer i (used for backprop).
+    ReLU is applied at all layers except the latent layer and the output.
+    """
+    pre = []
+    h = x
+    for i, (W, b) in enumerate(zip(Ws, bs)):
+        a = h @ W + b
+        pre.append(a)
+        is_latent = (i == n_enc - 1)
+        is_output = (i == len(Ws) - 1)
+        if is_latent or is_output:
+            h = a          # no activation
+        else:
+            h = _relu(a)
+        if is_latent:
+            z = h
+    x_hat = h
+    return x_hat, z, pre
+
+
+def _encoder_forward(
+    x: np.ndarray,
+    Ws: list[np.ndarray],
+    bs: list[np.ndarray],
+    n_enc: int,
+) -> tuple[np.ndarray, list[np.ndarray]]:
+    pre = []
+    h = x
+    for i in range(n_enc):
+        a = h @ Ws[i] + bs[i]
+        pre.append(a)
+        h = a if (i == n_enc - 1) else _relu(a)
+    return h, pre
+
+
+def _mse(pred: np.ndarray, target: np.ndarray) -> float:
+    return float(np.mean((pred - target) ** 2))
+
+
+def _mse_grad(pred: np.ndarray, target: np.ndarray) -> np.ndarray:
+    return 2 * (pred - target) / pred.size
+
+
+def _ce_loss(logits: np.ndarray, labels: np.ndarray) -> float:
+    p = _softmax(logits)
+    n = len(labels)
+    return float(-np.mean(np.log(p[np.arange(n), labels] + 1e-12)))
+
+
+def _ce_grad(logits: np.ndarray, labels: np.ndarray) -> np.ndarray:
+    p = _softmax(logits)
+    p[np.arange(len(labels)), labels] -= 1
+    return p / len(labels)
+
+
+def _backprop(
+    x: np.ndarray,
+    Ws: list[np.ndarray],
+    bs: list[np.ndarray],
+    pre: list[np.ndarray],
+    n_enc: int,
+    dout: np.ndarray,            # gradient w.r.t. x_hat (MSE grad)
+    age_dz: np.ndarray | None,   # gradient w.r.t. z from age head (or None)
+) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    """Backprop through encoder + decoder; returns dW, db lists."""
+    n_layers = len(Ws)
+    dWs = [None] * n_layers
+    dbs = [None] * n_layers
+
+    # Rebuild activations needed for weight gradients
+    acts = [x]
+    h = x
+    for i, (W, b) in enumerate(zip(Ws, bs)):
+        is_latent = (i == n_enc - 1)
+        is_output = (i == n_layers - 1)
+        h = pre[i] if (is_latent or is_output) else _relu(pre[i])
+        acts.append(h)
+
+    # Backprop decoder (layers n_enc .. n_layers-1)
+    delta = dout   # d_loss / d_x_hat, shape (batch, in_dim)
+    for i in range(n_layers - 1, n_enc - 1, -1):
+        dWs[i] = acts[i].T @ delta
+        dbs[i] = delta.sum(axis=0)
+        d_in = delta @ Ws[i].T
+        if i > n_enc:   # apply ReLU backprop for hidden decoder layers
+            d_in = _relu_back(d_in, pre[i - 1])
+        delta = d_in
+
+    # delta is now d_loss / d_z; add age head gradient if present
+    if age_dz is not None:
+        delta = delta + age_dz
+
+    # Backprop encoder (layers 0 .. n_enc-1)
+    for i in range(n_enc - 1, -1, -1):
+        dWs[i] = acts[i].T @ delta
+        dbs[i] = delta.sum(axis=0)
+        d_in = delta @ Ws[i].T
+        if i > 0:
+            d_in = _relu_back(d_in, pre[i - 1])
+        delta = d_in
+
+    return dWs, dbs
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def fit_autoencoder_latent(
     X: np.ndarray,
@@ -20,19 +209,7 @@ def fit_autoencoder_latent(
     seed: int = 42,
     verbose: bool = True,
 ) -> tuple[np.ndarray, dict]:
-    """
-    Train a dense autoencoder and return latent vectors for all rows.
-    """
-    try:
-        import torch
-        import torch.nn as nn
-        from torch.utils.data import DataLoader, TensorDataset
-    except Exception as exc:
-        raise ImportError(
-            "PyTorch is required for autoencoder latent learning. "
-            "Install with `pip install torch` or add it to environment.yml."
-        ) from exc
-
+    """Train a dense autoencoder and return latent vectors for all rows."""
     if X.ndim != 2 or len(X) < 4:
         return X, {"used_autoencoder": False, "reason": "insufficient_data"}
 
@@ -45,83 +222,51 @@ def fit_autoencoder_latent(
     if len(train_idx) < 2:
         return X, {"used_autoencoder": False, "reason": "insufficient_train_rows"}
 
-    x_train = torch.tensor(X[train_idx], dtype=torch.float32)
-    x_val = torch.tensor(X[val_idx], dtype=torch.float32)
-    x_all = torch.tensor(X, dtype=torch.float32)
-
     in_dim = X.shape[1]
-    h1, h2 = hidden_dims
     latent_dim = int(min(max(2, latent_dim), max(2, in_dim - 1)))
+    n_enc = len(hidden_dims) + 1   # number of encoder layers
 
-    class AE(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.encoder = nn.Sequential(
-                nn.Linear(in_dim, h1),
-                nn.ReLU(),
-                nn.Linear(h1, h2),
-                nn.ReLU(),
-                nn.Linear(h2, latent_dim),
-            )
-            self.decoder = nn.Sequential(
-                nn.Linear(latent_dim, h2),
-                nn.ReLU(),
-                nn.Linear(h2, h1),
-                nn.ReLU(),
-                nn.Linear(h1, in_dim),
-            )
+    Ws, bs = _build_params(rng, in_dim, hidden_dims, latent_dim)
+    adam = _AdamState([w.shape for w in Ws] + [b.shape for b in bs])
 
-        def forward(self, x):
-            z = self.encoder(x)
-            x_hat = self.decoder(z)
-            return x_hat, z
+    X_tr = X[train_idx].astype(np.float64)
+    X_val = X[val_idx].astype(np.float64)
 
-    torch.manual_seed(seed)
-    model = AE()
-    loss_fn = nn.MSELoss()
-    opt = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-
-    train_loader = DataLoader(TensorDataset(x_train), batch_size=batch_size, shuffle=True)
-
-    best_state = None
     best_val = float("inf")
+    best_Ws = [w.copy() for w in Ws]
+    best_bs = [b.copy() for b in bs]
     stale = 0
-    history: list[tuple[int, float, float]] = []
+    history = []
 
     for ep in range(1, epochs + 1):
-        model.train()
+        perm = rng.permutation(len(X_tr))
         tr_losses = []
-        for (xb,) in train_loader:
-            opt.zero_grad()
-            xh, _ = model(xb)
-            loss = loss_fn(xh, xb)
-            loss.backward()
-            opt.step()
-            tr_losses.append(float(loss.item()))
+        for start in range(0, len(X_tr), batch_size):
+            xb = X_tr[perm[start:start + batch_size]]
+            x_hat, _, pre = _forward(xb, Ws, bs, n_enc)
+            loss = _mse(x_hat, xb)
+            dout = _mse_grad(x_hat, xb)
+            dWs, dbs = _backprop(xb, Ws, bs, pre, n_enc, dout, None)
+            adam.step(Ws + bs, dWs + dbs, lr=learning_rate, wd=weight_decay)
+            tr_losses.append(loss)
 
-        model.eval()
-        with torch.no_grad():
-            xv_hat, _ = model(x_val)
-            val_loss = float(loss_fn(xv_hat, x_val).item())
-        tr_loss = float(np.mean(tr_losses)) if tr_losses else np.nan
-        history.append((ep, tr_loss, val_loss))
+        x_val_hat, _, _ = _forward(X_val, Ws, bs, n_enc)
+        val_loss = _mse(x_val_hat, X_val)
+        history.append((ep, float(np.mean(tr_losses)), val_loss))
 
         if val_loss < best_val - 1e-8:
             best_val = val_loss
+            best_Ws = [w.copy() for w in Ws]
+            best_bs = [b.copy() for b in bs]
             stale = 0
-            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
         else:
             stale += 1
             if stale >= patience:
                 break
 
-    if best_state is not None:
-        model.load_state_dict(best_state)
+    # Restore best weights and extract latent vectors
+    _, Z, _ = _forward(X.astype(np.float64), best_Ws, best_bs, n_enc)
 
-    model.eval()
-    with torch.no_grad():
-        _, z_all = model(x_all)
-    Z = z_all.cpu().numpy()
     if verbose:
         print(
             f"[autoencoder] trained epochs={len(history)} latent_dim={latent_dim} "
@@ -133,4 +278,156 @@ def fit_autoencoder_latent(
         "latent_dim": latent_dim,
         "epochs_trained": len(history),
         "best_val_mse": best_val,
+    }
+
+
+def fit_multitask_autoencoder(
+    X: np.ndarray,
+    y_age: np.ndarray | None = None,
+    n_age_classes: int = 4,
+    age_weight: float = 1.0,
+    latent_dim: int = 64,
+    hidden_dims: tuple[int, int] = (512, 256),
+    epochs: int = 300,
+    batch_size: int = 64,
+    learning_rate: float = 1e-3,
+    weight_decay: float = 1e-5,
+    val_fraction: float = 0.2,
+    patience: int = 30,
+    seed: int = 42,
+    verbose: bool = True,
+) -> tuple[np.ndarray, dict]:
+    """
+    Train a multitask autoencoder with an age classification head.
+
+    y_age: integer array of age class labels aligned with X rows.
+           Use -1 for unknown age — masked out of age loss but used for reconstruction.
+
+    Returns latent vectors Z (n_samples × latent_dim) and a training info dict.
+    """
+    if X.ndim != 2 or len(X) < 4:
+        return X, {"used_autoencoder": False, "reason": "insufficient_data"}
+
+    has_age = y_age is not None and len(y_age) == len(X)
+
+    rng = np.random.default_rng(seed)
+    idx = np.arange(len(X))
+    rng.shuffle(idx)
+    n_val = max(1, int(round(len(X) * val_fraction)))
+    val_idx = idx[:n_val]
+    train_idx = idx[n_val:]
+    if len(train_idx) < 2:
+        return X, {"used_autoencoder": False, "reason": "insufficient_train_rows"}
+
+    in_dim = X.shape[1]
+    latent_dim = int(min(max(2, latent_dim), max(2, in_dim - 1)))
+    n_enc = len(hidden_dims) + 1
+
+    Ws, bs = _build_params(rng, in_dim, hidden_dims, latent_dim)
+
+    # Age head: W_age (latent_dim × n_age_classes), b_age
+    W_age = _he_init(rng, latent_dim, n_age_classes)
+    b_age = np.zeros(n_age_classes)
+
+    all_params = Ws + bs + [W_age, b_age]
+    adam = _AdamState([p.shape for p in all_params])
+
+    X_tr = X[train_idx].astype(np.float64)
+    X_val = X[val_idx].astype(np.float64)
+    age_arr = np.array(y_age, dtype=np.int64) if has_age else None
+    age_tr = age_arr[train_idx] if has_age else None
+    age_val_arr = age_arr[val_idx] if has_age else None
+
+    best_val = float("inf")
+    best_Ws = [w.copy() for w in Ws]
+    best_bs = [b.copy() for b in bs]
+    best_W_age, best_b_age = W_age.copy(), b_age.copy()
+    stale = 0
+    history = []
+
+    for ep in range(1, epochs + 1):
+        perm = rng.permutation(len(X_tr))
+        tr_losses = []
+        for start in range(0, len(X_tr), batch_size):
+            bi = perm[start:start + batch_size]
+            xb = X_tr[bi]
+            x_hat, z, pre = _forward(xb, Ws, bs, n_enc)
+
+            # Reconstruction loss
+            loss = _mse(x_hat, xb)
+            dout = _mse_grad(x_hat, xb)
+
+            # Age head loss (masked)
+            age_dz = None
+            if has_age and age_weight > 0:
+                ab = age_tr[bi]
+                mask = ab >= 0
+                if mask.any():
+                    logits = z[mask] @ W_age + b_age
+                    age_loss = _ce_loss(logits, ab[mask])
+                    loss = loss + age_weight * age_loss
+
+                    d_logits = age_weight * _ce_grad(logits, ab[mask])
+                    dW_age = z[mask].T @ d_logits
+                    db_age = d_logits.sum(axis=0)
+
+                    # gradient of age loss w.r.t. z (full batch, zeros for masked-out rows)
+                    age_dz = np.zeros_like(z)
+                    age_dz[mask] = d_logits @ W_age.T
+
+                    W_age -= learning_rate * dW_age   # simple SGD for age head
+                    b_age -= learning_rate * db_age   # (Adam handled below for main params)
+
+            dWs, dbs = _backprop(xb, Ws, bs, pre, n_enc, dout, age_dz)
+            adam.step(Ws + bs, dWs + dbs, lr=learning_rate, wd=weight_decay)
+            tr_losses.append(loss)
+
+        # Validation loss
+        x_val_hat, z_val, _ = _forward(X_val, Ws, bs, n_enc)
+        val_loss = _mse(x_val_hat, X_val)
+        if has_age and age_weight > 0 and age_val_arr is not None:
+            mask = age_val_arr >= 0
+            if mask.any():
+                logits_val = z_val[mask] @ W_age + b_age
+                val_loss += age_weight * _ce_loss(logits_val, age_val_arr[mask])
+
+        history.append((ep, float(np.mean(tr_losses)), val_loss))
+
+        if val_loss < best_val - 1e-8:
+            best_val = val_loss
+            best_Ws = [w.copy() for w in Ws]
+            best_bs = [b.copy() for b in bs]
+            best_W_age, best_b_age = W_age.copy(), b_age.copy()
+            stale = 0
+        else:
+            stale += 1
+            if stale >= patience:
+                break
+
+    # Extract latent vectors with best weights
+    _, Z, _ = _forward(X.astype(np.float64), best_Ws, best_bs, n_enc)
+
+    # Age accuracy on labelled samples
+    age_acc = None
+    if has_age and age_arr is not None:
+        mask = age_arr >= 0
+        if mask.any():
+            logits_all = Z[mask] @ best_W_age + best_b_age
+            preds = logits_all.argmax(axis=1)
+            age_acc = float((preds == age_arr[mask]).mean())
+
+    if verbose:
+        acc_str = f" age_acc={age_acc:.3f}" if age_acc is not None else ""
+        print(
+            f"[multitask_ae] trained epochs={len(history)} latent_dim={latent_dim} "
+            f"best_val_loss={best_val:.6g}{acc_str}"
+        )
+
+    return Z, {
+        "used_autoencoder": True,
+        "multitask": True,
+        "latent_dim": latent_dim,
+        "epochs_trained": len(history),
+        "best_val_loss": best_val,
+        "age_accuracy": age_acc,
     }

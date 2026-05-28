@@ -28,20 +28,38 @@ if str(_REPO_ROOT) not in _sys.path:
 from src.classification import genotype_category_order
 from src.features import extract_behavioral_features, aggregate_per_fly_features
 from src.plot_colors import genotype_color_map_for_dataframe
-from src.representation_learning import fit_autoencoder_latent
+from src.representation_learning import fit_autoencoder_latent, fit_multitask_autoencoder
 from utils import load_config as _load_config  # noqa: E402
 
 
 _CFG = _load_config(_REPO_ROOT / "config.yaml").latent_space
 
 
-def maybe_apply_autoencoder(X: np.ndarray, name: str) -> tuple[np.ndarray, dict]:
+def _parse_age_label(run_name: str) -> int:
+    """Extract age class index from a run/video name.
+
+    Handles formats like 'run_80_13DPE_n002' and '2024-02-12_..._m_13d_002'.
+    Returns -1 if age cannot be parsed (treated as unknown by the multitask AE).
+    """
+    import re
+    m = re.search(r'[_\-](\d+)[dD](?:PE|pe)?[_\-]', str(run_name))
+    if m:
+        days = int(m.group(1))
+        return {13: 0, 28: 1, 31: 2, 41: 3}.get(days, -1)
+    return -1
+
+
+def maybe_apply_autoencoder(
+    X: np.ndarray,
+    name: str,
+    meta: pd.DataFrame | None = None,
+) -> tuple[np.ndarray, dict]:
     method = str(_CFG.representation_method).strip().lower()
-    if method != "autoencoder":
+    if method not in ("autoencoder", "multitask"):
         return X, {"used_autoencoder": False, "representation_method": method}
+
     ae = _CFG.autoencoder
-    Z, info = fit_autoencoder_latent(
-        X=X,
+    shared_kwargs = dict(
         latent_dim=int(ae.latent_dim),
         hidden_dims=tuple(ae.hidden_dims),
         epochs=int(ae.epochs),
@@ -53,9 +71,27 @@ def maybe_apply_autoencoder(X: np.ndarray, name: str) -> tuple[np.ndarray, dict]
         seed=int(_CFG.seed),
         verbose=bool(ae.verbose),
     )
+
+    if method == "multitask":
+        mt = _CFG.multitask
+        y_age = None
+        if meta is not None and "run" in meta.columns:
+            y_age = np.array([_parse_age_label(r) for r in meta["run"].values], dtype=np.int64)
+            n_labelled = int((y_age >= 0).sum())
+            print(f"[latent_space] {name} multitask: {n_labelled}/{len(y_age)} samples have age labels")
+        Z, info = fit_multitask_autoencoder(
+            X=X,
+            y_age=y_age,
+            n_age_classes=int(mt.n_age_classes),
+            age_weight=float(mt.age_weight),
+            **shared_kwargs,
+        )
+    else:
+        Z, info = fit_autoencoder_latent(X=X, **shared_kwargs)
+
     out = {"representation_method": method}
     out.update(info)
-    print(f"[latent_space] {name} representation -> autoencoder latent shape={Z.shape}")
+    print(f"[latent_space] {name} representation -> latent shape={Z.shape}")
     return Z, out
 
 
@@ -369,47 +405,107 @@ def embed(X: np.ndarray) -> tuple[np.ndarray, dict]:
     )
 
 
+def build_aggregate_features_matrix(
+    df_fly: pd.DataFrame,
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Build X3: per-fly aggregate behavioral features only (no raw trajectory or histograms).
+
+    These are exactly the features used by the classifier and shown in the box plots —
+    pause_fraction, velocity/acceleration stats, tortuosity, etc. Using them for the
+    embedding gives a much cleaner layout than raw trajectories.
+    """
+    fly_ids = sorted(df_fly["ordered_id"].astype(str).unique().tolist())
+    cols_drop = {"ordered_id", "vial_id", "genotype", "run"}
+    numeric_cols = [
+        c for c in df_fly.columns
+        if c not in cols_drop and np.issubdtype(df_fly[c].dtype, np.number)
+    ]
+    X = (
+        df_fly.set_index(df_fly["ordered_id"].astype(str))[numeric_cols]
+        .reindex(fly_ids)
+        .to_numpy(dtype=float)
+    )
+    X = StandardScaler().fit_transform(X)
+    meta = (
+        df_fly[["ordered_id", "genotype", "run"]]
+        .assign(ordered_id=lambda d: d["ordered_id"].astype(str))
+        .set_index("ordered_id")
+        .reindex(fly_ids)
+        .reset_index()
+        .rename(columns={"index": "ordered_id"})
+    )
+    return X, meta
+
+
+_AGE_CLASS_LABELS = {0: "13d", 1: "28d", 2: "31d", 3: "41d"}
+
+
+def _add_age_label(meta: pd.DataFrame) -> pd.DataFrame:
+    """Add an 'age_label' column to a meta dataframe using the run name."""
+    meta = meta.copy()
+    meta["age_label"] = meta["run"].apply(
+        lambda r: _AGE_CLASS_LABELS.get(_parse_age_label(r), "unknown")
+    )
+    return meta
+
+
 def make_embedding_figure(
     emb: np.ndarray,
     meta: pd.DataFrame,
     title: str,
     method: str | None = None,
+    color_col: str = "genotype",
 ) -> go.Figure:
-    """3D scatter of the low-dim embedding, coloured by genotype.
+    """3D scatter of the low-dim embedding.
+
+    color_col: column in meta to color by. Use "genotype" (default) for the
+    standard genotype-colored view, or "age_label" to visualise age separation.
 
     If the embedding has fewer than 3 components it is zero-padded so the
     scatter still renders (the padded axes carry no information).
     """
     if emb.shape[1] < 3:
         emb = np.pad(emb, ((0, 0), (0, 3 - emb.shape[1])), mode="constant")
+
+    hover_extra = [c for c in ("ordered_id", "run", "genotype", "age_label") if c in meta.columns and c != color_col]
     d = pd.DataFrame(
         {
             "component_1": emb[:, 0],
             "component_2": emb[:, 1],
             "component_3": emb[:, 2],
-            "genotype": meta["genotype"].values,
-            "run": meta["run"].values,
-            "ordered_id": meta["ordered_id"].values,
         }
     )
-    full_title = f"{title} ({method})" if method else title
-    pref = genotype_category_order(meta)
-    color_discrete_map = genotype_color_map_for_dataframe(d, pref)
-    cat_g = [g for g in pref if g in set(d["genotype"].astype(str))]
-    for g in sorted(set(d["genotype"].astype(str)) - set(cat_g)):
-        cat_g.append(g)
+    for col in [color_col] + hover_extra:
+        if col in meta.columns:
+            d[col] = meta[col].values
 
-    fig = px.scatter_3d(
-        d,
+    full_title = f"{title} ({method})" if method else title
+
+    scatter_kwargs: dict = dict(
         x="component_1",
         y="component_2",
         z="component_3",
-        color="genotype",
-        hover_data=["ordered_id", "run"],
-        category_orders={"genotype": cat_g},
-        color_discrete_map=color_discrete_map,
+        color=color_col,
+        hover_data=hover_extra,
         title=full_title,
     )
+
+    if color_col == "genotype":
+        pref = genotype_category_order(meta)
+        color_discrete_map = genotype_color_map_for_dataframe(d, pref)
+        present = set(d["genotype"].astype(str))
+        cat = [g for g in pref if g in present]
+        for g in sorted(present - set(cat)):
+            cat.append(g)
+        scatter_kwargs["category_orders"] = {"genotype": cat}
+        scatter_kwargs["color_discrete_map"] = color_discrete_map
+    elif color_col == "age_label":
+        age_order = [v for v in _AGE_CLASS_LABELS.values() if v in set(d[color_col].astype(str))]
+        for v in sorted(set(d[color_col].astype(str)) - set(age_order)):
+            age_order.append(v)
+        scatter_kwargs["category_orders"] = {"age_label": age_order}
+
+    fig = px.scatter_3d(d, **scatter_kwargs)
     fig.update_traces(marker=dict(size=4, opacity=0.85))
     fig.update_layout(
         height=620,
@@ -534,25 +630,44 @@ def run_latent_space_analysis(df_raw: pd.DataFrame) -> dict:
     df_fly["run"] = df_fly["ordered_id"].map(meta["run"])
 
     X1, m1, T = build_xy_plus_features_matrix(df_feat, df_fly)
+    m1 = _add_age_label(m1)
     X1_eff, pca1 = maybe_apply_pca(X1)
-    X1_repr, repr1 = maybe_apply_autoencoder(X1_eff, "analysis1")
+    X1_repr, repr1 = maybe_apply_autoencoder(X1_eff, "analysis1", meta=m1)
     emb1, embed1_info = embed(X1_repr)
     fig1 = make_embedding_figure(
-        emb1,
-        m1,
-        "Fly trajectory and kinematic embedding",
-        method=embed1_info.get("method"),
+        emb1, m1, "Fly trajectory + kinematic embedding", method=embed1_info.get("method"),
+    )
+    fig1_age = make_embedding_figure(
+        emb1, m1, "Fly trajectory + kinematic embedding (age)", method=embed1_info.get("method"),
+        color_col="age_label",
     )
 
     X2, m2, edges = build_hist_kinematics_matrix(df_feat)
+    m2 = _add_age_label(m2)
     X2_eff, pca2 = maybe_apply_pca(X2)
-    X2_repr, repr2 = maybe_apply_autoencoder(X2_eff, "analysis2")
+    X2_repr, repr2 = maybe_apply_autoencoder(X2_eff, "analysis2", meta=m2)
     emb2, embed2_info = embed(X2_repr)
     fig2 = make_embedding_figure(
-        emb2,
-        m2,
-        "Fly kinematic distribution embedding",
-        method=embed2_info.get("method"),
+        emb2, m2, "Fly kinematic distribution embedding", method=embed2_info.get("method"),
+    )
+    fig2_age = make_embedding_figure(
+        emb2, m2, "Fly kinematic distribution embedding (age)", method=embed2_info.get("method"),
+        color_col="age_label",
+    )
+
+    # Analysis 3: aggregate behavioral features only — the same ~20 features as
+    # the box plots. No raw trajectory noise. Cleanest input for the embedding.
+    X3, m3 = build_aggregate_features_matrix(df_fly)
+    m3 = _add_age_label(m3)
+    X3_eff, pca3 = maybe_apply_pca(X3)
+    X3_repr, repr3 = maybe_apply_autoencoder(X3_eff, "analysis3", meta=m3)
+    emb3, embed3_info = embed(X3_repr)
+    fig3 = make_embedding_figure(
+        emb3, m3, "Behavioral feature embedding (genotype)", method=embed3_info.get("method"),
+    )
+    fig3_age = make_embedding_figure(
+        emb3, m3, "Behavioral feature embedding (age)", method=embed3_info.get("method"),
+        color_col="age_label",
     )
 
     perma1 = {
@@ -562,6 +677,10 @@ def run_latent_space_analysis(df_raw: pd.DataFrame) -> dict:
     perma2 = {
         "run_aware": permanova_test(X2_repr, m2["genotype"].values, strata=m2["run"].values),
         "pooled": permanova_test(X2_repr, m2["genotype"].values, strata=None),
+    }
+    perma3 = {
+        "run_aware": permanova_test(X3_repr, m3["genotype"].values, strata=m3["run"].values),
+        "pooled": permanova_test(X3_repr, m3["genotype"].values, strata=None),
     }
 
     clf = RandomForestClassifier(n_estimators=300, random_state=42)
@@ -586,6 +705,7 @@ def run_latent_space_analysis(df_raw: pd.DataFrame) -> dict:
             "X": X1_repr,
             "meta": m1,
             "embedding_fig": fig1,
+            "age_fig": fig1_age,
             "umap_fig": fig1,                # deprecated alias; prefer embedding_fig
             "embedding": embed1_info,
             "permanova": perma1,
@@ -597,6 +717,7 @@ def run_latent_space_analysis(df_raw: pd.DataFrame) -> dict:
             "X": X2_repr,
             "meta": m2,
             "embedding_fig": fig2,
+            "age_fig": fig2_age,
             "umap_fig": fig2,                # deprecated alias; prefer embedding_fig
             "embedding": embed2_info,
             "permanova": perma2,
@@ -604,5 +725,99 @@ def run_latent_space_analysis(df_raw: pd.DataFrame) -> dict:
             "representation": repr2,
             "edges": edges,
         },
+        "analysis3": {
+            "X": X3_repr,
+            "meta": m3,
+            "embedding_fig": fig3,
+            "age_fig": fig3_age,
+            "embedding": embed3_info,
+            "permanova": perma3,
+            "pca": pca3,
+            "representation": repr3,
+        },
         "rf_importance_fig": fig_imp,
     }
+
+
+def write_latent_space_report(latent: dict, figures_dir: str) -> str:
+    """
+    Save all latent-space HTML files and write latent_space_report.html.
+
+    Returns the path to the report HTML.
+    """
+    import os
+
+    latent_dir = os.path.join(figures_dir, "latent_space")
+    os.makedirs(latent_dir, exist_ok=True)
+
+    method = latent["analysis1"].get("embedding", {}).get("method", "embedding")
+
+    latent["analysis1"]["embedding_fig"].write_html(
+        os.path.join(latent_dir, f"{method}_xy_kinematics.html"))
+    latent["analysis1"]["age_fig"].write_html(
+        os.path.join(latent_dir, f"{method}_xy_kinematics_age.html"))
+    latent["analysis2"]["embedding_fig"].write_html(
+        os.path.join(latent_dir, f"{method}_hist_kinematics.html"))
+    latent["analysis2"]["age_fig"].write_html(
+        os.path.join(latent_dir, f"{method}_hist_kinematics_age.html"))
+    latent["analysis3"]["embedding_fig"].write_html(
+        os.path.join(latent_dir, f"{method}_behavioral_features.html"))
+    latent["analysis3"]["age_fig"].write_html(
+        os.path.join(latent_dir, f"{method}_behavioral_features_age.html"))
+    latent["rf_importance_fig"].write_html(
+        os.path.join(latent_dir, "rf_importance.html"))
+
+    def _perma_card(label, p):
+        return (
+            f"<div class='card'><strong>{label}</strong>: "
+            f"pseudo-F={p['pseudo_f']:.4f}, p={p['p_value']:.4g}, R2={p['r2']:.4f}</div>"
+        )
+
+    p1a = latent["analysis1"]["permanova"]["run_aware"]
+    p1b = latent["analysis1"]["permanova"]["pooled"]
+    p2a = latent["analysis2"]["permanova"]["run_aware"]
+    p2b = latent["analysis2"]["permanova"]["pooled"]
+    p3a = latent["analysis3"]["permanova"]["run_aware"]
+    p3b = latent["analysis3"]["permanova"]["pooled"]
+
+    html = "\n".join([
+        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'/>",
+        "<title>Latent-space report</title>",
+        "<style>",
+        "body{font-family:system-ui,sans-serif;margin:1rem 2rem;max-width:1200px;}",
+        ".card{background:#f7f7f8;padding:0.6rem 0.8rem;border-radius:6px;margin:0.6rem 0;}",
+        "iframe{width:100%;height:560px;border:1px solid #ddd;margin:0.5rem 0 1.2rem;}",
+        "</style></head><body>",
+        "<h1>Latent-space report</h1>",
+        "<h2>Analysis 3 - behavioral features only (clearest for genotype/age separation)</h2>",
+        "<p style='color:#555;font-size:0.9rem'>Pause fraction, velocity/acceleration stats, "
+        "tortuosity - same features as the box plots. No raw trajectory noise.</p>",
+        _perma_card("PERMANOVA (run-aware)", p3a),
+        _perma_card("PERMANOVA (pooled)", p3b),
+        f"<h3>Colored by genotype</h3>"
+        f"<iframe src='latent_space/{method}_behavioral_features.html'></iframe>",
+        f"<h3>Colored by age</h3>"
+        f"<iframe src='latent_space/{method}_behavioral_features_age.html'></iframe>",
+        "<h2>Analysis 2 - kinematic histograms</h2>",
+        _perma_card("PERMANOVA (run-aware)", p2a),
+        _perma_card("PERMANOVA (pooled)", p2b),
+        f"<h3>Colored by genotype</h3>"
+        f"<iframe src='latent_space/{method}_hist_kinematics.html'></iframe>",
+        f"<h3>Colored by age</h3>"
+        f"<iframe src='latent_space/{method}_hist_kinematics_age.html'></iframe>",
+        "<h2>Analysis 1 - trajectory + features</h2>",
+        _perma_card("PERMANOVA (run-aware)", p1a),
+        _perma_card("PERMANOVA (pooled)", p1b),
+        f"<h3>Colored by genotype</h3>"
+        f"<iframe src='latent_space/{method}_xy_kinematics.html'></iframe>",
+        f"<h3>Colored by age</h3>"
+        f"<iframe src='latent_space/{method}_xy_kinematics_age.html'></iframe>",
+        "<h2>RF importance - kinematic histogram bins</h2>",
+        "<iframe src='latent_space/rf_importance.html'></iframe>",
+        "</body></html>",
+    ])
+
+    report_path = os.path.join(figures_dir, "latent_space_report.html")
+    with open(report_path, "w", encoding="utf-8") as fh:
+        fh.write(html)
+    return report_path
