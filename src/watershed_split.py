@@ -114,80 +114,80 @@ def _split_one_bbox(
     return np.asarray(sub_boxes, dtype=np.float32), mask, peaks, origin
 
 
+_COLOR_DET      = ( 40,  40, 230)  # red:   every RF-DETR detection
+_COLOR_ACCEPTED = ( 60, 200,  60)  # green: watershed-produced sub-bboxes
+
+
+def _draw_legend(img: np.ndarray) -> None:
+    """Bottom-left swatch + label for red/green."""
+    font, fscale, fthick = cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1
+    rows = [
+        (_COLOR_DET,      "detections"),
+        (_COLOR_ACCEPTED, "accepted split"),
+    ]
+    row_h = 15
+    box_w, box_h = 11, 8
+    pad = 6
+    H, _ = img.shape[:2]
+    bg_h = pad * 2 + row_h * len(rows)
+    text_w = max(cv2.getTextSize(label, font, fscale, fthick)[0][0] for _, label in rows)
+    bg_w = pad * 3 + box_w + text_w
+    y0 = H - bg_h - pad
+    x0 = pad
+    cv2.rectangle(img, (x0, y0), (x0 + bg_w, y0 + bg_h), (20, 20, 20), -1)
+    for i, (color, label) in enumerate(rows):
+        ry = y0 + pad + i * row_h
+        cv2.rectangle(img, (x0 + pad, ry), (x0 + pad + box_w, ry + box_h),
+                      color, -1)
+        cv2.putText(img, label, (x0 + pad * 2 + box_w, ry + box_h),
+                    font, fscale, (230, 230, 230), fthick, cv2.LINE_AA)
+
+
 def _draw_debug_png(
     out_path: str,
     frame_bgr: np.ndarray,
     parent_bbox: tuple[int, int, int, int],
     sub_boxes: list[tuple[int, int, int, int]] | None,
-    mask: np.ndarray | None,
-    mask_origin: tuple[int, int] | None,
-    peaks: np.ndarray | None,
     title: str,
     all_detections: np.ndarray | None = None,
     context_pad: int = 30,
     upscale: int = 4,
 ) -> None:
-    """Side-by-side debug: parent bbox | watershed result, both with context.
+    """Side-by-side: BEFORE (all detections in red) | AFTER (same + green
+    sub-bboxes when accepted; otherwise unchanged).
 
-    parent_bbox / sub_boxes are in FRAME coordinates. mask is bbox-sized;
-    mask_origin is the top-left of the (clipped) parent bbox in frame coords.
-    peaks are (y, x) in mask-local coords.
+    parent_bbox and sub_boxes are in FRAME coordinates. all_detections is the
+    pre-split detection array for the frame.
     """
     H, W = frame_bgr.shape[:2]
     px1, py1, px2, py2 = parent_bbox
     cx1 = max(0, px1 - context_pad); cy1 = max(0, py1 - context_pad)
     cx2 = min(W, px2 + context_pad); cy2 = min(H, py2 + context_pad)
-    crop = frame_bgr[cy1:cy2, cx1:cx2].copy()
+    crop = frame_bgr[cy1:cy2, cx1:cx2]
     if crop.ndim == 2:
         crop = cv2.cvtColor(crop, cv2.COLOR_GRAY2BGR)
 
-    # Draw every detection in the frame as thin red boxes (skipping the parent,
-    # which gets its own highlight). Same on both panels so the context is
-    # identical and the only difference is the watershed result.
-    def _draw_context_dets(img: np.ndarray) -> None:
-        if all_detections is None or len(all_detections) == 0:
+    def _draw_all_detections(img: np.ndarray) -> None:
+        if all_detections is None:
             return
         for det in all_detections:
             dx1, dy1, dx2, dy2 = (int(round(v)) for v in det[:4])
-            if (dx1, dy1, dx2, dy2) == (px1, py1, px2, py2):
-                continue  # parent gets highlighted separately
             if dx2 < cx1 or dx1 > cx2 or dy2 < cy1 or dy1 > cy2:
-                continue  # outside context window
-            cv2.rectangle(img, (dx1 - cx1, dy1 - cy1), (dx2 - cx1, dy2 - cy1),
-                          (40, 40, 230), 1)
+                continue
+            cv2.rectangle(img, (dx1 - cx1, dy1 - cy1),
+                          (dx2 - cx1, dy2 - cy1), _COLOR_DET, 1)
 
-    # LEFT: context detections + parent bbox highlighted in orange (thicker).
     left = crop.copy()
-    _draw_context_dets(left)
-    cv2.rectangle(left, (px1 - cx1, py1 - cy1), (px2 - cx1, py2 - cy1),
-                  (0, 165, 255), 2)
+    _draw_all_detections(left)
 
-    # RIGHT: context detections + mask + split bboxes (cyan) + peaks (yellow).
     right = crop.copy()
-    _draw_context_dets(right)
-    if mask is not None and mask_origin is not None:
-        mx, my = mask_origin
-        mh, mw = mask.shape
-        # paste mask into a frame-sized canvas, then crop to context.
-        full_mask = np.zeros((H, W), dtype=np.uint8)
-        full_mask[my:my + mh, mx:mx + mw] = mask
-        ctx_mask = full_mask[cy1:cy2, cx1:cx2]
-        overlay = right.copy()
-        overlay[ctx_mask > 0] = (60, 200, 60)
-        right = cv2.addWeighted(overlay, 0.20, right, 0.80, 0)
-
-    if sub_boxes:
+    _draw_all_detections(right)
+    accepted = sub_boxes is not None and len(sub_boxes) > 0
+    if accepted:
         for sx1, sy1, sx2, sy2 in sub_boxes:
             cv2.rectangle(right, (sx1 - cx1, sy1 - cy1),
-                          (sx2 - cx1, sy2 - cy1), (255, 255, 0), 2)
+                          (sx2 - cx1, sy2 - cy1), _COLOR_ACCEPTED, 1)
 
-    if peaks is not None and mask_origin is not None:
-        mx, my = mask_origin
-        for py, px in peaks:
-            cv2.circle(right, (int(mx + px - cx1), int(my + py - cy1)),
-                       2, (0, 255, 255), -1, cv2.LINE_AA)
-
-    # Upscale (nearest, keeps pixels crisp at small sizes).
     h, w = left.shape[:2]
     left  = cv2.resize(left,  (w * upscale, h * upscale), interpolation=cv2.INTER_NEAREST)
     right = cv2.resize(right, (w * upscale, h * upscale), interpolation=cv2.INTER_NEAREST)
@@ -207,6 +207,8 @@ def _draw_debug_png(
 
     cv2.putText(canvas, title, (8, 22), font, fscale,
                 (230, 230, 230), fthick, cv2.LINE_AA)
+    _draw_legend(canvas)
+
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     cv2.imwrite(out_path, canvas)
 
@@ -341,9 +343,6 @@ def apply_watershed_splits(
                         frame_bgr=frame_bgr,
                         parent_bbox=parent_frame,
                         sub_boxes=sub_frame,
-                        mask=mask,
-                        mask_origin=crop_origin,
-                        peaks=peaks,
                         title=title,
                         all_detections=all_dets_for_frame,
                     )
