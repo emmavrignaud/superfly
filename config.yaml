@@ -35,8 +35,8 @@ features:
 
 tracker:
   # RF-DETR detections + OC-SORT association into tracklets.
-  detection_confidence_rfdetr: 0.4   # RF-DETR output threshold
-  confidence: 0.55                   # tracker match threshold (0.3–0.5 typical)
+  detection_confidence_rfdetr: 0.10  # RF-DETR output threshold; detections in [detection_confidence_rfdetr, confidence) feed the jump-low pass only
+  confidence: 0.55                   # primary association threshold; detections above this go into round-1 matching
   track_activation_threshold: 0.10   # min conf to open a new track
   lost_track_buffer: 400             # frames a track may go unseen before drop
   minimum_matching_threshold: 0.2   # min association score to keep a match
@@ -62,6 +62,13 @@ tracker:
   expected_count: null              # total expected flies (e.g. 42); enables count-aware spawning when set; null = disabled
   w_under: 15.0                     # spawning penalty per tracker below expected_count (heavy — missing a fly is bad)
   w_over: 2.0                       # spawning penalty per tracker above expected_count (light — ghost tracks are tolerable)
+
+  ghost_detection:
+    enabled: false             # two-pass ghost injection for occluded flies (disabled by default — opt in)
+    offset_fraction: 0.5       # ghost placed N bbox-widths from occluder centroid, toward missing fly's last position
+    confidence: 0.45           # must stay below tracker.confidence so ghosts can update existing tracks but never spawn new ones
+    occlusion_max_gap: 90      # max frames of gap before we give up calling it an occlusion (≈3s at 30fps)
+    top_exit_px: 2             # centroid within N px of vial ROI top edge = top exit; no ghost ever fires for those tracks
 
 watershed:
   # Splits RF-DETR bboxes that look like they contain multiple touching flies.

@@ -205,7 +205,7 @@ def main():
         print(f"Found stored vial ROIs for: {_video_key}")
         with open(roi_json, "w") as f:
             json.dump(_stored_vials, f, indent=2)
-        vials, _ = load_vial_rois(roi_json)
+        vials, n_flies_dict = load_vial_rois(roi_json)
         print(f"Loaded {len(vials)} vials from library.")
     else:
         if not use_saved_roi:
@@ -217,6 +217,8 @@ def main():
             roi_json_path=roi_json,
             video_context=video_context,
         )
+        # Load n_flies from the JSON the GUI just wrote
+        _, n_flies_dict = load_vial_rois(roi_json)
 
         if _video_key not in _library:
             _library[_video_key] = {}
@@ -233,7 +235,8 @@ def main():
     ocsort_csv  = os.path.join(args.output_dir, "ocsort_tracks.csv")
     det_log_csv = os.path.join(args.output_dir, "detections_raw.csv")
     print("\n=== Stage 3: RF-DETR + OC-SORT tracking ===")
-    df_wide, tracker, _ = export_tracks_xy_tuple_csv_one_config(
+    _gd = cfg.tracker.ghost_detection
+    df_wide, tracker = export_tracks_xy_tuple_csv_one_config(
         video_path=video_path,
         output_csv=ocsort_csv,
         api_key=args.api_key,
@@ -250,6 +253,12 @@ def main():
         det_log_csv=det_log_csv,
         vial_rois=vials,
         watershed_cfg=dict(cfg.watershed) if hasattr(cfg, "watershed") else None,
+        vial_expected_counts=n_flies_dict if any(n_flies_dict.values()) else None,
+        ghost_detection_enabled=_gd.enabled,
+        ghost_offset_fraction=_gd.offset_fraction,
+        ghost_confidence=_gd.confidence,
+        ghost_occlusion_max_gap=_gd.occlusion_max_gap,
+        ghost_top_exit_px=_gd.top_exit_px,
     )
     print(f"  shape: {df_wide.shape}")
     save_run_params(args.output_dir, "tracker_output", {
@@ -261,10 +270,13 @@ def main():
     tracker_log_json = os.path.join(args.output_dir, "tracker_log.json")
     with open(tracker_log_json, "w") as _f:
         json.dump({
-            "detection_log":     tracker.detection_log,
-            "suppressed_tracks": tracker.suppressed_tracks,
-            "min_hits":          tracker.min_hits,
-            "max_age":           tracker.max_age,
+            "detection_log":      tracker.detection_log,
+            "suppressed_tracks":  tracker.suppressed_tracks,
+            "min_hits":           tracker.min_hits,
+            "max_age":            tracker.max_age,
+            "ghost_log":          getattr(tracker, "ghost_log",          []),
+            "top_exit_events":    getattr(tracker, "top_exit_events",    []),
+            "top_reentry_events": getattr(tracker, "top_reentry_events", []),
         }, _f)
 
     print("\n=== Stage 3b: RF-DETR detection overlay video ===")
