@@ -828,6 +828,70 @@ class OCSort(object):
             unmatched_dets = unmatched_dets[jump_ud]
             unmatched_trks = unmatched_trks[jump_ut]
 
+        # Jump-low pass: try low-confidence detections (det_thresh > score > 0.1)
+        # against still-unmatched tracks using inflated jump predictions.
+        # These detections can UPDATE existing tracks but are NEVER spawned as new
+        # tracks — they are too unreliable to anchor a fresh identity.
+        if len(dets_second) > 0 and unmatched_trks.shape[0] > 0:
+            # Vial membership for low-conf detections
+            sec_vial_mask = None
+            if self.vial_rois is not None:
+                sec_vials = [
+                    _vial_of((d[0] + d[2]) / 2.0, (d[1] + d[3]) / 2.0)
+                    for d in dets_second
+                ]
+                # Recompute tracker vials directly from last_observation so this
+                # pass works even when the primary-round vial_mask was skipped
+                # (e.g. when dets was empty and trk_vials was never assigned).
+                u_trk_vials = [
+                    _vial_of(
+                        (self.trackers[t].last_observation[0] + self.trackers[t].last_observation[2]) / 2.0,
+                        (self.trackers[t].last_observation[1] + self.trackers[t].last_observation[3]) / 2.0,
+                    ) if self.trackers[t].last_observation.sum() >= 0 else None
+                    for t in unmatched_trks
+                ]
+                sec_vial_mask = np.array([
+                    [(sv is None or tv is None or sv == tv) for tv in u_trk_vials]
+                    for sv in sec_vials
+                ], dtype=bool)
+
+            # Inflated jump predictions for still-unmatched trackers
+            sec_jump_boxes = np.array([
+                np.append(self.trackers[t].predict_jump(self.jump_factor), 0)
+                for t in unmatched_trks
+            ])
+
+            sec_profiles     = [trk_profiles[t]    for t in unmatched_trks]
+            sec_last_centers = trk_last_centers[unmatched_trks]
+            sec_velocities   = velocities[unmatched_trks]
+            sec_k_obs        = k_observations[unmatched_trks]
+            sec_trk_states   = [all_trk_states[t]  for t in unmatched_trks]
+            sec_obs_windows  = [trk_obs_windows[t] for t in unmatched_trks]
+            # Low-conf dets don't get the overlap behavioral boost — too noisy
+            sec_overlap_mask = np.zeros(len(dets_second), dtype=bool)
+
+            sec_matched, _, sec_ut, sec_scores = associate(
+                dets_second, sec_jump_boxes,
+                self.jump_iou_threshold,
+                sec_velocities, sec_k_obs, self.jump_inertia,
+                self.asso_func, self.aspect_weight,
+                vial_mask=sec_vial_mask,
+                trk_profiles=sec_profiles,
+                trk_last_centers=sec_last_centers,
+                behavioral_weights=_scale_weights(self.behavioral_weights, 1.0) if _bw_active else None,
+                trk_obs_windows=sec_obs_windows if _bw_active else None,
+                link_trk_states=sec_trk_states,
+                overlap_det_mask=sec_overlap_mask,
+                overlap_iou_scale=self.overlap_iou_scale,
+            )
+
+            for m, sc in zip(sec_matched, sec_scores):
+                trk_ind = unmatched_trks[m[1]]
+                self.trackers[trk_ind].update(dets_second[m[0], :], frame_idx=self.frame_count, score=sc)
+
+            unmatched_trks = unmatched_trks[sec_ut]
+            # dets_second that didn't match here are silently discarded — never spawned
+
         for m in unmatched_trks:
             self.trackers[m].update(None)
 

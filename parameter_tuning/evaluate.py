@@ -20,8 +20,22 @@ from trackers.eval.evaluate import evaluate_mot_sequence
 
 # ── Edit these to point at your latest run directories ──────────────────────
 RUN_MAP = {
-    "13d_002": Path(r"C:\Users\emmav\Downloads\superfly\outputs\run_112"),
-    "31d_005": Path(r"C:\Users\emmav\Downloads\superfly\outputs\run_114_31DPE_n005"),
+    # "13d_002": Path(r"C:\Users\emmav\Downloads\superfly\outputs\run_112"),            # baseline (conf=0.4)
+    # "13d_002_conf025": Path(r"C:\Users\emmav\Downloads\superfly\outputs\run_119_13DPE_n002"), # new (conf=0.25)
+    "31d_005":         Path(r"C:\Users\emmav\Downloads\superfly\outputs\run_114_31DPE_n005"),             # baseline (conf=0.4)
+    "31d_005_conf025": Path(r"C:\Users\emmav\Downloads\superfly\outputs\run_122_2024-03-01_NEG-008_h"),  # conf=0.25
+    "31d_005_conf010": Path(r"C:\Users\emmav\Downloads\superfly\outputs\run_123_2024-03-01_NEG-008_h"), # conf=0.10 — fill in after ru
+    "13d_002": Path(r"C:\Users\emmav\Downloads\superfly\outputs\run_119_13DPE_n002"),
+    "13d_002_conf025": Path(r"C:\Users\emmav\Downloads\superfly\outputs\run_127_13DPE_n002"),
+    
+}
+
+# Map sequence keys to their GT file — keys with a suffix share the same GT as the base video.
+GT_MAP = {
+    "31d_005_conf025": "31d_005",
+    "31d_005_conf010": "31d_005",
+    "13d_002_conf025": "13d_002",
+    "13d_002_conf010": "13d_002",
 }
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -81,8 +95,23 @@ def _mot_lines(df: pd.DataFrame, *, c7: float) -> list[str]:
 
 
 def _build_gt(seq: str) -> list[str]:
-    df = pd.read_csv(DATA_DIR / f"ground_truth_{seq}.csv")
+    base = GT_MAP.get(seq, seq)
+    # prefer the cleaned file (sparse tracks removed) but fall back to the raw GT
+    for stem in (f"{base}_cleaned", base):
+        path = DATA_DIR / f"ground_truth_{stem}.csv"
+        if path.exists():
+            df = pd.read_csv(path)
+            break
+    else:
+        raise FileNotFoundError(f"No GT file found for sequence '{seq}'")
     df = df.rename(columns={"ID": "id"})
+    # cleaned files may only have x,y — load the full GT for bboxes if needed
+    if not {"x1", "y1", "x2", "y2"}.issubset(df.columns):
+        full_path = DATA_DIR / f"ground_truth_{base}.csv"
+        df_full = pd.read_csv(full_path).rename(columns={"ID": "id"})
+        keep = df[["frame", "id"]].merge(df_full[["frame", "id", "x1", "y1", "x2", "y2"]],
+                                          on=["frame", "id"], how="inner")
+        df = keep
     return _mot_lines(df[["frame", "id", "x1", "y1", "x2", "y2"]], c7=1)
 
 
