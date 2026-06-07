@@ -26,7 +26,11 @@ if str(_REPO_ROOT) not in _sys.path:
     _sys.path.insert(0, str(_REPO_ROOT))
 
 from src.classification import genotype_category_order
-from src.features import extract_behavioral_features, aggregate_per_fly_features
+from src.features import (
+    extract_behavioral_features,
+    aggregate_per_fly_features,
+    aggregate_per_fly_features_binned,
+)
 from src.plot_colors import genotype_color_map_for_dataframe
 from src.representation_learning import fit_autoencoder_latent, fit_multitask_autoencoder
 from utils import load_config as _load_config  # noqa: E402
@@ -53,7 +57,15 @@ def maybe_apply_autoencoder(
     X: np.ndarray,
     name: str,
     meta: pd.DataFrame | None = None,
+    y_time_bin: np.ndarray | None = None,
+    y_genotype: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict]:
+    """Apply the autoencoder representation configured in config.yaml.
+
+    Extra label arrays (time_bin, genotype) are passed to the multitask head
+    when ``representation_method: multitask``.  Both default to None so all
+    existing call sites continue to work unchanged.
+    """
     method = str(_CFG.representation_method).strip().lower()
     if method not in ("autoencoder", "multitask"):
         return X, {"used_autoencoder": False, "representation_method": method}
@@ -78,12 +90,23 @@ def maybe_apply_autoencoder(
         if meta is not None and "run" in meta.columns:
             y_age = np.array([_parse_age_label(r) for r in meta["run"].values], dtype=np.int64)
             n_labelled = int((y_age >= 0).sum())
-            print(f"[latent_space] {name} multitask: {n_labelled}/{len(y_age)} samples have age labels")
+            n_time = int((y_time_bin >= 0).sum()) if y_time_bin is not None else 0
+            n_geno = int((y_genotype >= 0).sum()) if y_genotype is not None else 0
+            print(
+                f"[latent_space] {name} multitask: age={n_labelled}/{len(y_age)}"
+                + (f" time={n_time}/{len(y_time_bin)}" if y_time_bin is not None else "")
+                + (f" geno={n_geno}/{len(y_genotype)}" if y_genotype is not None else "")
+            )
         Z, info = fit_multitask_autoencoder(
             X=X,
             y_age=y_age,
+            y_time_bin=y_time_bin,
+            y_genotype=y_genotype,
             n_age_classes=int(mt.n_age_classes),
+            n_time_bins=int(getattr(mt, "n_time_bins", 3)),
             age_weight=float(mt.age_weight),
+            time_weight=float(getattr(mt, "time_weight", 0.5)),
+            genotype_weight=float(getattr(mt, "genotype_weight", 0.5)),
             **shared_kwargs,
         )
     else:
@@ -659,8 +682,16 @@ def run_latent_space_analysis(df_raw: pd.DataFrame) -> dict:
     # the box plots. No raw trajectory noise. Cleanest input for the embedding.
     X3, m3 = build_aggregate_features_matrix(df_fly)
     m3 = _add_age_label(m3)
+    # Build genotype integer labels for Analysis 3
+    _geno_cats3 = sorted(m3["genotype"].dropna().astype(str).unique())
+    _geno_map3 = {g: i for i, g in enumerate(_geno_cats3)}
+    y_geno3 = np.array(
+        [_geno_map3.get(str(g), -1) for g in m3["genotype"].values], dtype=np.int64
+    )
     X3_eff, pca3 = maybe_apply_pca(X3)
-    X3_repr, repr3 = maybe_apply_autoencoder(X3_eff, "analysis3", meta=m3)
+    X3_repr, repr3 = maybe_apply_autoencoder(
+        X3_eff, "analysis3", meta=m3, y_genotype=y_geno3
+    )
     emb3, embed3_info = embed(X3_repr)
     fig3 = make_embedding_figure(
         emb3, m3, "Behavioral feature embedding (genotype)", method=embed3_info.get("method"),
@@ -669,6 +700,94 @@ def run_latent_space_analysis(df_raw: pd.DataFrame) -> dict:
         emb3, m3, "Behavioral feature embedding (age)", method=embed3_info.get("method"),
         color_col="age_label",
     )
+
+    # Analysis 4: temporal bins — "moment in video" self-supervised signal.
+    # Each fly contributes n_time_bins rows; the time_bin head predicts which
+    # third of the recording a sample belongs to (entirely label-free).
+    _n_time_bins = int(getattr(_CFG.multitask, "n_time_bins", 3))
+    df_binned = aggregate_per_fly_features_binned(
+        df_feat, n_bins=_n_time_bins, run_col="run" if "run" in df_feat.columns else None
+    )
+    if not df_binned.empty:
+        # Attach genotype + age metadata
+        _fly_meta = df_fly[["ordered_id", "genotype", "run"]].copy()
+        _fly_meta["ordered_id"] = _fly_meta["ordered_id"].astype(str)
+        df_binned["ordered_id"] = df_binned["ordered_id"].astype(str)
+        df_binned = df_binned.merge(_fly_meta, on="ordered_id", how="left", suffixes=("", "_meta"))
+        if "genotype_meta" in df_binned.columns:
+            df_binned["genotype"] = df_binned["genotype_meta"].fillna(df_binned.get("genotype", np.nan))
+            df_binned.drop(columns=["genotype_meta"], inplace=True)
+        if "run_meta" in df_binned.columns:
+            df_binned["run"] = df_binned["run_meta"].fillna(df_binned.get("run", np.nan))
+            df_binned.drop(columns=["run_meta"], inplace=True)
+
+        X4, m4 = build_aggregate_features_matrix(df_binned)
+        m4 = _add_age_label(m4)
+        # time_bin and genotype labels for the multitask AE
+        _tb_col = "time_bin" if "time_bin" in df_binned.columns else None
+        y_time4 = np.array(
+            df_binned["time_bin"].values if _tb_col else [-1] * len(df_binned), dtype=np.int64
+        )
+        _geno_cats4 = sorted(m4["genotype"].dropna().astype(str).unique())
+        _geno_map4 = {g: i for i, g in enumerate(_geno_cats4)}
+        y_geno4 = np.array(
+            [_geno_map4.get(str(g), -1) for g in m4["genotype"].values], dtype=np.int64
+        )
+        X4_eff, pca4 = maybe_apply_pca(X4)
+        X4_repr, repr4 = maybe_apply_autoencoder(
+            X4_eff, "analysis4", meta=m4,
+            y_time_bin=y_time4, y_genotype=y_geno4,
+        )
+        emb4, embed4_info = embed(X4_repr)
+
+        # Add time_bin as a string column for coloring
+        m4_plot = m4.copy()
+        m4_plot["time_bin"] = [str(tb) for tb in df_binned["time_bin"].values] if _tb_col else "?"
+        _tb_labels = {str(i): f"Bin {i} ({'early' if i == 0 else 'late' if i == _n_time_bins-1 else 'mid'})"
+                      for i in range(_n_time_bins)}
+        m4_plot["time_label"] = m4_plot["time_bin"].map(_tb_labels).fillna(m4_plot["time_bin"])
+
+        fig4_geno = make_embedding_figure(
+            emb4, m4_plot, "Temporal-bin embedding (genotype)", method=embed4_info.get("method"),
+        )
+        fig4_age = make_embedding_figure(
+            emb4, m4_plot, "Temporal-bin embedding (age)", method=embed4_info.get("method"),
+            color_col="age_label",
+        )
+        # Time-bin coloring: show whether bins cluster by moment-in-video
+        _d_time = pd.DataFrame({
+            "component_1": emb4[:, 0] if emb4.shape[1] > 0 else np.zeros(len(emb4)),
+            "component_2": emb4[:, 1] if emb4.shape[1] > 1 else np.zeros(len(emb4)),
+            "component_3": emb4[:, 2] if emb4.shape[1] > 2 else np.zeros(len(emb4)),
+            "time_label": m4_plot["time_label"].values,
+            "genotype": m4_plot["genotype"].values,
+            "ordered_id": m4_plot["ordered_id"].values,
+        })
+        _time_order = [_tb_labels[str(i)] for i in range(_n_time_bins) if str(i) in _tb_labels]
+        fig4_time = px.scatter_3d(
+            _d_time,
+            x="component_1", y="component_2", z="component_3",
+            color="time_label",
+            hover_data=["genotype", "ordered_id"],
+            title=f"Temporal-bin embedding (moment in video) ({embed4_info.get('method', '')})",
+            category_orders={"time_label": _time_order},
+        )
+        fig4_time.update_traces(marker=dict(size=4, opacity=0.85))
+        fig4_time.update_layout(height=620)
+
+        perma4 = {
+            "run_aware": permanova_test(X4_repr, m4["genotype"].values, strata=m4["run"].values),
+            "pooled": permanova_test(X4_repr, m4["genotype"].values, strata=None),
+        }
+    else:
+        print("[latent_space] Warning: temporal binning produced no rows; skipping Analysis 4.")
+        fig4_geno = fig4_age = fig4_time = go.Figure()
+        embed4_info = {"method": "none"}
+        X4_repr = np.zeros((0, 1))
+        m4 = pd.DataFrame()
+        repr4 = {}
+        pca4 = {}
+        perma4 = {}
 
     perma1 = {
         "run_aware": permanova_test(X1_repr, m1["genotype"].values, strata=m1["run"].values),
@@ -735,6 +854,17 @@ def run_latent_space_analysis(df_raw: pd.DataFrame) -> dict:
             "pca": pca3,
             "representation": repr3,
         },
+        "analysis4": {
+            "X": X4_repr,
+            "meta": m4,
+            "embedding_fig": fig4_geno,
+            "age_fig": fig4_age,
+            "time_fig": fig4_time,
+            "embedding": embed4_info,
+            "permanova": perma4,
+            "pca": pca4,
+            "representation": repr4,
+        },
         "rf_importance_fig": fig_imp,
     }
 
@@ -767,6 +897,16 @@ def write_latent_space_report(latent: dict, figures_dir: str) -> str:
     latent["rf_importance_fig"].write_html(
         os.path.join(latent_dir, "rf_importance.html"))
 
+    a4 = latent.get("analysis4", {})
+    has_a4 = a4 and not a4.get("meta", pd.DataFrame()).empty
+    if has_a4:
+        a4["embedding_fig"].write_html(
+            os.path.join(latent_dir, f"{method}_temporal_bins_genotype.html"))
+        a4["age_fig"].write_html(
+            os.path.join(latent_dir, f"{method}_temporal_bins_age.html"))
+        a4["time_fig"].write_html(
+            os.path.join(latent_dir, f"{method}_temporal_bins_time.html"))
+
     def _perma_card(label, p):
         return (
             f"<div class='card'><strong>{label}</strong>: "
@@ -779,6 +919,37 @@ def write_latent_space_report(latent: dict, figures_dir: str) -> str:
     p2b = latent["analysis2"]["permanova"]["pooled"]
     p3a = latent["analysis3"]["permanova"]["run_aware"]
     p3b = latent["analysis3"]["permanova"]["pooled"]
+    p4a = a4.get("permanova", {}).get("run_aware") if has_a4 else None
+    p4b = a4.get("permanova", {}).get("pooled") if has_a4 else None
+
+    _a4_section = ""
+    if has_a4 and p4a and p4b:
+        repr4_info = a4.get("representation", {})
+        head_stats = []
+        if repr4_info.get("time_accuracy") is not None:
+            head_stats.append(f"time-bin acc={repr4_info['time_accuracy']:.3f}")
+        if repr4_info.get("age_accuracy") is not None:
+            head_stats.append(f"age acc={repr4_info['age_accuracy']:.3f}")
+        if repr4_info.get("genotype_accuracy") is not None:
+            head_stats.append(f"genotype acc={repr4_info['genotype_accuracy']:.3f}")
+        head_str = "  |  ".join(head_stats) if head_stats else ""
+        _a4_section = "\n".join([
+            "<h2>Analysis 4 — temporal bins (moment in video)</h2>",
+            "<p style='color:#555;font-size:0.9rem'>Each fly is split into early / mid / late "
+            "thirds of the recording. The autoencoder's time-bin head is a self-supervised "
+            "signal that requires no labels. The scatter below reveals whether behaviour "
+            "changes within a session (fatigue, habituation) and whether genotypes differ "
+            "in their temporal trajectory.</p>",
+            f"<div class='card'><strong>AE head accuracy (train set):</strong> {head_str}</div>" if head_str else "",
+            _perma_card("PERMANOVA genotype (run-aware)", p4a),
+            _perma_card("PERMANOVA genotype (pooled)", p4b),
+            f"<h3>Colored by genotype</h3>"
+            f"<iframe src='latent_space/{method}_temporal_bins_genotype.html'></iframe>",
+            f"<h3>Colored by age</h3>"
+            f"<iframe src='latent_space/{method}_temporal_bins_age.html'></iframe>",
+            f"<h3>Colored by moment in video (temporal bin)</h3>"
+            f"<iframe src='latent_space/{method}_temporal_bins_time.html'></iframe>",
+        ])
 
     html = "\n".join([
         "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'/>",
@@ -789,6 +960,7 @@ def write_latent_space_report(latent: dict, figures_dir: str) -> str:
         "iframe{width:100%;height:560px;border:1px solid #ddd;margin:0.5rem 0 1.2rem;}",
         "</style></head><body>",
         "<h1>Latent-space report</h1>",
+        _a4_section,
         "<h2>Analysis 3 - behavioral features only (clearest for genotype/age separation)</h2>",
         "<p style='color:#555;font-size:0.9rem'>Pause fraction, velocity/acceleration stats, "
         "tortuosity - same features as the box plots. No raw trajectory noise.</p>",

@@ -538,6 +538,101 @@ def run_classifier(
     return None
 
 
+def run_permutation_test(
+    df: pd.DataFrame,
+    outdir: str = "report_figures",
+    model_name: str | None = None,
+    classification_mode: str = "multiclass",
+    cv: int = 5,
+    groups: np.ndarray | None = None,
+    n_permutations: int = 500,
+    seed: int = 42,
+    save_files: bool = True,
+) -> dict:
+    """
+    Permutation test for classifier significance.
+
+    Runs CV on the real labels, then repeats ``n_permutations`` times with
+    shuffled labels to build a null distribution.  Reports where the real
+    balanced accuracy falls in that null.
+
+    Returns a dict with keys:
+        real_score   float — mean balanced-accuracy across CV folds
+        null_scores  ndarray(n_permutations,)
+        p_value      float — fraction of null ≥ real (one-tailed)
+        fig          go.Figure — histogram of null + vertical line for real score
+    """
+    name = _resolve_method(model_name)
+    X, _ = prepare_xy(df)
+    y = prepare_target(df, classification_mode)
+
+    poly_step = _polynomial_step()
+    steps = [("scaler", StandardScaler())]
+    if poly_step is not None:
+        steps.append(("poly", poly_step))
+        steps.append(("rescale", StandardScaler()))
+    steps.append(("clf", make_classifier(name)))
+    pipeline = Pipeline(steps)
+
+    splitter, scheme, fit_kwargs = _resolve_splitter(cv, groups)
+
+    real_scores = cross_val_score(
+        pipeline, X, y, cv=splitter, scoring="balanced_accuracy", **fit_kwargs
+    )
+    real_score = float(real_scores.mean())
+
+    rng = np.random.default_rng(seed)
+    null_scores = np.empty(n_permutations)
+    for i in range(n_permutations):
+        y_perm = rng.permutation(y)
+        s = cross_val_score(
+            pipeline, X, y_perm, cv=splitter, scoring="balanced_accuracy", **fit_kwargs
+        )
+        null_scores[i] = s.mean()
+
+    p_value = float((null_scores >= real_score).sum() + 1) / (n_permutations + 1)
+
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(
+        x=null_scores, name="Null distribution",
+        nbinsx=30, marker_color="#adb5bd", opacity=0.85,
+    ))
+    fig.add_vline(
+        x=real_score,
+        line_color="#e63946", line_width=2.5,
+        annotation_text=f"Real: {real_score:.3f}  p={p_value:.4g}",
+        annotation_position="top right",
+        annotation_font_color="#e63946",
+    )
+    pretty_mode = {"multiclass": "all genotypes", "binary": "WT vs mutant"}.get(
+        classification_mode, classification_mode
+    )
+    fig.update_layout(
+        title=(
+            f"Permutation test [{pretty_mode}] — balanced accuracy "
+            f"(n={n_permutations}, {scheme} CV)"
+        ),
+        xaxis_title="Balanced accuracy (mean over folds)",
+        yaxis_title="Count",
+        height=420,
+        showlegend=False,
+    )
+
+    if save_files:
+        save_plotly_figure(fig, outdir, f"permutation_test_{classification_mode}", show=False)
+
+    print(
+        f"[permutation_test] {classification_mode}: "
+        f"real={real_score:.3f}  p={p_value:.4g}  (n={n_permutations})"
+    )
+    return {
+        "real_score": real_score,
+        "null_scores": null_scores,
+        "p_value": p_value,
+        "fig": fig,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Statistical visualisation
 # ---------------------------------------------------------------------------

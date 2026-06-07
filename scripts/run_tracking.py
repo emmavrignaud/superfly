@@ -253,7 +253,10 @@ def main():
         det_log_csv=det_log_csv,
         vial_rois=vials,
         watershed_cfg=dict(cfg.watershed) if hasattr(cfg, "watershed") else None,
-        vial_expected_counts=n_flies_dict if any(n_flies_dict.values()) else None,
+        vial_expected_counts=(
+            n_flies_dict if any(n_flies_dict.values())
+            else {vid: cfg.pipeline.expected_per_vial for vid in vials}
+        ),
         ghost_detection_enabled=_gd.enabled,
         ghost_offset_fraction=_gd.offset_fraction,
         ghost_confidence=_gd.confidence,

@@ -589,3 +589,110 @@ def aggregate_per_fly_features(
         return pd.Series(row)
 
     return grouped.apply(_per_fly_row).reset_index()
+
+
+def aggregate_per_fly_features_binned(
+    df: pd.DataFrame,
+    n_bins: int = 3,
+    group_col: str = "ordered_id",
+    run_col: str | None = "run",
+    pause_threshold: float = 1.0,
+    min_frames: int = 5,
+) -> pd.DataFrame:
+    """
+    Split each fly's track into ``n_bins`` equal-duration temporal bins and
+    aggregate behavioral features within each bin.
+
+    Bins are defined by absolute frame range per video (using ``run_col`` when
+    present, global otherwise), so the ``time_bin`` index is a "moment in video"
+    label shared across all flies in the same recording.
+
+    Returns a DataFrame with up to ``n_bins`` rows per fly.  Bins with fewer
+    than ``min_frames`` frames are dropped.  Returned columns are the same as
+    ``aggregate_per_fly_features`` plus ``time_bin`` (0 … n_bins-1).
+    """
+    out_rows: list[dict] = []
+
+    def _process_group(sub: pd.DataFrame, run_label=None) -> None:
+        f_min = sub["frame"].min()
+        f_max = sub["frame"].max()
+        edges = np.linspace(f_min, f_max + 1, n_bins + 1)
+
+        for fly_id, g in sub.groupby(group_col):
+            g = g.sort_values("frame")
+            for bin_idx in range(n_bins):
+                lo, hi = edges[bin_idx], edges[bin_idx + 1]
+                b = g[(g["frame"] >= lo) & (g["frame"] < hi)]
+                if len(b) < min_frames:
+                    continue
+
+                row: dict = {
+                    group_col: fly_id,
+                    "time_bin": bin_idx,
+                    "mean_velocity": b["velocity"].mean(),
+                    "median_velocity": b["velocity"].median(),
+                    "std_velocity": b["velocity"].std(ddof=0),
+                    "pause_fraction": (b["velocity"] < pause_threshold).mean(),
+                    "mean_abs_turning_angle": b["turning_angle"].abs().mean(),
+                    "mean_abs_angular_velocity": b["angular_velocity"].abs().mean(),
+                    "total_distance_traveled": b["step_distance"].sum(),
+                }
+
+                # Recompute tortuosity for this bin
+                xy = b[["x", "y"]].values
+                path_len = b["step_distance"].sum()
+                net = float(np.sqrt(
+                    (xy[-1, 0] - xy[0, 0]) ** 2 + (xy[-1, 1] - xy[0, 1]) ** 2
+                ))
+                row["tortuosity"] = path_len / net if net > 1e-9 else np.nan
+
+                # Recompute area_covered for this bin
+                if len(xy) >= 3:
+                    try:
+                        row["area_covered"] = float(ConvexHull(xy).volume)
+                    except Exception:
+                        row["area_covered"] = float(
+                            (xy[:, 0].max() - xy[:, 0].min())
+                            * (xy[:, 1].max() - xy[:, 1].min())
+                        )
+                else:
+                    row["area_covered"] = 0.0
+
+                if KINEMATIC_THREE_FAMILIES and "velocity_x" in b.columns:
+                    row.update({
+                        "mean_velocity_x": b["velocity_x"].mean(),
+                        "mean_velocity_y": b["velocity_y"].mean(),
+                        "median_velocity_x": b["velocity_x"].median(),
+                        "median_velocity_y": b["velocity_y"].median(),
+                        "std_velocity_x": b["velocity_x"].std(ddof=0),
+                        "std_velocity_y": b["velocity_y"].std(ddof=0),
+                        "mean_acceleration_x": b["acceleration_x"].mean(),
+                        "mean_acceleration_y": b["acceleration_y"].mean(),
+                        "mean_acceleration": b["acceleration"].mean(),
+                        "median_acceleration_x": b["acceleration_x"].median(),
+                        "median_acceleration_y": b["acceleration_y"].median(),
+                        "median_acceleration": b["acceleration"].median(),
+                        "std_acceleration_x": b["acceleration_x"].std(ddof=0),
+                        "std_acceleration_y": b["acceleration_y"].std(ddof=0),
+                        "std_acceleration": b["acceleration"].std(ddof=0),
+                        "total_distance_x": b["distance_traveled_x"].iloc[-1],
+                        "total_distance_y": b["distance_traveled_y"].iloc[-1],
+                    })
+
+                if "vial_id" in b.columns:
+                    row["vial_id"] = b["vial_id"].iloc[0]
+                if run_label is not None:
+                    row[run_col] = run_label
+
+                out_rows.append(row)
+
+    if run_col and run_col in df.columns:
+        for run_label, run_sub in df.groupby(run_col):
+            _process_group(run_sub, run_label=run_label)
+    else:
+        _process_group(df)
+
+    result = pd.DataFrame(out_rows)
+    if result.empty:
+        return result
+    return result.reset_index(drop=True)

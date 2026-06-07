@@ -64,7 +64,7 @@ tracker:
   w_over: 2.0                       # spawning penalty per tracker above expected_count (light — ghost tracks are tolerable)
 
   ghost_detection:
-    enabled: false             # two-pass ghost injection for occluded flies (disabled by default — opt in)
+    enabled: true              # two-pass ghost injection for occluded flies (disabled by default — opt in)
     offset_fraction: 0.5       # ghost placed N bbox-widths from occluder centroid, toward missing fly's last position
     confidence: 0.45           # must stay below tracker.confidence so ghosts can update existing tracks but never spawn new ones
     occlusion_max_gap: 90      # max frames of gap before we give up calling it an occlusion (≈3s at 30fps)
@@ -163,6 +163,9 @@ latent_space:
     # Set representation_method: multitask above to activate.
     n_age_classes: 4   # 13d=0, 28d=1, 31d=2, 41d=3
     age_weight: 1.0    # scale of CE age loss relative to reconstruction MSE
+    n_time_bins: 3     # temporal bins for moment-in-video self-supervised head
+    time_weight: 0.5   # scale of temporal CE loss (0 = disabled)
+    genotype_weight: 0.5  # scale of genotype CE loss (0 = disabled)
 
 classification:
   # Genotype classifier. One method is active everywhere (this file, CLI, notebook,
