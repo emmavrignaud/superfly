@@ -721,7 +721,18 @@ def run_latent_space_analysis(df_raw: pd.DataFrame) -> dict:
             df_binned["run"] = df_binned["run_meta"].fillna(df_binned.get("run", np.nan))
             df_binned.drop(columns=["run_meta"], inplace=True)
 
-        X4, m4 = build_aggregate_features_matrix(df_binned)
+        # Build X4 / m4 directly — df_binned has one row per (fly × bin),
+        # so build_aggregate_features_matrix (which expects one row per fly)
+        # would fail with duplicate-label reindex.
+        _cols_drop = {"ordered_id", "vial_id", "genotype", "run", "time_bin"}
+        _numeric_cols4 = [
+            c for c in df_binned.columns
+            if c not in _cols_drop and np.issubdtype(df_binned[c].dtype, np.number)
+        ]
+        X4 = StandardScaler().fit_transform(
+            df_binned[_numeric_cols4].to_numpy(dtype=float)
+        )
+        m4 = df_binned[["ordered_id", "genotype", "run"]].copy().reset_index(drop=True)
         m4 = _add_age_label(m4)
         # time_bin and genotype labels for the multitask AE
         _tb_col = "time_bin" if "time_bin" in df_binned.columns else None

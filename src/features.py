@@ -95,6 +95,15 @@ def classification_feature_columns() -> list[str]:
             "median_velocity",
             "std_velocity",
             "pause_fraction",
+            "pause_count",
+            "mean_pause_duration",
+            "max_pause_duration",
+            "burst_count",
+            "mean_burst_duration",
+            "mean_burst_speed",
+            "latency_to_first_movement",
+            "mean_speed_early",
+            "reversal_rate",
             "mean_abs_turning_angle",
             "mean_abs_angular_velocity",
             "total_distance_traveled",
@@ -124,6 +133,15 @@ def classification_feature_columns() -> list[str]:
         "total_distance_y",
         "total_distance_traveled",
         "pause_fraction",
+        "pause_count",
+        "mean_pause_duration",
+        "max_pause_duration",
+        "burst_count",
+        "mean_burst_duration",
+        "mean_burst_speed",
+        "latency_to_first_movement",
+        "mean_speed_early",
+        "reversal_rate",
         "mean_abs_turning_angle",
         "mean_abs_angular_velocity",
         "tortuosity",
@@ -524,10 +542,42 @@ def extract_behavioral_features(
     return df.reset_index(drop=True)
 
 
+def _count_bouts(is_active: np.ndarray) -> int:
+    """Count the number of contiguous True runs in a boolean array."""
+    if len(is_active) == 0:
+        return 0
+    edges = np.diff(is_active.astype(int))
+    starts = int((edges == 1).sum()) + (1 if is_active[0] else 0)
+    return starts
+
+
+def _bout_durations(is_active: np.ndarray, dt: np.ndarray) -> np.ndarray:
+    """Return an array of bout durations (sum of dt within each True run)."""
+    if not is_active.any():
+        return np.array([0.0])
+    labeled = np.zeros(len(is_active), dtype=int)
+    bout_id = 0
+    in_bout = False
+    for i, v in enumerate(is_active):
+        if v and not in_bout:
+            bout_id += 1
+            in_bout = True
+        elif not v:
+            in_bout = False
+        labeled[i] = bout_id if v else 0
+    durations = []
+    for b in range(1, bout_id + 1):
+        mask = labeled == b
+        durations.append(float(dt[mask].sum()))
+    return np.array(durations) if durations else np.array([0.0])
+
+
 def aggregate_per_fly_features(
     df: pd.DataFrame,
     group_col: str = "ordered_id",
     pause_threshold: float = 1.0,
+    reversal_threshold_deg: float = 150.0,
+    early_window_s: float = 10.0,
 ) -> pd.DataFrame:
     """
     Collapse frame-level features to one row per fly.
@@ -539,10 +589,12 @@ def aggregate_per_fly_features(
     group_col : str
         Column to group by (default: "ordered_id").
     pause_threshold : float
-        Velocity below which a frame is counted as a pause, expressed in the
-        configured velocity unit (UNITS["velocity"], default cm/s).
-        With the default px_per_cm=29, pause_threshold=1.0 cm/s == ~29 px/s.
-        Always uses speed magnitude ``velocity`` (|v|), not component speeds.
+        Velocity below which a frame is counted as a pause (cm/s).
+    reversal_threshold_deg : float
+        |turning_angle| above this (degrees) counts as a 180° reversal.
+    early_window_s : float
+        Duration of the "early" window from video start for mean_speed_early.
+        Default 10 s (~300 frames at 30 fps).
 
     Returns
     -------
@@ -550,15 +602,58 @@ def aggregate_per_fly_features(
     If the input has a ``vial_id`` column, each row also carries that fly's
     ``vial_id`` (for downstream plots that order genotypes by vial).
     """
+    reversal_threshold_rad = np.deg2rad(reversal_threshold_deg)
     grouped = df.groupby(group_col)
 
     def _per_fly_row(g: pd.DataFrame) -> pd.Series:
+        vel   = g["velocity"].to_numpy(dtype=float)
+        dt    = g["dt"].to_numpy(dtype=float)
+        turn  = g["turning_angle"].to_numpy(dtype=float)
+        frame = g["frame"].to_numpy(dtype=float)
+
+        is_paused = vel < pause_threshold
+        is_moving = ~is_paused
+
+        # --- pause episode stats ---
+        pause_durs = _bout_durations(is_paused, dt)
+        n_pauses   = _count_bouts(is_paused)
+
+        # --- burst (active bout) stats ---
+        burst_durs  = _bout_durations(is_moving, dt)
+        n_bursts    = _count_bouts(is_moving)
+        burst_speed = float(vel[is_moving].mean()) if is_moving.any() else 0.0
+
+        # --- latency to first movement ---
+        first_move_idx = int(np.argmax(is_moving)) if is_moving.any() else len(vel)
+        # sum of dt up to (but not including) first moving frame
+        latency = float(dt[:first_move_idx].sum()) if first_move_idx > 0 else 0.0
+
+        # --- mean speed in early window (from video start) ---
+        t_from_start = (frame - frame.min()) * TIME_SCALE
+        early_mask = t_from_start <= early_window_s
+        mean_speed_early = float(vel[early_mask].mean()) if early_mask.any() else 0.0
+
+        # --- 180° reversals ---
+        is_reversal = np.abs(turn) >= reversal_threshold_rad
+        n_reversals = int(is_reversal.sum())
+        total_time  = float(dt.sum()) if dt.sum() > 0 else 1.0
+        reversal_rate = n_reversals / total_time  # reversals per second
+
         row = {
-            "mean_velocity": g["velocity"].mean(),
-            "median_velocity": g["velocity"].median(),
-            "std_velocity": g["velocity"].std(),
-            "pause_fraction": (g["velocity"] < pause_threshold).mean(),
-            "mean_abs_turning_angle": g["turning_angle"].abs().mean(),
+            "mean_velocity": float(np.mean(vel)),
+            "median_velocity": float(np.median(vel)),
+            "std_velocity": float(np.std(vel, ddof=1)) if len(vel) > 1 else 0.0,
+            "pause_fraction": float(is_paused.mean()),
+            "pause_count": n_pauses,
+            "mean_pause_duration": float(pause_durs.mean()),
+            "max_pause_duration": float(pause_durs.max()),
+            "burst_count": n_bursts,
+            "mean_burst_duration": float(burst_durs.mean()),
+            "mean_burst_speed": burst_speed,
+            "latency_to_first_movement": latency,
+            "mean_speed_early": mean_speed_early,
+            "reversal_rate": reversal_rate,
+            "mean_abs_turning_angle": float(np.mean(np.abs(turn))),
             "mean_abs_angular_velocity": g["angular_velocity"].abs().mean(),
             "total_distance_traveled": g["distance_traveled"].iloc[-1],
             "tortuosity": g["tortuosity"].iloc[0],

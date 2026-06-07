@@ -105,6 +105,10 @@ def _build_gt(gt_csv: Path) -> list[str]:
     if missing:
         raise ValueError(f"{gt_csv.name} missing columns: {sorted(missing)}")
     df = df.rename(columns={"ID": "id"})
+    n_before = len(df)
+    df = df.drop_duplicates(subset=["frame", "id"], keep="first")
+    if len(df) < n_before:
+        print(f"  gt dedup: dropped {n_before - len(df)} duplicate (frame, id) rows")
     return _mot_lines(df[["frame", "id", "x1", "y1", "x2", "y2"]], c7=1)
 
 
@@ -135,11 +139,17 @@ def _build_tracker(tracks_csv: Path, dets_csv: Path, *, id_column: str) -> list[
     )
     unmatched = merged[merged["x1"].isna()]
     if len(unmatched):
-        raise RuntimeError(
-            f"{len(unmatched)} tracker rows in {tracks_csv.name} failed to "
-            f"join to a detection in {dets_csv.name} on (frame, x, y). "
-            f"First few:\n{unmatched[['frame', id_column, 'x', 'y']].head()}"
-        )
+        # Unmatched rows are typically ghost detections (synthetic bboxes
+        # injected during two-pass occlusion tracking). Reconstruct a bbox
+        # from the centroid using the median detection size as a fallback.
+        med_w = (dets["x2"] - dets["x1"]).median()
+        med_h = (dets["y2"] - dets["y1"]).median()
+        mask = merged["x1"].isna()
+        merged.loc[mask, "x1"] = merged.loc[mask, "x"] - med_w / 2
+        merged.loc[mask, "x2"] = merged.loc[mask, "x"] + med_w / 2
+        merged.loc[mask, "y1"] = merged.loc[mask, "y"] - med_h / 2
+        merged.loc[mask, "y2"] = merged.loc[mask, "y"] + med_h / 2
+        print(f"  ghost fallback: {mask.sum()} synthetic-detection rows given median bbox")
 
     merged = merged.rename(columns={id_column: "id"})
     return _mot_lines(merged[["frame", "id", "x1", "y1", "x2", "y2"]], c7=1.0)

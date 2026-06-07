@@ -18,6 +18,9 @@ venv/
 .vscode/settings.json
 .DS_Store
 
+# Experiment data directories (YYYY-MM-DD_* at repo root)
+????-??-??_*/
+
 # Secrets and local-only configs
 creds_config.yaml
 
@@ -25,6 +28,7 @@ creds_config.yaml
 outputs/
 #data/annotations/* # vestige (someone's got fancy English here)
 data/tracked_videos/*
+data/processed/
 media/plotly/*
 media/html/*
 ignore_mds/

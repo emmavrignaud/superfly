@@ -40,6 +40,10 @@ def video_stem_from_run(run_dir: Path) -> str:
     cropped = params.get("preprocessing", {}).get("video_raw_cropped")
     if cropped:
         return Path(cropped).stem
+    # Newer format: video.path holds the input video path
+    video_path = params.get("video", {}).get("path")
+    if video_path:
+        return Path(video_path).stem
     return Path(params["config"]["video"]).stem
 
 

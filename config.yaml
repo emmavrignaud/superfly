@@ -39,28 +39,28 @@ tracker:
   confidence: 0.55                   # primary association threshold; detections above this go into round-1 matching
   track_activation_threshold: 0.10   # min conf to open a new track
   lost_track_buffer: 400             # frames a track may go unseen before drop
-  minimum_matching_threshold: 0.2   # min association score to keep a match
+  minimum_matching_threshold: 0.05  # min association score to keep a match
   minimum_consecutive_frames: 1      # frames needed to confirm a new track
   min_area: 20                       # px²; smaller detections discarded
   asso_func: diou                    # iou | giou | diou | ciou | hmiou
   brownian_pos_noise: 15             # Kalman Q[cx,cy] scale; ↑ tolerates saccades
   aspect_weight: 0.05               # bonus for matching boxes of similar aspect ratio; 0 = disabled, try 0.05–0.2
   behavioral_weights:
-    speed:         0.025   # speed consistency bonus (was behavioral_weight × 0.5)
-    scale:         0.025   # bbox scale consistency bonus (was behavioral_weight × 0.5)
-    turning_angle: 0.0     # turning angle consistency (new; tune via Optuna)
-    pause:         0.0     # pause behaviour consistency (new; tune via Optuna)
-    acceleration:  0.0     # acceleration consistency (new; tune via Optuna)
+    speed:         0.2     # speed consistency bonus
+    scale:         0.0     # bbox scale consistency bonus
+    turning_angle: 0.2     # turning angle consistency
+    pause:         0.2     # pause behaviour consistency
+    acceleration:  0.2     # acceleration consistency
   overlap_weight_scale: 6.0  # multiply all behavioral weights when detections overlap (was behavioral_weight_overlap / behavioral_weight = 0.30 / 0.05)
   jump_factor: 2.0                  # round-2 velocity scale + bbox inflation (how far/wide to search)
   jump_iou_threshold: 0.05          # looser IoU threshold for jump round
   jump_inertia: 0.05                # reduced OCM weight for jump round (direction less reliable after a jump)
-  inertia: 0.2                      # round-1 direction consistency weight (OCM); ↑ penalises detections not in tracker's heading direction
-  delta_t: 3                        # frames lookback to compute tracker velocity direction for OCM; -1 = use full history (frame_idx)
+  inertia: 0.0                      # round-1 direction consistency weight (OCM); ↑ penalises detections not in tracker's heading direction
+  delta_t: -1                       # frames lookback to compute tracker velocity direction for OCM; -1 = use full history (frame_idx)
   overlap_iou_scale: 0.1            # IoU is multiplied by this when detections overlap; suppresses positional signal so behavioral bonus dominates
   edge_fraction: 0.1                # detections within this fraction of vial wall excluded from overlap handling
   expected_count: null              # total expected flies (e.g. 42); enables count-aware spawning when set; null = disabled
-  w_under: 15.0                     # spawning penalty per tracker below expected_count (heavy — missing a fly is bad)
+  w_under: 5.0                      # spawning penalty per tracker below expected_count (heavy — missing a fly is bad)
   w_over: 2.0                       # spawning penalty per tracker above expected_count (light — ghost tracks are tolerable)
 
   ghost_detection:
@@ -96,7 +96,7 @@ preprocessing:
   bg_gain: 1.2                   # post-division gain
   bg_white_level: 245            # target background value (0–255)
   bg_percentile: 85.0            # percentile over time per pixel (85–90)
-  bg_sample_stride: 1            # use every N-th frame for estimation
+  bg_sample_stride: 30           # use every N-th frame for estimation
   codec: mp4v                    # FourCC for preprocessed output
 
 visualization:
