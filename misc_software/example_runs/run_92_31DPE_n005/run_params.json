@@ -1,0 +1,106 @@
+{
+  "timestamp": "2026-05-02T23:30:24",
+  "git_commit": "431ef89",
+  "config": {
+    "video": "C:\\Users\\emmav\\Downloads\\superfly\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m\\31 DPE\\005\\2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted.mp4",
+    "output_dir": "..\\outputs\\run_92_31DPE_n005",
+    "short_name": "31DPE_n005",
+    "video_fps": 29.892938594511072,
+    "video_width": 1024,
+    "video_height": 768,
+    "video_frames": 388,
+    "tracker": {
+      "detection_confidence_rfdetr": 0.4,
+      "confidence": 0.55,
+      "lost_track_buffer": 180,
+      "min_matching_threshold": 0.2,
+      "min_consecutive_frames": 1,
+      "asso_func": "diou",
+      "brownian_pos_noise": 15,
+      "aspect_weight": 0.05,
+      "behavioral_weight": 0.05,
+      "jump_factor": 2.0,
+      "jump_iou_threshold": 0.05,
+      "jump_inertia": 0.05
+    },
+    "preprocessing": {
+      "bg_gain": 1.2,
+      "bg_white_level": 245,
+      "bg_percentile": 85.0,
+      "bg_sample_stride": 1
+    }
+  },
+  "preprocessing": {
+    "video_pp": "..\\outputs\\run_92_31DPE_n005\\2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_pp.mp4",
+    "crop_params": {
+      "x": 211,
+      "y": 101,
+      "w": 688,
+      "h": 456,
+      "start": 0,
+      "end": 388
+    }
+  },
+  "roi": {
+    "vial1": [
+      2,
+      1,
+      78,
+      450
+    ],
+    "vial2": [
+      122,
+      1,
+      198,
+      450
+    ],
+    "vial3": [
+      242,
+      1,
+      318,
+      450
+    ],
+    "vial4": [
+      366,
+      1,
+      442,
+      450
+    ],
+    "vial5": [
+      490,
+      0,
+      566,
+      450
+    ],
+    "vial6": [
+      614,
+      0,
+      687,
+      450
+    ]
+  },
+  "tracker_output": {
+    "wide_csv": "..\\outputs\\run_92_31DPE_n005\\tracks_wide_format.csv",
+    "frames": 363,
+    "track_count": 48
+  },
+  "stitching_output": {
+    "stitched_csv": "..\\outputs\\run_92_31DPE_n005\\tracks_xy_stitched_long.csv",
+    "stitched_ids": 48,
+    "original_ids": 48
+  },
+  "compact": {
+    "csv": "..\\outputs\\run_92_31DPE_n005\\compact_tracks.csv",
+    "rows": 11848
+  },
+  "stitching_objectives": {
+    "vial_count_error": 8.0,
+    "per_id_coverage_loss": 116.16666666666666,
+    "short_track_count": 7.0,
+    "per_frame_id_variance": 4.837273019624062
+  },
+  "outputs": {
+    "raw_overlay": "..\\outputs\\run_92_31DPE_n005\\31DPE_n005_overlay_raw_ocsort.mp4",
+    "overlay": "..\\outputs\\run_92_31DPE_n005\\31DPE_n005_overlay_vials_shaded.mp4"
+  }
+}

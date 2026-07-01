@@ -26,6 +26,9 @@ creds_config.yaml
 
 # Generated outputs
 outputs/
+transformer_module/.cache/
+transformer_module/runs/
+wandb/
 #data/annotations/* # vestige (someone's got fancy English here)
 data/tracked_videos/*
 data/processed/
@@ -41,3 +44,4 @@ roboflow_export*
 .claude/
 data/manual_labelling/
 data/raw/
+all_runs_final/
