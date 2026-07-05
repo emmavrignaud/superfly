@@ -49,6 +49,17 @@ def load_config(path: str | Path) -> Config:
         return Config(yaml.safe_load(f) or {})
 
 
+def resolve_overlay_enabled(config, cli_value: bool | None) -> bool:
+    """Return whether the pipeline should write overlay MP4s.
+
+    CLI wins when ``cli_value`` is not None; otherwise reads
+    ``config.visualization.enabled``.
+    """
+    if cli_value is not None:
+        return cli_value
+    return bool(config.visualization.enabled)
+
+
 def resolve_overlay_video(
     run_dir: str | Path,
     overlay_source: str,

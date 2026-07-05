@@ -7,9 +7,11 @@ Two-stage pipeline:
   Stage 1 -- Track every video under data/raw/ (or explicit --video paths)
              using the current config.yaml parameters.
              ROIs are loaded from roi_library.json; missing ones open a GUI.
-             No overlay videos are written (fast mode).
-             Skips videos whose output dir already has ordered_tracks.csv
-             unless --force is passed.
+             Overlay MP4s are written only when visualization.enabled is true
+             (or when --overlay is passed).
+             Every video is re-tracked by default so each run is fresh. Set
+             pipeline.skip_tracked: true in config.yaml to instead skip videos
+             that already have ordered_tracks.csv.
 
   Stage 2 -- Load all successfully tracked runs, extract behavioural features
              (including new episode features), run Kruskal-Wallis significance
@@ -27,8 +29,8 @@ Usage
     # Track specific videos then analyse
     python scripts/run_all.py --video data/raw/13\ DPE/001/...mp4 --video data/raw/13\ DPE/003/...mp4
 
-    # Force re-track even if ordered_tracks.csv already exists
-    python scripts/run_all.py --force
+    # Skip already-tracked videos (opt in via config: pipeline.skip_tracked: true)
+    python scripts/run_all.py
 """
 
 from __future__ import annotations
@@ -119,7 +121,7 @@ def _is_tracked(output_dir: Path) -> bool:
     """Report whether a run directory already holds a finished tracking result.
 
     Presence of ordered_tracks.csv is the completion marker used to skip
-    already-tracked videos (unless --force).
+    already-tracked videos when pipeline.skip_tracked is true.
 
     Inputs
     ------
@@ -140,7 +142,7 @@ def _is_tracked(output_dir: Path) -> bool:
 
 @dataclass(frozen=True)
 class RunPaths:
-    """Every output file for one tracked video (fast-mode names; no overlays)."""
+    """Every output file for one tracked video."""
     output_dir: str
     pp_out: str
     raw_cropped_out: str
@@ -463,6 +465,89 @@ def stage_assign(paths: RunPaths, df_wide, fps: float):
     return df_ord
 
 
+def render_detection_overlay(video: Path, paths: RunPaths, cfg, video_path: str) -> None:
+    """Render the raw RF-DETR detection overlay for visual QC.
+
+    Inputs
+    ------
+    video : pathlib.Path
+        Source video; its stem names the output MP4.
+    paths : RunPaths
+        Run paths (det_csv, output_dir).
+    cfg : Config
+        Loaded configuration (visualization.fps_out).
+    video_path : str
+        Video substrate the detections were computed on.
+
+    Outputs
+    -------
+    None
+        Writes ``<stem>_detections_RF-DETR.mp4`` into the output dir.
+    """
+    from src.visualization import render_detections_video
+
+    print("  [overlay] RF-DETR detection overlay...")
+    render_detections_video(
+        video_path=video_path,
+        det_log_csv=paths.det_csv,
+        out_mp4=os.path.join(paths.output_dir, f"{video.stem}_detections_RF-DETR.mp4"),
+        fps_out=cfg.visualization.fps_out,
+    )
+
+
+def stage_overlays(cfg, paths: RunPaths, video_path: str, vials: dict) -> None:
+    """Render raw OC-SORT and ordered-track overlay videos.
+
+    Inputs
+    ------
+    cfg : Config
+        Loaded configuration (visualization.overlay_source, visualization.fps_out).
+    paths : RunPaths
+        Run paths (long_csv, ordered_csv, det_csv, output_dir).
+    video_path : str
+        Fallback substrate when the configured overlay source is absent.
+    vials : dict
+        vial id -> (x0, y0, x1, y1) ROIs drawn on both overlays.
+
+    Outputs
+    -------
+    None
+        Writes overlay_raw_ocsort.mp4 and overlay_ordered.mp4 into the output dir.
+    """
+    from src.visualization import render_vial_overlay_video, render_raw_overlay_video
+    from utils import resolve_overlay_video, save_run_params
+
+    print("  [overlay] Track overlays...")
+    _overlay_mode = cfg.visualization.overlay_source
+    overlay_video = resolve_overlay_video(paths.output_dir, _overlay_mode) or video_path
+    det_log_arg = paths.det_csv if os.path.exists(paths.det_csv) else None
+
+    raw_overlay_mp4 = os.path.join(paths.output_dir, "overlay_raw_ocsort.mp4")
+    render_raw_overlay_video(
+        video_path=overlay_video,
+        csv_path=paths.long_csv,
+        out_mp4=raw_overlay_mp4,
+        vial_rois=vials,
+        det_log_csv=det_log_arg,
+        fps_out=cfg.visualization.fps_out,
+    )
+
+    ordered_overlay_mp4 = os.path.join(paths.output_dir, "overlay_ordered.mp4")
+    render_vial_overlay_video(
+        video_path=overlay_video,
+        csv_path=paths.ordered_csv,
+        out_mp4=ordered_overlay_mp4,
+        vial_rois=vials,
+        det_log_csv=det_log_arg,
+        fps_out=cfg.visualization.fps_out,
+    )
+
+    save_run_params(paths.output_dir, "outputs", {
+        "raw_overlay": raw_overlay_mp4,
+        "ordered_overlay": ordered_overlay_mp4,
+    })
+
+
 def stage_diagnostics(paths: RunPaths, cfg, tracker, df_wide, df_ord, fps: float) -> None:
     """Write the metrics report for one run; never abort the batch on failure.
 
@@ -598,11 +683,12 @@ def draw_first_prepass(videos: list[Path], cfg, library: dict,
 
 
 def track_one(video: Path, output_dir: Path, api_key: str, model_id: str,
-              cfg, library: dict) -> bool:
-    """Track one video end-to-end in fast mode (no overlays).
+              cfg, library: dict, *, write_overlays: bool) -> bool:
+    """Track one video end-to-end; optionally render overlay MP4s.
 
     Mirrors run_tracking.py's stage sequence — metadata, preprocess, ROIs, track,
-    assign, diagnostics — but skips overlay rendering for speed in batch mode.
+    assign, diagnostics — and writes overlay videos when ``write_overlays`` is
+    true (from config.visualization.enabled or CLI --overlay).
 
     Inputs
     ------
@@ -619,6 +705,8 @@ def track_one(video: Path, output_dir: Path, api_key: str, model_id: str,
     library : dict
         The in-memory ROI library, potentially updated by the ROI / preprocess
         stages.
+    write_overlays : bool
+        When true, render detection + track overlay MP4s after tracking.
 
     Outputs
     -------
@@ -632,8 +720,14 @@ def track_one(video: Path, output_dir: Path, api_key: str, model_id: str,
     video_path, raw_cropped_path = stage_preprocess(video, paths, cfg, library, video_key)
     stage_vial_rois(video, paths, cfg, library, video_key, video_path, raw_cropped_path)
     df_wide, tracker = stage_track(video, paths, cfg, api_key, model_id, video_path)
+    if write_overlays:
+        render_detection_overlay(video, paths, cfg, video_path)
     df_ord = stage_assign(paths, df_wide, fps)
     stage_diagnostics(paths, cfg, tracker, df_wide, df_ord, fps)
+    if write_overlays:
+        from src.roi import load_vial_rois
+        vials, _ = load_vial_rois(paths.roi_json)
+        stage_overlays(cfg, paths, video_path, vials)
     return True
 
 
@@ -844,8 +938,7 @@ def build_parser() -> argparse.ArgumentParser:
     -------
     argparse.ArgumentParser
         Parser exposing --video, --data-root, --outputs-root, --analysis-root,
-        --analysis-out, --skip-tracking, --skip-analysis, --force, and
-        --draw-first.
+        --analysis-out, --skip-tracking, --skip-analysis, and --draw-first.
     """
     p = argparse.ArgumentParser(
         description="Track all videos + run behavioural significance analysis.",
@@ -882,24 +975,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Track only, skip the analysis stage.",
     )
     p.add_argument(
-        "--force", action="store_true",
-        help="Re-track even if ordered_tracks.csv already exists.",
-    )
-    p.add_argument(
         "--draw-first", action="store_true",
         help="Collect the crop + vial ROIs for every video up front (one GUI "
              "pass), then track them all hands-off. Requires roi.use_saved_roi=true.",
     )
+    p.add_argument(
+        "--overlay", dest="overlay", action="store_true",
+        help="Write overlay MP4s (overrides config.visualization.enabled).",
+    )
+    p.add_argument(
+        "--no-overlay", dest="overlay", action="store_false",
+        help="Skip overlay MP4s (overrides config.visualization.enabled).",
+    )
+    p.set_defaults(overlay=None)
     return p
 
 
 def main() -> None:
     """Entry point: track all requested videos (Stage 1), then analyse (Stage 2).
 
-    Stage 1 tracks each discovered / explicit video (skipping finished ones unless
-    --force) in fast mode, maintaining the shared ROI library. Stage 2 loads the
-    tracked runs and writes the behavioural significance report. Either stage can
-    be skipped via CLI flags.
+    Stage 1 tracks each discovered / explicit video (fresh every run by default;
+    set pipeline.skip_tracked to skip finished ones), optionally writing overlay
+    MP4s per visualization.enabled / --overlay.
+    Stage 2 loads the tracked runs and writes the behavioural significance report.
 
     Inputs
     ------
@@ -911,10 +1009,11 @@ def main() -> None:
     None
         Runs the two stages for their side effects (tracked run dirs + report).
     """
-    from utils import load_config
+    from utils import load_config, resolve_overlay_enabled
 
     args  = build_parser().parse_args()
     cfg   = load_config(REPO_ROOT / "config.yaml")
+    write_overlays = resolve_overlay_enabled(cfg, args.overlay)
 
     outputs_root = (REPO_ROOT / args.outputs_root).resolve()
     analysis_out = (REPO_ROOT / args.analysis_out).resolve()
@@ -936,7 +1035,8 @@ def main() -> None:
             print(f"No videos found under {args.data_root}")
             sys.exit(1)
 
-        _banner(f"Stage 1 -- Tracking {len(videos)} video(s)")
+        _banner(f"Stage 1 -- Tracking {len(videos)} video(s)"
+                + (" (overlays on)" if write_overlays else " (overlays off)"))
 
         # Load ROI library
         roi_lib_path = REPO_ROOT / "roi_library.json"
@@ -959,14 +1059,15 @@ def main() -> None:
 
         for video in videos:
             out_dir = _output_dir_for(video, outputs_root)
-            if not args.force and _is_tracked(out_dir):
-                print(f"\n[skip] Already tracked: {out_dir.name}")
+            if cfg.pipeline.skip_tracked and _is_tracked(out_dir):
+                print(f"\n[skip] Already tracked (pipeline.skip_tracked): {out_dir.name}")
                 tracked_dirs.append(out_dir)
                 continue
 
             print(f"\n[track] {video.name}  ->  {out_dir.name}")
             try:
-                ok = track_one(video, out_dir, api_key, model_id, cfg, library)
+                ok = track_one(video, out_dir, api_key, model_id, cfg, library,
+                               write_overlays=write_overlays)
                 if ok:
                     tracked_dirs.append(out_dir)
                     # Persist updated ROI library

@@ -32,9 +32,9 @@ REQUIRED_KEYS = {
         "min_distance_factor", "min_region_area_fraction",
         "debug", "debug_max_images",
     ],
-    "pipeline": ["expected_per_vial"],
+    "pipeline": ["expected_per_vial", "skip_tracked"],
     "preprocessing": ["bg_gain", "bg_white_level", "bg_percentile", "bg_sample_stride"],
-    "visualization": ["overlay_source", "fps_out", "show_ids"],
+    "visualization": ["enabled", "overlay_source", "fps_out", "show_ids"],
     "roi": ["use_saved_roi"],
     "latent_space": ["representation_method", "seed", "embedding"],
     "classification": ["method", "svc", "lda", "logistic"],
@@ -80,6 +80,11 @@ def test_calibration_length_unit_is_valid(config_yaml: dict) -> None:
 def test_calibration_time_unit_is_valid(config_yaml: dict) -> None:
     u = config_yaml["calibration"]["time_unit"]
     assert u in ("s", "frame"), f"calibration.time_unit must be 's' or 'frame', got {u!r}"
+
+
+def test_visualization_enabled_is_bool(config_yaml: dict) -> None:
+    v = config_yaml["visualization"]["enabled"]
+    assert isinstance(v, bool), "visualization.enabled must be a boolean"
 
 
 def test_features_kinematic_three_families_is_bool(config_yaml: dict) -> None:

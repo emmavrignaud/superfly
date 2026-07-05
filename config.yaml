@@ -105,6 +105,7 @@ pipeline:
   # Cross-cutting parameters for the active tracking pipeline.
   # (Post-hoc stitching parameters now live in legacy/stitching_config.yaml.)
   expected_per_vial: 7   # ground-truth fly count per vial; used by run_diagnostics
+  skip_tracked: false    # false = every run is fresh (re-track always); true = skip videos that already have ordered_tracks.csv
 
 # relink: section removed — post-hoc ID-swap correction has been superseded by
 # per-feature behavioral_weights built into the live cost matrix (see tracker: above).
@@ -112,6 +113,7 @@ pipeline:
 
 visualization:
   # Overlay: diagonal crosshair on the fly + off-body ID chip with leader line.
+  enabled: false               # true = write detection + track overlay MP4s after tracking
   overlay_source: raw_cropped  # raw_cropped | processed — substrate for the overlay
   fps_out: 30              # output video fps
   show_ids: true           # false = crosshair only

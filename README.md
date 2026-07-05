@@ -20,7 +20,7 @@ flowchart LR
     C --> F
     D --> G[Diagnostics<br/>metrics_report.html]
     F --> G
-    F --> H[Overlay videos<br/>*_overlay_ordered.mp4]
+    F --> H[Track Overlays<br/>overlay_ordered.mp4]
     F --> I[Behavioural features<br/>kinematics, area, tortuosity]
     I --> J[Genotype classification<br/>LDA / Logistic / SVC]
 ```
@@ -54,13 +54,12 @@ gitignored.
 ## Running the pipeline
 
 A run is defined entirely in **`config.yaml`**: the video to track, the tracker
-settings, and which stages run. The workflow is always the same — **edit
-`config.yaml`, then launch it.** The notebook and scripts only read
-`config.yaml`; you never edit them to change a run.
+settings, and which stages run. Edit `config.yaml`, then launch it. The notebook
+and scripts only read config; you do not edit them to change a run.
 
-### Step 1 — configure the run in `config.yaml`
+### Step 1: configure the run in `config.yaml`
 
-Sections are grouped **Meta** (inputs & environment), **Pipeline** (stages in
+Sections are grouped **Meta** (inputs and environment), **Pipeline** (stages in
 execution order), and **Downstream analysis**:
 
 | Section | What it controls |
@@ -72,45 +71,63 @@ execution order), and **Downstream analysis**:
 | `roi` | Whether to reuse saved vial/crop ROIs or always reopen the GUI |
 | `tracker` | RF-DETR confidence, every OC-SORT knob (jump round, behavioral weights), `cached_detections`, and `ghost_detection` |
 | `watershed` | Splitting detection boxes that contain two touching flies |
-| `pipeline` | `expected_per_vial` — flies per vial, for diagnostics + ghost gating |
-| `visualization` | Overlay rendering style + `overlay_source` substrate selection |
+| `pipeline` | `expected_per_vial`: flies per vial, for diagnostics and ghost gating |
+| `visualization` | Track Overlays (`enabled`, default false) + `overlay_source`, fps, style |
 | `features` | Optional kinematic feature families |
 | `latent_space` | PCA / t-SNE / UMAP embedding settings |
 | `classification` | Active classifier (`method`) + per-backend hyperparameters |
 
-### Step 2 — launch it
+### Step 2: launch it
 
-Notebook (interactive, best for exploring one video):
+Every script reads `config.yaml`. Tracking output goes to
+`data/outputs/run_<N>_<short_name>/`. CLI flags affect the current run only; they
+do not edit config. 
 
-```bash
-jupyter lab notebooks/01_tracking_pipeline.ipynb   # run cells top to bottom
-```
+#### `scripts/run_tracking.py`
 
-Single video (CLI):
-
-```bash
-python scripts/run_tracking.py                              # uses video.raw_path
-python scripts/run_tracking.py --video data/raw/my_clip.mp4 # override for one run
-```
-
-Batch — track every video under a folder, then analyse:
+One video, full pipeline.
 
 ```bash
-python scripts/run_all.py --data-root data/raw
-
-# Hands-off: click through every video's crop + ROIs up front, then walk away
-# while detection + tracking run unattended (needs roi.use_saved_roi: true).
-python scripts/run_all.py --data-root data/raw --draw-first
+python scripts/run_tracking.py                            # track config.video.raw_path
+python scripts/run_tracking.py --video data/raw/clip.mp4  # track a different file instead
+python scripts/run_tracking.py --overlay                  # also write Track Overlays this run
+python scripts/run_tracking.py --no-overlay               # skip overlays even if config enables them
 ```
 
-Classification only, from an existing tracked run:
+With no overlay flag, overlays follow `visualization.enabled` in config.
+
+#### `notebooks/01_tracking_pipeline.ipynb`
+
+Same pipeline as `run_tracking.py`, one cell at a time. No CLI flags; overlays
+follow `visualization.enabled` in config.
 
 ```bash
-python scripts/run_classification.py --tracks data/outputs/run_5/ordered_tracks.csv
+jupyter lab notebooks/01_tracking_pipeline.ipynb
 ```
 
-Every entry point writes into `data/outputs/run_<N>_<short_name>/`. Pass
-`--help` for the full flag list.
+#### `scripts/run_all.py`
+
+Stage 1 tracks video(s); Stage 2 runs behavioural significance analysis on the
+tracked runs. Every run is fresh by default — each video is re-tracked. Set
+`pipeline.skip_tracked: true` in `config.yaml` to skip videos that already have
+`ordered_tracks.csv` (useful for resuming an interrupted batch).
+
+```bash
+python scripts/run_all.py --data-root data/raw  # track every video in the folder, then analyse
+python scripts/run_all.py --data-root data/raw --draw-first # draw all crop + ROIs upfront, then track unattended
+
+```
+
+
+#### `scripts/run_classification.py`
+
+Classify genotypes from a finished run folder (`ordered_tracks.csv` and
+`run_params.json` required). Classifier settings come from config.
+
+```bash
+python scripts/run_classification.py --run-dir data/outputs/run_5_13DPE_n001  # required: the run folder
+python scripts/run_classification.py --run-dir <run> --report-site            # also write an HTML report
+```
 
 
 ## Outputs
@@ -129,13 +146,12 @@ data/outputs/run_<N>_<short_name>/
 ├── tracker_log.json                          # detection, suppression + ghost/exit log
 ├── run_params.json                           # full param snapshot per stage
 ├── metrics_report.{md,html}                  # diagnostics report
-├── <video_stem>_detections_RF-DETR.mp4       # raw-detection overlay
-├── overlay_raw_ocsort.mp4                     # raw OC-SORT track overlay
-└── overlay_ordered.mp4                        # ordered-id overlay
+├── <video_stem>_detections_RF-DETR.mp4       # Track Overlays (when enabled or --overlay)
+├── overlay_raw_ocsort.mp4
+└── overlay_ordered.mp4
 ```
 
-`run_all.py` runs in fast mode and skips the three overlay videos. `data/outputs/`
-and `data/annotations/` are gitignored. Only `.gitkeep` stubs are tracked.
+`data/outputs/` and `data/annotations/` are gitignored. Only `.gitkeep` stubs are tracked.
 
 
 ## Repository layout

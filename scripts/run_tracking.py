@@ -45,6 +45,7 @@ from utils import (
     load_config,
     load_creds,
     make_run_output_dir,
+    resolve_overlay_enabled,
     resolve_overlay_video,
     save_config_snapshot,
     save_run_params,
@@ -705,7 +706,7 @@ def stage_overlays(config, paths: RunPaths, video_path: str, vials: dict) -> Non
 # ===========================================================================
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the CLI parser (only ``--video``, overriding config.video.raw_path).
+    """Build the CLI parser (``--video``, ``--overlay`` / ``--no-overlay``).
 
     Inputs
     ------
@@ -714,7 +715,7 @@ def build_parser() -> argparse.ArgumentParser:
     Outputs
     -------
     argparse.ArgumentParser
-        Parser exposing the optional ``--video`` argument.
+        Parser exposing optional ``--video`` and overlay override flags.
     """
     p = argparse.ArgumentParser(
         description="Fly tracking: one raw video -> ocsort_tracks.csv + ordered_tracks.csv",
@@ -725,6 +726,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Video to track. Overrides config.video.raw_path for this run. "
              "If omitted, config.video.raw_path is used.",
     )
+    p.add_argument(
+        "--overlay", dest="overlay", action="store_true",
+        help="Write overlay MP4s (overrides config.visualization.enabled).",
+    )
+    p.add_argument(
+        "--no-overlay", dest="overlay", action="store_false",
+        help="Skip overlay MP4s (overrides config.visualization.enabled).",
+    )
+    p.set_defaults(overlay=None)
     return p
 
 
@@ -763,10 +773,15 @@ def main():
     video_path = stage_preprocess(config, paths, raw_video, video_context)
     vials, n_flies_dict = stage_vial_rois(config, paths, raw_video, video_context)
     df_wide, tracker = stage_track(config, paths, video_path, api_key, model_id, vials, n_flies_dict)
-    render_detection_overlay(config, paths, video_path)
+    write_overlays = resolve_overlay_enabled(config, args.overlay)
+    if write_overlays:
+        render_detection_overlay(config, paths, video_path)
+    else:
+        print("\n=== Overlays skipped (visualization.enabled=false; pass --overlay to force) ===")
     df_ordered = stage_assign(paths, df_wide, fps)
     score_run_metrics(config, paths, tracker, df_wide, df_ordered, vials, fps)
-    stage_overlays(config, paths, video_path, vials)
+    if write_overlays:
+        stage_overlays(config, paths, video_path, vials)
 
     print("\nDone.")
 
