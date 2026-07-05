@@ -25,7 +25,7 @@ venv/
 creds_config.yaml
 
 # Generated outputs
-outputs/
+data/outputs/
 transformer_module/.cache/
 transformer_module/runs/
 wandb/
@@ -45,3 +45,5 @@ roboflow_export*
 data/manual_labelling/
 data/raw/
 all_runs_final/
+
+RF-DETR_model/

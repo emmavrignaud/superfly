@@ -1,0 +1,11 @@
+# Roboflow credentials for hosted RF-DETR inference.
+# Copy this file to creds_config.yaml (which is gitignored) and fill in the key:
+#
+#     cp creds_config.example.yaml creds_config.yaml
+#
+# API_KEY  : Roboflow private API key (required).
+# MODEL_ID : optional override for roboflow.model_id in config.yaml, in the
+#            form "<workspace>/<version>". Leave blank to use config.yaml.
+
+API_KEY: ""
+MODEL_ID: ""

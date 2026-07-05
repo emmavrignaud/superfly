@@ -1,3 +1,4 @@
+# Conda environment for the fly-tracking pipeline.
 name: fly-tracking
 channels:
   - conda-forge
@@ -16,7 +17,7 @@ dependencies:
   - jupyter>=1.0
   - matplotlib>=3.7
   - colorcet>=3.0
-  - filterpy>=1.4
+  - filterpy>=1.4         # Kalman primitives (src/kalmanfilter.py, src/ocsort.py)
   - pip:
     - opencv-python>=4.8
     - supervision>=0.18
@@ -25,4 +26,3 @@ dependencies:
     - PyQt5>=5.15
     - PySide6>=6.6
     - kaleido>=0.2
-    - torch>=2.2

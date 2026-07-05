@@ -952,7 +952,7 @@
       "start": 0,
       "end": 704
     },
-    "video_path": "B:\\Domain\\EPFL\\Coursework\\MA2\\Fly_Tracking\\superfly_code\\superfly\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m\\6 DPE\\001\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_6d_001-converted.mp4",
+    "video_path": "..\\data\\raw\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m\\6 DPE\\001\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_6d_001-converted.mp4",
     "vial_rois": {
       "vial1": [
         0,
@@ -1469,51 +1469,52 @@
   },
   "2024-02-15_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_16d_003-converted": {
     "preprocessing": {
-      "x": 218,
-      "y": 166,
-      "w": 806,
-      "h": 565,
+      "x": 221,
+      "y": 196,
+      "w": 705,
+      "h": 365,
       "start": 0,
       "end": 409
     },
     "vial_rois": {
       "vial1": [
-        221,
-        195,
-        299,
-        555
+        1,
+        1,
+        74,
+        361
       ],
       "vial2": [
-        346,
+        125,
+        1,
         198,
-        421,
-        555
+        364
       ],
       "vial3": [
-        468,
-        198,
-        548,
-        555
+        249,
+        0,
+        322,
+        364
       ],
       "vial4": [
-        595,
-        196,
-        676,
-        555
+        373,
+        0,
+        453,
+        364
       ],
       "vial5": [
-        720,
-        198,
-        798,
-        555
+        498,
+        1,
+        577,
+        364
       ],
       "vial6": [
-        844,
-        196,
-        929,
-        559
+        622,
+        0,
+        702,
+        364
       ]
-    }
+    },
+    "video_path": "data\\raw\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m\\16 DPE\\003\\2024-02-15_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_16d_003-converted.mp4"
   },
   "2024-02-15_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_16d_004-converted": {
     "preprocessing": {
@@ -2189,51 +2190,52 @@
   },
   "2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_001-converted": {
     "preprocessing": {
-      "x": 192,
-      "y": 203,
-      "w": 670,
-      "h": 356,
+      "x": 187,
+      "y": 202,
+      "w": 678,
+      "h": 351,
       "start": 0,
       "end": 467
     },
     "vial_rois": {
       "vial1": [
-        2,
-        6,
-        73,
-        344
+        8,
+        4,
+        79,
+        346
       ],
       "vial2": [
-        120,
-        8,
-        191,
-        344
+        123,
+        3,
+        194,
+        346
       ],
       "vial3": [
-        238,
-        8,
-        309,
-        344
+        243,
+        3,
+        314,
+        346
       ],
       "vial4": [
-        357,
-        9,
-        433,
-        344
+        363,
+        0,
+        438,
+        346
       ],
       "vial5": [
-        481,
-        10,
-        553,
-        344
+        484,
+        0,
+        559,
+        346
       ],
       "vial6": [
-        598,
-        10,
-        670,
-        344
+        602,
+        0,
+        675,
+        346
       ]
-    }
+    },
+    "video_path": "..\\data\\raw\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m\\31 DPE\\001\\2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_001-converted.mp4"
   },
   "2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_002-converted": {
     "preprocessing": {

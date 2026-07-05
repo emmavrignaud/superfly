@@ -5,6 +5,7 @@ Shared helpers for scripts and notebooks.
 """
 
 import json
+import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -107,9 +108,9 @@ def resolve_overlay_video(
 
 def make_run_output_dir(
     raw_video: str | Path,
-    outputs_root: str | Path = "outputs",
+    outputs_root: str | Path = "data/outputs",
 ) -> str:
-    """Auto-incremented run directory: outputs/run_N_<DPE>DPE_n<NNN>.
+    """Auto-incremented run directory: data/outputs/run_N_<DPE>DPE_n<NNN>.
 
     Suffix is derived from the "<N> DPE/<NNN>" pattern in the video path
     (e.g. "13 DPE/002" -> "13DPE_n002"). Falls back to the video stem
@@ -188,3 +189,37 @@ def save_run_params(out_dir: str, stage: str, params: dict) -> None:
 
     with open(path, "w") as f:
         json.dump(data, f, indent=2, default=str)
+
+
+def load_creds(config, creds_path: str | Path = "creds_config.yaml") -> tuple[str, str]:
+    """Return (api_key, model_id) from creds_config.yaml.
+
+    Secrets live only in creds_config.yaml (git-ignored). MODEL_ID falls back to
+    config.roboflow.model_id when the creds file doesn't set it. Raises
+    SystemExit with a clear message when the file or API_KEY is missing, so both
+    scripts fail the same way instead of each rolling their own loader.
+    """
+    creds_path = Path(creds_path)
+    if not creds_path.exists():
+        raise SystemExit(f"creds_config.yaml not found at {creds_path}")
+    with open(creds_path) as f:
+        creds = yaml.safe_load(f) or {}
+    api_key  = creds.get("API_KEY", "")
+    model_id = creds.get("MODEL_ID") or config.roboflow.model_id
+    if not api_key:
+        raise SystemExit("API_KEY missing in creds_config.yaml")
+    return api_key, model_id
+
+
+def link_or_copy(src: str | Path, dst: str | Path) -> None:
+    """Hardlink src -> dst to save disk; fall back to a real copy if the
+    filesystem refuses (e.g. across drives). No-op if dst already exists."""
+    import shutil
+    src, dst = Path(src), Path(dst)
+    if dst.exists():
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(src, dst)
+    except OSError:
+        shutil.copy2(src, dst)

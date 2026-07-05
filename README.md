@@ -36,52 +36,81 @@ scikit-learn.
 git clone <your-repo-url>
 cd superfly
 
-# Conda is the supported path; environment.yml pins compatible versions.
+# Conda (recommended):
 conda env create -f environment.yml
 conda activate fly-tracking
 
-# Plain pip works too; both files stay in sync manually.
+# Or pip:
 # pip install -r requirements.txt
 
-# Add your Roboflow key (the example file shows the format).
-cp creds_config.example.yaml creds_config.yaml
-# then edit creds_config.yaml and paste your real API_KEY
+# Add a Roboflow API key for detection:
+cp creds_config.example.yaml creds_config.yaml   # then paste the key into creds_config.yaml
 ```
 
-`creds_config.yaml` is gitignored. `creds_config.example.yaml` is the template.
+`creds_config.example.yaml` is the template; the real `creds_config.yaml` is
+gitignored.
 
 
 ## Running the pipeline
 
-### Notebook (interactive, recommended for exploration)
+A run is defined entirely in **`config.yaml`**: the video to track, the tracker
+settings, and which stages run. The workflow is always the same — **edit
+`config.yaml`, then launch it.** The notebook and scripts only read
+`config.yaml`; you never edit them to change a run.
+
+### Step 1 — configure the run in `config.yaml`
+
+Sections are grouped **Meta** (inputs & environment), **Pipeline** (stages in
+execution order), and **Downstream analysis**:
+
+| Section | What it controls |
+|---|---|
+| `video` | `raw_path` (the clip to track) + `fallback_fps` when metadata is missing |
+| `roboflow` | `model_id` and `inference_api_url` for RF-DETR detection |
+| `calibration` | `px_per_cm` + output units (cm/px, s/frame) for behavioural features |
+| `preprocessing` | `enabled` + background subtraction (percentile, gain, white level, codec) |
+| `roi` | Whether to reuse saved vial/crop ROIs or always reopen the GUI |
+| `tracker` | RF-DETR confidence, every OC-SORT knob (jump round, behavioral weights), `cached_detections`, and `ghost_detection` |
+| `watershed` | Splitting detection boxes that contain two touching flies |
+| `pipeline` | `expected_per_vial` — flies per vial, for diagnostics + ghost gating |
+| `visualization` | Overlay rendering style + `overlay_source` substrate selection |
+| `features` | Optional kinematic feature families |
+| `latent_space` | PCA / t-SNE / UMAP embedding settings |
+| `classification` | Active classifier (`method`) + per-backend hyperparameters |
+
+### Step 2 — launch it
+
+Notebook (interactive, best for exploring one video):
 
 ```bash
-jupyter lab notebooks/01_tracking_pipeline.ipynb
+jupyter lab notebooks/01_tracking_pipeline.ipynb   # run cells top to bottom
 ```
 
-Edit `RAW_VIDEO` in cell 3, then run cells top to bottom. Each stage writes
-into `outputs/run_<N>_<short_name>/`.
-
-### CLI single-video
+Single video (CLI):
 
 ```bash
-python scripts/run_tracking.py --video data/my_clip.mp4
+python scripts/run_tracking.py                              # uses video.raw_path
+python scripts/run_tracking.py --video data/raw/my_clip.mp4 # override for one run
 ```
 
-### CLI batch (one experiment folder of subdirs, each with one `*-converted.mp4`)
+Batch — track every video under a folder, then analyse:
 
 ```bash
-python scripts/run_batch_tracking_pipeline.py \
-    --dpe-root "2024-02-05_NEG-008_.../24 DPE"
+python scripts/run_all.py --data-root data/raw
+
+# Hands-off: click through every video's crop + ROIs up front, then walk away
+# while detection + tracking run unattended (needs roi.use_saved_roi: true).
+python scripts/run_all.py --data-root data/raw --draw-first
 ```
 
-### Classification
+Classification only, from an existing tracked run:
 
 ```bash
-python scripts/run_classification.py --tracks outputs/run_5/ordered_tracks.csv
+python scripts/run_classification.py --tracks data/outputs/run_5/ordered_tracks.csv
 ```
 
-All three CLIs respect `config.yaml` defaults. Pass `--help` for the full flag list.
+Every entry point writes into `data/outputs/run_<N>_<short_name>/`. Pass
+`--help` for the full flag list.
 
 
 ## Outputs
@@ -89,154 +118,85 @@ All three CLIs respect `config.yaml` defaults. Pass `--help` for the full flag l
 Each tracking run produces:
 
 ```
-outputs/run_<N>_<short_name>/
+data/outputs/run_<N>_<short_name>/
 ├── <video_name>.mp4                          # hardlink/copy of the raw input
-├── crop_roi.json                             # crop window + temporal trim
+├── crop_roi.json                             # crop window + temporal trim (if preprocessed)
 ├── vial_rois.json                            # per-vial bounding boxes
-├── detections_raw.csv                        # raw RF-DETR detections
+├── detections_raw.csv                        # raw RF-DETR detections (detection cache)
 ├── ocsort_tracks.csv                         # tracker output (wide format)
 ├── ocsort_tracks_long.csv                    # long format, one row per (frame, id)
-├── tracks_relinked.csv                       # post-OC-SORT re-link swaps
 ├── ordered_tracks.csv                        # vial-assigned, left-to-right ordered_id
-├── tracker_log.json                          # detection + suppression log
+├── tracker_log.json                          # detection, suppression + ghost/exit log
 ├── run_params.json                           # full param snapshot per stage
 ├── metrics_report.{md,html}                  # diagnostics report
-├── <short_name>_detections_RF-DETR.mp4
-├── <short_name>_overlay_raw_ocsort.mp4
-└── <short_name>_overlay_ordered.mp4
+├── <video_stem>_detections_RF-DETR.mp4       # raw-detection overlay
+├── overlay_raw_ocsort.mp4                     # raw OC-SORT track overlay
+└── overlay_ordered.mp4                        # ordered-id overlay
 ```
 
-`outputs/` and `data/annotations/` are gitignored. Only `.gitkeep` stubs are tracked.
+`run_all.py` runs in fast mode and skips the three overlay videos. `data/outputs/`
+and `data/annotations/` are gitignored. Only `.gitkeep` stubs are tracked.
 
 
 ## Repository layout
 
 ```
 superfly/
-├── config.yaml                # tunable defaults for the active pipeline
-├── creds_config.example.yaml  # template; copy to creds_config.yaml
+├── config.yaml                # the one file you edit to define a run
+├── creds_config.example.yaml  # Roboflow key template; copy to creds_config.yaml
 ├── environment.yml            # conda env spec
 ├── requirements.txt           # pip mirror
-├── utils.py                   # shared helpers (save_run_params, video resolution)
-├── assets/
-│   └── preprocessing_style.qss  # Qt stylesheet for the preprocessing GUI
+├── utils.py                   # shared helpers (config loading, run outputs)
+├── roi_library.json           # cached crop + vial ROIs keyed by video stem
+├── RF-DETR_model/             # trained fly-detection model
+│   └── weights.pt
+├── external/                  # vendored TrackEval — HOTA / MOT scoring
+├── data/                      # raw/ input videos + outputs/ tracked runs
 ├── notebooks/
 │   ├── 01_tracking_pipeline.ipynb
 │   └── 02_classification_analysis.ipynb
 ├── scripts/
-│   ├── run_tracking.py
-│   ├── run_batch_tracking_pipeline.py
-│   ├── run_classification.py
-│   ├── grid_search_tracker_params.py
+│   ├── run_tracking.py        # single video, full render
+│   ├── run_all.py             # batch tracking (+ --draw-first) then analysis
+│   ├── run_classification.py  # genotype classification on ordered_tracks
 │   ├── populate_roi_library.py
-│   ├── merge_labeler_sessions.py
-│   └── export_to_roboflow.py
+│   └── export_to_roboflow.py  # dataset export for model training
 ├── src/
-│   ├── __init__.py            # public API surface
+│   │   # -- tracking pipeline --
 │   ├── preprocessing.py       # background subtraction + crop/trim GUI
-│   ├── tracking.py            # RF-DETR + OC-SORT
-│   ├── ocsort.py              # OC-SORT implementation
-│   ├── kalmanfilter.py
-│   ├── association.py
-│   ├── wide_long.py           # wide -> long format conversion
-│   ├── stitching.py           # compatibility shim only (re-exports wide_to_long)
 │   ├── roi.py                 # vial ROI drawing + assign_vials_and_ordered_ids
-│   ├── metrics.py             # run_diagnostics, per-vial counts, swap analysis
-│   ├── features.py            # kinematics, area, tortuosity
-│   ├── classification.py      # LDA / Logistic / SVC + plots
-│   ├── latent_space.py        # PCA / UMAP / autoencoder
+│   ├── tracking.py            # RF-DETR + OC-SORT orchestration
+│   ├── watershed_split.py     # split boxes holding two touching flies
+│   ├── wide_long.py           # wide -> long format conversion
 │   ├── visualization.py       # overlay video rendering
-│   └── ui_context.py
-├── tests/
-│   ├── conftest.py
-│   ├── test_imports.py
-│   ├── test_config_schema.py
-│   ├── test_wide_long.py
-│   ├── test_roi_ordering.py
-│   ├── test_utils.py
-│   └── test_legacy_compat.py
-├── legacy/                    # post-hoc tracklet stitching (deprecated)
-│   ├── stitching.py           # 50+ KB of Hungarian linking code
-│   ├── stitching_config.yaml  # parameters for the deprecated stitcher
-│   ├── run_stitching.py       # SystemExit stub for safety
-│   └── grid_search_stitching_params.py
-├── parameter_tuning/          # offline ground-truth + tuning experiments
-└── roi_library/               # cached crop + vial ROIs keyed by video stem
+│   ├── metrics.py             # run_diagnostics, per-vial counts, HOTA
+│   │   # -- vendored tracker (OC-SORT, lightly modified) --
+│   ├── ocsort.py              # OC-SORT implementation
+│   ├── kalmanfilter.py        # Kalman filter used per track
+│   ├── association.py         # IoU variants + Hungarian matching
+│   │   # -- downstream behavioural analysis --
+│   ├── features.py            # kinematics, area, tortuosity
+│   ├── statistics.py          # Kruskal-Wallis + Cliff's delta significance
+│   ├── classification.py      # LDA / Logistic / SVC + plots
+│   ├── latent_space.py        # PCA / t-SNE / UMAP embeddings
+│   ├── forecasting.py         # next-step movement MLP (genotype-conditioned)
+│   ├── plot_colors.py         # stable per-genotype Plotly colours
+│   └── ui_context.py          # PyQt GUI helpers
+├── parameter_tuning/          # ground-truth, grid search + HOTA scoring
+├── labeler/                   # standalone detection-labelling GUI
+├── tests/                     # hermetic unit tests (pytest)
+└── legacy/                    # deprecated post-hoc stitching (not used)
 ```
 
 
-## Configuration
-
-Active pipeline parameters live in `config.yaml`:
-
-| Section | What it controls |
-|---|---|
-| `roboflow` | `model_id` (default), `inference_api_url` |
-| `video` | `fallback_fps` when video metadata is missing |
-| `tracker` | RF-DETR confidence + every OC-SORT knob (jump round, behavioral weights) |
-| `pipeline` | `expected_per_vial` for diagnostics (number of flies per vial) |
-| `relink` | Round-2 re-linking thresholds |
-| `preprocessing` | Background subtraction (percentile, gain, white level) |
-| `visualization` | Overlay rendering style + substrate selection |
-| `roi` | Whether to reuse saved vial/crop ROIs or always reopen the GUI |
-| `latent_space` | PCA / UMAP / autoencoder for classification |
-
-Deprecated post-hoc stitching parameters live in
-`legacy/stitching_config.yaml`. The active pipeline does not read that file.
-
-
-## Public API
-
-```python
-from src import (
-    preprocess_bgsub_gui,                # GUI: crop + temporal trim + bg subtract
-    export_tracks_xy_tuple_csv_one_config,  # RF-DETR + OC-SORT
-    wide_to_long,                        # tracker output to long format
-    draw_and_save_vial_rois,             # GUI: draw per-vial bounding boxes
-    assign_vials_and_ordered_ids,        # vial assignment + left-to-right IDs
-    extract_behavioral_features,         # kinematics, area, tortuosity
-    aggregate_per_fly_features,          # collapse to one row per fly
-    run_classifier,                      # LDA / Logistic / SVC + cross-val
-    render_vial_overlay_video,           # overlay video with vial colours
-)
-```
-
-
-## Development
-
-### Run the test suite
+## Verifying the setup
 
 ```bash
 pytest tests/ -v
 ```
 
-The tests are hermetic: no Roboflow API, no real videos, no GPU. They cover
-the public import surface, the `config.yaml` schema contract, the
-wide-to-long round trip, vial-assignment ordering invariants, the
-`save_run_params` merging behaviour, and the `src.stitching` deprecation shim.
-
-### Strip notebook outputs from commits
-
-Run `nbstripout` once to register a git filter that removes cell outputs from
-every committed notebook:
-
-```bash
-pip install nbstripout
-nbstripout --install
-```
-
-This keeps notebook diffs reviewable and prevents 100 KB of binary plot data
-from creeping into commits.
-
-### Repo conventions
-
-- `legacy/` holds code that is no longer part of the active pipeline. Do not
-  add new dependencies on it.
-- `assets/` holds non-Python files used by `src/` modules.
-- Any new public function in `src/<module>.py` should be re-exported from
-  `src/__init__.py` and added to `tests/test_imports.py`.
-- Any new top-level section or required key in `config.yaml` should be added
-  to `tests/test_config_schema.py`.
+The tests need no Roboflow key, no videos, and no GPU, so a green run confirms
+the environment is installed correctly.
 
 
 ## Acknowledgements

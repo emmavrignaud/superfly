@@ -698,6 +698,27 @@ def load_vial_rois(
     return bbox_dict, n_flies_dict
 
 
+def resolve_vial_expected_counts(
+    n_flies_dict: Dict[str, int],
+    vial_ids,
+    fallback_per_vial: int,
+) -> Dict[str, int]:
+    """Expected fly count per vial: the real ROI count where present, else the
+    config fallback.
+
+    ``n_flies`` is a per-run label (drawn in the ROI GUI); the ROI library only
+    stores box geometry, so a reused ROI has no count. Per vial: use the real
+    count when it is > 0, otherwise ``fallback_per_vial``. This is the single
+    definition every entrypoint uses, both to gate ghost detection
+    (vial_expected_counts) and to compute the diagnostics expected total, so the
+    notebook and the two scripts can never disagree.
+    """
+    return {
+        vid: (int(n_flies_dict.get(vid, 0)) or int(fallback_per_vial))
+        for vid in vial_ids
+    }
+
+
 def assign_ordered_ids_left_to_right(
     df: pd.DataFrame,
     id_col: str = "orig_id",

@@ -104,7 +104,6 @@ FIXED_PARAMS: dict[str, Any] = {
     "detection_confidence_rfdetr": 0.4,
     "lost_track_buffer":           400,
     "minimum_consecutive_frames":  1,
-    "min_area":                    20,
     "asso_func":                   "diou",
     "aspect_weight":               0.05,
     "edge_fraction":               0.1,
@@ -114,6 +113,15 @@ FIXED_PARAMS: dict[str, Any] = {
     "jump_iou_threshold":          0.05,
     "jump_inertia":                0.05,
     "w_over":                      2.0,
+    # Required by the wrapper but inert for this search: detections always come
+    # from the cache (det_log_csv), so RF-DETR / inference_api_url is never hit,
+    # and ghost detection is off because we're tuning association, not occlusion.
+    "inference_api_url":           "",
+    "ghost_detection_enabled":     False,
+    "ghost_offset_fraction":       0.5,
+    "ghost_confidence":            0.45,
+    "ghost_occlusion_max_gap":     90,
+    "ghost_top_exit_px":           2.0,
 }
 
 

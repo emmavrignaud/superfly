@@ -1,5 +1,15 @@
 # Default pipeline parameters — override via CLI or notebook.
 
+# ============================================================================
+# 1) META  —  inputs & environment (video, Roboflow model, rig calibration)
+# ============================================================================
+
+video:
+  # The clip to track. This is the main thing a user changes per run.
+  # Path is relative to the repo root (the folder that holds config.yaml).
+  raw_path: "data/raw/2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m/31 DPE/001/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_001-converted.mp4"
+  fallback_fps: 30   # used only when cv2.CAP_PROP_FPS is missing/unreadable
+
 roboflow:
   # Roboflow hosted model id: ``<workspace>/<version>`` (same string Roboflow shows for the model).
   # Optional override: set MODEL_ID in creds_config.yaml (same format).
@@ -9,10 +19,6 @@ roboflow:
   #   - https://detect.roboflow.com      → Older hosted inference host; only use if YOUR Roboflow example code still uses detect.roboflow.com.
   # Rule: copy the hostname from the official inference example Roboflow gives you after deploy — do not guess.
   inference_api_url: "https://serverless.roboflow.com"
-
-video:
-  # Properties of the input video. Used by tracking + diagnostics.
-  fallback_fps: 30   # used only when cv2.CAP_PROP_FPS is missing/unreadable
 
 calibration:
   # World-space calibration for behavioural features (consumed by src/features.py).
@@ -26,22 +32,35 @@ calibration:
   length_unit: cm
   time_unit:   s
 
-features:
-  # When true, kinematics add velocity_x / velocity_y (signed), acceleration
-  # from those components, axis-wise cumulative path length, and per-fly
-  # aggregates for x, y, and magnitude families (velocity, acceleration,
-  # distance). Scalar features (pause, angles, tortuosity, area) stay single-column.
-  kinematic_three_families: true
+# ============================================================================
+# 2) PIPELINE  —  stages in execution order
+# ============================================================================
+
+preprocessing:
+  # Per-pixel percentile background, divided out and rescaled to white.
+  enabled: true                  # false = skip crop/trim/bg-sub and reuse a prior _pp.mp4
+  bg_gain: 1.2                   # post-division gain
+  bg_white_level: 245            # target background value (0–255)
+  bg_percentile: 85.0            # percentile over time per pixel (85–90)
+  bg_sample_stride: 30           # use every N-th frame for estimation
+  codec: mp4v                    # FourCC for preprocessed output
+
+roi:
+  # Per-vial ROI; cached in roi_library/. Snapping aligns boxes vertically.
+  use_saved_roi: false         # false = always open GUI to redraw
+  snap_threshold_pct: 0.005   # snap zone as fraction of last box height
+  snap_enabled: true          # press 'S' in GUI to toggle per-vial
 
 tracker:
   # RF-DETR detections + OC-SORT association into tracklets.
+  cached_detections: null            # repo-root-relative path to a prior detections_raw.csv to skip RF-DETR; null = run inference
   detection_confidence_rfdetr: 0.10  # RF-DETR output threshold; detections in [detection_confidence_rfdetr, confidence) feed the jump-low pass only
   confidence: 0.55                   # primary association threshold; detections above this go into round-1 matching
   track_activation_threshold: 0.10   # min conf to open a new track
   lost_track_buffer: 400             # frames a track may go unseen before drop
   minimum_matching_threshold: 0.05  # min association score to keep a match
   minimum_consecutive_frames: 1      # frames needed to confirm a new track
-  min_area: 20                       # px²; smaller detections discarded
+  min_area: 20                       # px²; TODO: DEAD KNOB — declared but never consumed by the tracker (see src/tracking.py); wire it up or remove
   asso_func: diou                    # iou | giou | diou | ciou | hmiou
   brownian_pos_noise: 15             # Kalman Q[cx,cy] scale; ↑ tolerates saccades
   aspect_weight: 0.05               # bonus for matching boxes of similar aspect ratio; 0 = disabled, try 0.05–0.2
@@ -91,14 +110,6 @@ pipeline:
 # per-feature behavioral_weights built into the live cost matrix (see tracker: above).
 # The relink() method is still available on OCSort for experimental use.
 
-preprocessing:
-  # Per-pixel percentile background, divided out and rescaled to white.
-  bg_gain: 1.2                   # post-division gain
-  bg_white_level: 245            # target background value (0–255)
-  bg_percentile: 85.0            # percentile over time per pixel (85–90)
-  bg_sample_stride: 30           # use every N-th frame for estimation
-  codec: mp4v                    # FourCC for preprocessed output
-
 visualization:
   # Overlay: diagonal crosshair on the fly + off-body ID chip with leader line.
   overlay_source: raw_cropped  # raw_cropped | processed — substrate for the overlay
@@ -114,11 +125,17 @@ visualization:
   show_unmatched_detections: true   # red box around RF-DETR detections no track covered
   unmatched_tolerance_k: 2.0         # bbox padding = k × std of detection-box sides
 
-roi:
-  # Per-vial ROI; cached in roi_library/. Snapping aligns boxes vertically.
-  use_saved_roi: true         # false = always open GUI to redraw
-  snap_threshold_pct: 0.005   # snap zone as fraction of last box height
-  snap_enabled: true          # press 'S' in GUI to toggle per-vial
+# ============================================================================
+# 3) DOWNSTREAM ANALYSIS  —  feature extraction, embedding, classification
+# ============================================================================
+
+features:
+  # When true, kinematics add velocity_x / velocity_y (signed), acceleration
+  # from those components, axis-wise cumulative path length, and per-fly
+  # aggregates for x, y, and magnitude families (velocity, acceleration,
+  # distance). Scalar features (pause, angles, tortuosity, area) stay single-column.
+  kinematic_three_families: true
+
 latent_space:
   # Latent-space preprocessing, representation, and embedding controls.
   representation_method: multitask   # baseline | autoencoder

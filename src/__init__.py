@@ -10,6 +10,7 @@ Re-exports the public API so users can do:
 """
 
 from src.preprocessing import (
+    capture_crop_params_gui,
     gui_pick_roi_and_range,
     preprocess_bgsub_gui,
 )
@@ -61,6 +62,7 @@ from src.visualization import (
 
 __all__ = [
     # preprocessing
+    "capture_crop_params_gui",
     "gui_pick_roi_and_range",
     "preprocess_bgsub_gui",
     # tracking

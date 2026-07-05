@@ -481,6 +481,46 @@ def gui_pick_roi_and_range(
     return dlg.get_result()
 
 
+def capture_crop_params_gui(
+    video_path: str,
+    video_context: VideoContext | None = None,
+) -> dict:
+    """Open the crop / range GUI only, and return the crop parameters.
+
+    This is the "capture" half of ``preprocess_bgsub_gui``: it shows the same
+    ROI + frame-range picker but performs no background subtraction and writes no
+    video. Its purpose is to let a person choose the crop for many videos up
+    front (a "draw-first" pass), so the slow, unattended background subtraction
+    and tracking can run later with no GUI interruptions. The returned dict has
+    the exact shape ``preprocess_bgsub_gui`` both returns and accepts via its
+    ``crop_params`` argument, so a captured crop can be fed straight back later.
+
+    Inputs
+    ------
+    video_path : str
+        Path to the video to crop.
+    video_context : VideoContext | None
+        Optional parsed metadata shown in the GUI title / chips.
+
+    Outputs
+    -------
+    dict
+        Crop parameters ``{"x": int, "y": int, "w": int, "h": int,
+        "start": int, "end": int}``. ``end`` is the exclusive end frame, clamped
+        to the video's frame count.
+    """
+    x, y, w, h, start, end_excl = gui_pick_roi_and_range(
+        video_path, video_context=video_context
+    )
+    cap = cv2.VideoCapture(str(video_path))
+    n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if cap.isOpened() else 0
+    cap.release()
+    if n_frames > 0:
+        end_excl = min(end_excl, n_frames)
+    return {"x": int(x), "y": int(y), "w": int(w), "h": int(h),
+            "start": int(start), "end": int(end_excl)}
+
+
 def preprocess_bgsub_gui(
     video_path: str,
     out_mp4: str | None = None,
