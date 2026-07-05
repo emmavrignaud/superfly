@@ -21,8 +21,14 @@ from src.tracking import export_tracks_xy_tuple_csv_one_config
 
 # Parameters whose values come from config.yaml. None may carry a default.
 CONFIG_DRIVEN_PARAMS = [
-    # roboflow
+    # roboflow + inference
     "inference_api_url",
+    "inference_mode",
+    "local_weights_path",
+    "local_resolution",
+    "local_num_classes",
+    "local_optimize_for_gpu",
+    "repo_root",
     # tracker: detection + association
     "detection_confidence_rfdetr",
     "confidence",

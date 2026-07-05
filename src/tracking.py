@@ -443,17 +443,24 @@ def collect_detections(
     api_key: str,
     model_id: str,
     inference_api_url: str,
+    inference_mode: str,
+    local_weights_path: str,
+    local_resolution: int,
+    local_num_classes: int,
+    local_optimize_for_gpu: bool,
+    repo_root: str,
     detection_confidence_rfdetr: float,
     max_frames: int | None,
 ) -> tuple[dict, int, int, int, float, bool]:
     """Return one detection array per frame, plus the video's geometry.
 
-    Detections are the Roboflow-hosted RF-DETR boxes for each frame, kept as
-    (x1, y1, x2, y2, conf). If a detection cache exists at ``det_log_csv`` it is
-    read back instead of calling the model, so association parameters can be
-    re-tuned without paying for inference again. The video is opened either way
-    because the tracker needs the frame height/width, and fps is reported so the
-    caller can fall back to it when no explicit fps is given.
+    Detections are RF-DETR boxes for each frame, kept as (x1, y1, x2, y2, conf).
+    They come from either Roboflow hosted API or local weights (see inference.mode
+    in config.yaml). If a detection cache exists at ``det_log_csv`` it is read
+    back instead of calling the model, so association parameters can be re-tuned
+    without paying for inference again. The video is opened either way because
+    the tracker needs the frame height/width, and fps is reported so the caller
+    can fall back to it when no explicit fps is given.
 
     Inputs
     ------
@@ -468,7 +475,19 @@ def collect_detections(
     model_id : str (keyword-only)
         Roboflow model id, ``"<workspace>/<version>"``.
     inference_api_url : str (keyword-only)
-        Roboflow inference host URL.
+        Roboflow inference host URL (hosted mode only).
+    inference_mode : str (keyword-only)
+        ``hosted`` or ``local`` — where RF-DETR runs (config.inference.mode).
+    local_weights_path : str (keyword-only)
+        Path to weights.pt when inference_mode is ``local``.
+    local_resolution : int (keyword-only)
+        Model input resolution; must match the checkpoint.
+    local_num_classes : int (keyword-only)
+        Number of detection classes (1 for fly-only).
+    local_optimize_for_gpu : bool (keyword-only)
+        When True and CUDA is available, enable FP16 inference optimization.
+    repo_root : str (keyword-only)
+        Repo root for resolving relative local_weights_path.
     detection_confidence_rfdetr : float (keyword-only)
         RF-DETR confidence threshold applied at inference time.
     max_frames : int | None (keyword-only)
@@ -506,16 +525,23 @@ def collect_detections(
         n_frames = int(det_cache["frame"].max()) + 1 if len(det_cache) else 0
         cap.release()
     else:
-        from utils import patch_windows_ssl
+        from pathlib import Path
 
-        patch_windows_ssl()
-        from inference_sdk import InferenceHTTPClient
-        from inference_sdk.http.entities import InferenceConfiguration
-        client = InferenceHTTPClient(
+        from src.inference_backends import create_detection_backend
+
+        backend = create_detection_backend(
+            inference_mode,
+            repo_root=Path(repo_root),
             api_url=inference_api_url,
             api_key=api_key,
+            model_id=model_id,
+            threshold=detection_confidence_rfdetr,
+            local_weights_path=local_weights_path,
+            local_resolution=local_resolution,
+            local_num_classes=local_num_classes,
+            local_optimize_for_gpu=local_optimize_for_gpu,
         )
-        client.configure(InferenceConfiguration(confidence_threshold=detection_confidence_rfdetr))
+        print(f"RF-DETR inference: {inference_mode}")
 
         frame_idx = 0
         while True:
@@ -524,8 +550,7 @@ def collect_detections(
             ok, frame = cap.read()
             if not ok:
                 break
-            result = client.infer(frame, model_id=model_id)
-            dets = sv.Detections.from_inference(result)
+            dets = backend.predict(frame)
             if len(dets) > 0:
                 det_by_frame[frame_idx] = np.hstack(
                     [dets.xyxy, dets.confidence[:, None]]
@@ -733,6 +758,12 @@ def export_tracks_xy_tuple_csv_one_config(
     # one fails loudly rather than tracking with a stale hardcoded fallback.
     # (tests/test_tracking_contract.py guards this.)
     inference_api_url: str,
+    inference_mode: str,
+    local_weights_path: str,
+    local_resolution: int,
+    local_num_classes: int,
+    local_optimize_for_gpu: bool,
+    repo_root: str,
     detection_confidence_rfdetr: float,
     confidence: float,
     lost_track_buffer: int,
@@ -794,7 +825,19 @@ def export_tracks_xy_tuple_csv_one_config(
     model_id : str
         Roboflow model id, ``"<workspace>/<version>"``.
     inference_api_url : str (keyword-only, required)
-        Roboflow inference host URL.
+        Roboflow inference host URL (hosted mode only).
+    inference_mode : str (keyword-only, required)
+        ``hosted`` or ``local``.
+    local_weights_path : str (keyword-only, required)
+        Path to local weights when mode is ``local``.
+    local_resolution : int (keyword-only, required)
+        Local model resolution.
+    local_num_classes : int (keyword-only, required)
+        Local model class count.
+    local_optimize_for_gpu : bool (keyword-only, required)
+        FP16 optimization on CUDA when True.
+    repo_root : str (keyword-only, required)
+        Repo root for relative weight paths.
     detection_confidence_rfdetr : float (keyword-only, required)
         RF-DETR confidence threshold at inference time.
     confidence : float (keyword-only, required)
@@ -876,6 +919,12 @@ def export_tracks_xy_tuple_csv_one_config(
         api_key=api_key,
         model_id=model_id,
         inference_api_url=inference_api_url,
+        inference_mode=inference_mode,
+        local_weights_path=local_weights_path,
+        local_resolution=local_resolution,
+        local_num_classes=local_num_classes,
+        local_optimize_for_gpu=local_optimize_for_gpu,
+        repo_root=repo_root,
         detection_confidence_rfdetr=detection_confidence_rfdetr,
         max_frames=max_frames,
     )

@@ -383,6 +383,7 @@ def stage_track(video: Path, paths: RunPaths, cfg, api_key: str, model_id: str,
     """
     from src.tracking import export_tracks_xy_tuple_csv_one_config
     from src.roi import load_vial_rois, resolve_vial_expected_counts
+    from utils import inference_tracking_kwargs
 
     print(f"  [track] Running RF-DETR + OC-SORT on {video.name}...")
     _gd = cfg.tracker.ghost_detection
@@ -396,6 +397,7 @@ def stage_track(video: Path, paths: RunPaths, cfg, api_key: str, model_id: str,
         api_key=api_key,
         model_id=model_id,
         inference_api_url=cfg.roboflow.inference_api_url,
+        **inference_tracking_kwargs(cfg, REPO_ROOT),
         confidence=cfg.tracker.confidence,
         detection_confidence_rfdetr=cfg.tracker.detection_confidence_rfdetr,
         lost_track_buffer=cfg.tracker.lost_track_buffer,
@@ -1046,8 +1048,12 @@ def main() -> None:
     # Stage 1 -- Tracking                                                  #
     # ------------------------------------------------------------------ #
     if not args.skip_tracking:
-        from utils import load_creds
-        api_key, model_id = load_creds(cfg, REPO_ROOT / "creds_config.yaml")
+        from utils import inference_requires_api_key, load_creds
+        api_key, model_id = load_creds(
+            cfg,
+            REPO_ROOT / "creds_config.yaml",
+            require_api_key=inference_requires_api_key(cfg),
+        )
 
         if args.videos:
             videos = [Path(v).expanduser().resolve() for v in args.videos]

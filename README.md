@@ -26,8 +26,9 @@ flowchart LR
 ```
 
 Every step except detection and classification runs locally with no GPU.
-Detection calls Roboflow's hosted RF-DETR over HTTP; classification is pure
-scikit-learn.
+By default, detection calls Roboflow's hosted RF-DETR over HTTP. You can
+instead run the model on your own machine — see **Local inference** below.
+Classification is pure scikit-learn.
 
 
 ## Quick start
@@ -56,6 +57,10 @@ gitignored.
 undocumented.
 
 
+## Local inference (optional)
+
+Default is hosted (`inference.mode: hosted`). For local detection, follow `requirements-local_inference.txt`, then set `inference.mode: local` in `config.yaml`.
+
 ## Running the pipeline
 
 A run is defined entirely in **`config.yaml`**: the video to track, the tracker
@@ -70,7 +75,8 @@ execution order), and **Downstream analysis**:
 | Section | What it controls |
 |---|---|
 | `video` | `raw_path` (the clip to track) + `fallback_fps` when metadata is missing |
-| `roboflow` | `model_id` and `inference_api_url` for RF-DETR detection |
+| `roboflow` | `model_id` and `inference_api_url` for hosted RF-DETR detection |
+| `inference` | `mode`: `hosted` (cloud API) or `local` (weights on your machine) |
 | `calibration` | `px_per_cm` + output units (cm/px, s/frame) for behavioural features |
 | `preprocessing` | `enabled` + background subtraction (percentile, gain, white level, codec) |
 | `roi` | Whether to reuse saved vial/crop ROIs or always reopen the GUI |
@@ -187,6 +193,7 @@ superfly/
 ├── creds_config.example.yaml  # Roboflow key template; copy to creds_config.yaml
 ├── environment.yml            # conda env spec
 ├── requirements.txt           # pip mirror
+├── requirements-local_inference.txt  # optional: local RF-DETR (see Local inference)
 ├── utils.py                   # shared helpers (config loading, run outputs)
 ├── roi_library.json           # cached crop + vial ROIs keyed by video stem
 ├── RF-DETR_model/             # trained fly-detection model
@@ -196,15 +203,15 @@ superfly/
 ├── notebooks/
 │   ├── 01_tracking_pipeline.ipynb
 │   └── 02_classification_analysis.ipynb
-├── scripts/
-│   ├── app.py                 # setup window: crop + vial ROIs + colours, hands off to run_tracking
-│   ├── run_tracking.py        # single video, full render
-│   ├── run_all.py             # batch tracking (+ --draw-first); analysis via --analysis
-│   ├── run_classification.py  # genotype classification on ordered_tracks
-│   ├── populate_roi_library.py
-│   └── export_to_roboflow.py  # dataset export for model training
+├── scripts/                   # entry points — start here
+│   ├── app.py                 # GUI setup → hands off to run_tracking
+│   ├── run_tracking.py        # one video, full pipeline
+│   ├── run_all.py             # batch many videos
+│   ├── run_classification.py  # genotype classification on a finished run
+│   └── populate_roi_library.py  # batch ROI drawing for a whole experiment folder
 ├── src/
 │   │   # -- tracking pipeline --
+│   ├── inference_backends.py  # hosted vs local RF-DETR
 │   ├── preprocessing.py       # background subtraction + crop/trim GUI
 │   ├── roi.py                 # vial ROI drawing + assign_vials_and_ordered_ids
 │   ├── tracking.py            # RF-DETR + OC-SORT orchestration
@@ -226,8 +233,10 @@ superfly/
 │   └── ui_context.py          # PyQt GUI helpers
 ├── parameter_tuning/          # ground-truth, grid search + HOTA scoring
 ├── labeler/                   # standalone detection-labelling GUI
-├── tests/                     # hermetic unit tests (pytest)
-└── legacy/                    # deprecated post-hoc stitching (not used)
+├── tests/                     # pytest + optional runnable checks
+│   ├── check_local_model.py   # verify local RF-DETR install
+│   └── benchmark_local_inference.py  # local vs hosted speed (optional)
+├── misc_software/legacy/      # old one-off scripts (not used by pipeline)
 ```
 
 

@@ -37,11 +37,15 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from utils import (
     config_for_run,
+    inference_requires_api_key,
+    inference_tracking_kwargs,
     link_or_copy,
     load_config,
     load_creds,
@@ -445,6 +449,7 @@ def stage_track(config, paths: RunPaths, video_path: str, api_key: str, model_id
         api_key=api_key,
         model_id=model_id,
         inference_api_url=config.roboflow.inference_api_url,
+        **inference_tracking_kwargs(config, REPO_ROOT),
         detection_confidence_rfdetr=tracker_cfg.detection_confidence_rfdetr,
         confidence=tracker_cfg.confidence,
         lost_track_buffer=tracker_cfg.lost_track_buffer,
@@ -780,6 +785,9 @@ def main():
     config = load_config(CONFIG_PATH)
     args   = build_parser().parse_args()
 
+    if getattr(getattr(config, "inference", None), "mode", "hosted").strip().lower() == "local":
+        import torch  # load before cv2/Qt — avoids fbgemm.dll conflicts on Windows
+
     # Transient, in-memory override (never written back to config.yaml): when the
     # GUI has just captured ROIs (or a CLI user opts in), reuse saved geometry and
     # skip every drawing GUI for this run.
@@ -794,7 +802,9 @@ def main():
     print(f"Output dir: {paths.output_dir}")
 
     from src.ui_context import parse_video_context
-    api_key, model_id = load_creds(config, CREDS_PATH)
+    api_key, model_id = load_creds(
+        config, CREDS_PATH, require_api_key=inference_requires_api_key(config)
+    )
     video_context     = parse_video_context(str(raw_video))
     fps               = record_run_metadata(config, paths, raw_video)
 

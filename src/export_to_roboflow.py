@@ -1,7 +1,7 @@
 """Export annotated GT detections to a Roboflow-ready zip.
 
 Usage (from repo root):
-    python scripts/export_to_roboflow.py \\
+    python src/export_to_roboflow.py \\
         --gt   data/manual_labelling/<stem>/<stem>.gt.csv \\
         --video data/manual_labelling/<stem>/<stem>.mp4 \\
         --out  roboflow_export.zip \\

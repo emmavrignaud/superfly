@@ -1,21 +1,10 @@
 """
-scripts/test_new_analysis.py
+tests/run_analysis_integration.py
 
-Overnight test script for the new analysis features (A/B/C/D).
-
-Stage 1 — Synthetic smoke tests (~2 min)
-    Exercises every new function with generated data so bugs are caught
-    without needing a real tracking run.
-
-Stage 2 — Real-data integration test (~10-30 min depending on AE epochs)
-    Runs the full classification + latent-space analysis on the 4 real runs
-    used in notebook 02, writing outputs to outputs/classification/test_run/.
-
-Usage
------
-    python scripts/test_new_analysis.py
-    python scripts/test_new_analysis.py --stage 1   # synthetic only
-    python scripts/test_new_analysis.py --stage 2   # real data only
+Usage:
+    python tests/run_analysis_integration.py
+    python tests/run_analysis_integration.py --stage 1
+    python tests/run_analysis_integration.py --stage 2
 """
 
 from __future__ import annotations

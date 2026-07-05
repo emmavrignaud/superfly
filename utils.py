@@ -269,22 +269,51 @@ def save_run_params(out_dir: str, stage: str, params: dict) -> None:
         json.dump(data, f, indent=2, default=str)
 
 
-def load_creds(config, creds_path: str | Path = "creds_config.yaml") -> tuple[str, str]:
+def inference_requires_api_key(config) -> bool:
+    """True when detection uses Roboflow hosted API (needs creds_config.yaml)."""
+    mode = getattr(getattr(config, "inference", None), "mode", "hosted")
+    return str(mode).strip().lower() != "local"
+
+
+def inference_tracking_kwargs(config, repo_root: str | Path) -> dict:
+    """Build inference keyword args for export_tracks_xy_tuple_csv_one_config."""
+    inf = config.inference
+    loc = inf.local
+    return {
+        "inference_mode": inf.mode,
+        "local_weights_path": loc.weights_path,
+        "local_resolution": int(loc.resolution),
+        "local_num_classes": int(loc.num_classes),
+        "local_optimize_for_gpu": bool(loc.optimize_for_gpu),
+        "repo_root": str(repo_root),
+    }
+
+
+def load_creds(
+    config,
+    creds_path: str | Path = "creds_config.yaml",
+    *,
+    require_api_key: bool = True,
+) -> tuple[str, str]:
     """Return (api_key, model_id) from creds_config.yaml.
 
     Secrets live only in creds_config.yaml (git-ignored). MODEL_ID falls back to
     config.roboflow.model_id when the creds file doesn't set it. Raises
     SystemExit with a clear message when the file or API_KEY is missing, so both
     scripts fail the same way instead of each rolling their own loader.
+
+    Set require_api_key=False when inference.mode is local (no Roboflow calls).
     """
     creds_path = Path(creds_path)
     if not creds_path.exists():
-        raise SystemExit(f"creds_config.yaml not found at {creds_path}")
+        if require_api_key:
+            raise SystemExit(f"creds_config.yaml not found at {creds_path}")
+        return "", getattr(config.roboflow, "model_id", "")
     with open(creds_path) as f:
         creds = yaml.safe_load(f) or {}
     api_key  = creds.get("API_KEY", "")
     model_id = creds.get("MODEL_ID") or config.roboflow.model_id
-    if not api_key:
+    if require_api_key and not api_key:
         raise SystemExit("API_KEY missing in creds_config.yaml")
     return api_key, model_id
 

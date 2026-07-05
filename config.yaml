@@ -21,6 +21,17 @@ roboflow:
   # Rule: copy the hostname from the official inference example Roboflow gives you after deploy — do not guess.
   inference_api_url: "https://serverless.roboflow.com"
 
+inference:
+  # Where RF-DETR runs during tracking (stage 3):
+  #   hosted — send each frame to Roboflow's cloud (default; needs creds_config.yaml + internet).
+  #   local  — weights.pt on this machine; see requirements-local_inference.txt
+  mode: local
+  local:
+    weights_path: RF-DETR_model/weights.pt   # path relative to repo root, or absolute
+    resolution: 640                          # must match the exported checkpoint
+    num_classes: 1                           # fly-only model
+    optimize_for_gpu: false                  # true = FP16 on NVIDIA CUDA only; Mac uses MPS automatically
+
 calibration:
   # World-space calibration for behavioural features (consumed by src/features.py).
   # Measure px_per_cm once per camera setup, e.g. via vial ROI width and a known

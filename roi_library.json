@@ -228,7 +228,7 @@
       "start": 0,
       "end": 333
     },
-    "video_path": "..\\data\\raw\\13 DPE\\002\\2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted.mp4",
+    "video_path": "B:\\Domain\\EPFL\\Coursework\\MA2\\Fly_Tracking\\superfly_code\\superfly\\data\\raw\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m\\13 DPE\\002\\2024-02-12_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_13d_002-converted.mp4",
     "vial_rois": {
       "vial1": [
         7,
@@ -2114,7 +2114,8 @@
         697,
         357
       ]
-    }
+    },
+    "video_path": "B:\\Domain\\EPFL\\Coursework\\MA2\\Fly_Tracking\\superfly_code\\superfly\\data\\raw\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m\\28 DPE\\004\\2024-02-27_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_28d_004-converted.mp4"
   },
   "2024-02-27_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_28d_005-converted": {
     "preprocessing": {

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Compare local RF-DETR vs Roboflow hosted on the same frames.
 
-Usage (repo root, fly-tracking env):
-    python scripts/test_local_model.py
-    python scripts/test_local_model.py --video path/to/clip.mp4 --benchmark 30
+Usage (repo root):
+    python tests/benchmark_local_inference.py
+    python tests/benchmark_local_inference.py --benchmark 30
 """
 from __future__ import annotations
 
@@ -83,7 +83,7 @@ def load_local_model(device: str):
 
     if not WEIGHTS_PATH.exists():
         raise SystemExit(f"Missing weights: {WEIGHTS_PATH}")
-    print(f"Loading local model …", flush=True)
+    print("Loading local model …", flush=True)
     t0 = time.perf_counter()
     model = RFDETR2XLarge(
         pretrain_weights=str(WEIGHTS_PATH),

@@ -10,13 +10,14 @@ from __future__ import annotations
 import pytest
 
 REQUIRED_SECTIONS = [
-    "roboflow", "video", "calibration", "features", "tracker", "watershed",
+    "roboflow", "inference", "video", "calibration", "features", "tracker", "watershed",
     "pipeline", "preprocessing", "visualization", "roi", "latent_space",
     "classification",
 ]
 
 REQUIRED_KEYS = {
     "roboflow": ["model_id", "inference_api_url"],
+    "inference": ["mode", "local"],
     "video": ["fallback_fps"],
     "calibration": ["px_per_cm", "length_unit", "time_unit"],
     "features": ["kinematic_three_families"],
@@ -39,6 +40,10 @@ REQUIRED_KEYS = {
     "latent_space": ["representation_method", "seed", "embedding"],
     "classification": ["method", "svc", "lda", "logistic"],
 }
+
+INFERENCE_LOCAL_KEYS = [
+    "weights_path", "resolution", "num_classes", "optimize_for_gpu",
+]
 
 
 @pytest.mark.parametrize("section", REQUIRED_SECTIONS)
@@ -263,6 +268,20 @@ def test_watershed_schema(config_yaml: dict) -> None:
     mraf = w["min_region_area_fraction"]
     assert 0.0 < float(mraf) < 1.0, (
         f"watershed.min_region_area_fraction must be in (0, 1), got {mraf!r}"
+    )
+
+
+def test_inference_mode_is_valid(config_yaml: dict) -> None:
+    mode = config_yaml["inference"]["mode"]
+    assert mode in ("hosted", "local"), (
+        f"inference.mode must be 'hosted' or 'local', got {mode!r}"
+    )
+
+
+@pytest.mark.parametrize("key", INFERENCE_LOCAL_KEYS)
+def test_inference_local_keys(config_yaml: dict, key: str) -> None:
+    assert key in config_yaml["inference"]["local"], (
+        f"inference.local.{key} is required when using local inference"
     )
 
 

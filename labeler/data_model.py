@@ -15,7 +15,7 @@ OC-SORT wide tracking output (`src/tracking.py` writes this):
 
 Roboflow export (31d_005)
 -------------------------
-    python scripts/export_to_roboflow.py --gt data/manual_labelling/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.gt.csv --video data/manual_labelling/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4 --out roboflow_export_31d_005.zip
+    python src/export_to_roboflow.py --gt data/manual_labelling/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.gt.csv --video data/manual_labelling/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted_raw_cropped.mp4 --out roboflow_export_31d_005.zip
 """
 from __future__ import annotations
 
