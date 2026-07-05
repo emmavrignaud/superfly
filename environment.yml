@@ -13,6 +13,7 @@ dependencies:
   - umap-learn>=0.5
   - scikit-posthocs>=0.9
   - pyyaml>=6.0
+  - ruamel.yaml>=0.18     # comment-preserving YAML writes (scripts/app.py edits config.yaml)
   - ipython>=8.0
   - jupyter>=1.0
   - matplotlib>=3.7

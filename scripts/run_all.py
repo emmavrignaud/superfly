@@ -323,13 +323,13 @@ def stage_vial_rois(video: Path, paths: RunPaths, cfg, library: dict, video_key:
     None
         Writes ``vial_rois.json`` and may update ``library`` in place.
     """
-    from src.roi import draw_and_save_vial_rois, load_vial_rois
+    from src.roi import draw_and_save_vial_rois, load_vial_rois, load_vial_colors
 
     use_saved_roi = cfg.roi.use_saved_roi
     _stored_roi = library.get(video_key, {}).get("vial_rois") if use_saved_roi else None
     if use_saved_roi and _stored_roi is not None:
-        # Library stores only ROI geometry; n_flies is a per-run label and is
-        # absent on reuse (expected counts then fall back to config).
+        # Library stores ROI geometry + per-vial colour; n_flies is a per-run
+        # label and is absent on reuse (expected counts then fall back to config).
         print(f"  [roi] Using stored ROI for {video_key}")
         with open(paths.roi_json, "w") as _f:
             json.dump(_stored_roi, _f, indent=2)
@@ -338,7 +338,11 @@ def stage_vial_rois(video: Path, paths: RunPaths, cfg, library: dict, video_key:
         overlay_src = raw_cropped_path if raw_cropped_path and raw_cropped_path.exists() else video_path
         draw_and_save_vial_rois(str(overlay_src), paths.roi_json)
         bbox_dict, _ = load_vial_rois(paths.roi_json)
-        library.setdefault(video_key, {})["vial_rois"] = {k: list(v) for k, v in bbox_dict.items()}
+        _colors = load_vial_colors(paths.roi_json)
+        library.setdefault(video_key, {})["vial_rois"] = {
+            k: ({"bbox": list(v), "color": _colors[k]} if k in _colors else list(v))
+            for k, v in bbox_dict.items()
+        }
 
 
 def stage_track(video: Path, paths: RunPaths, cfg, api_key: str, model_id: str,
@@ -515,12 +519,15 @@ def stage_overlays(cfg, paths: RunPaths, video_path: str, vials: dict) -> None:
         Writes overlay_raw_ocsort.mp4 and overlay_ordered.mp4 into the output dir.
     """
     from src.visualization import render_vial_overlay_video, render_raw_overlay_video
+    from src.roi import load_vial_colors
     from utils import resolve_overlay_video, save_run_params
 
     print("  [overlay] Track overlays...")
     _overlay_mode = cfg.visualization.overlay_source
     overlay_video = resolve_overlay_video(paths.output_dir, _overlay_mode) or video_path
     det_log_arg = paths.det_csv if os.path.exists(paths.det_csv) else None
+    # Per-vial colours picked in the setup window (empty when none were chosen).
+    vial_colors = load_vial_colors(paths.roi_json) if os.path.exists(paths.roi_json) else {}
 
     raw_overlay_mp4 = os.path.join(paths.output_dir, "overlay_raw_ocsort.mp4")
     render_raw_overlay_video(
@@ -540,6 +547,7 @@ def stage_overlays(cfg, paths: RunPaths, video_path: str, vials: dict) -> None:
         vial_rois=vials,
         det_log_csv=det_log_arg,
         fps_out=cfg.visualization.fps_out,
+        vial_colors=vial_colors,
     )
 
     save_run_params(paths.output_dir, "outputs", {
@@ -574,7 +582,7 @@ def stage_diagnostics(paths: RunPaths, cfg, tracker, df_wide, df_ord, fps: float
     None
         Writes metrics_report.md into the output dir; swallows and logs errors.
     """
-    from src.roi import load_vial_rois, resolve_vial_expected_counts
+    from src.roi import load_vial_rois, load_vial_colors, resolve_vial_expected_counts
     from src.metrics import run_diagnostics
 
     try:
@@ -591,6 +599,7 @@ def stage_diagnostics(paths: RunPaths, cfg, tracker, df_wide, df_ord, fps: float
             config=cfg,
             output_dir=paths.output_dir,
             show_plots=False,
+            vial_colors=load_vial_colors(paths.roi_json),
         )
     except Exception as e:
         print(f"  [warn] Diagnostics failed: {e}")
@@ -646,7 +655,7 @@ def draw_first_prepass(videos: list[Path], cfg, library: dict,
     """
     import tempfile
     from src.preprocessing import capture_crop_params_gui
-    from src.roi import draw_and_save_vial_rois
+    from src.roi import draw_and_save_vial_rois, load_vial_colors
     from src.ui_context import parse_video_context
 
     _banner(f"Draw-first -- collecting crop + ROIs for {len(videos)} video(s)")
@@ -671,12 +680,17 @@ def draw_first_prepass(videos: list[Path], cfg, library: dict,
         # 2) Vial ROIs (drawn on the cropped frame, matching the tracked video).
         if not entry.get("vial_rois"):
             with tempfile.TemporaryDirectory() as tmp:
+                _roi_json = str(Path(tmp) / "vial_rois.json")
                 roi_dict = draw_and_save_vial_rois(
                     video_path=str(video),
-                    roi_json_path=str(Path(tmp) / "vial_rois.json"),
+                    roi_json_path=_roi_json,
                     video_context=vctx,
                 )
-            entry["vial_rois"] = {k: list(v) for k, v in roi_dict.items()}
+                _colors = load_vial_colors(_roi_json)   # read before tmp is cleaned
+            entry["vial_rois"] = {
+                k: ({"bbox": list(v), "color": _colors[k]} if k in _colors else list(v))
+                for k, v in roi_dict.items()
+            }
             _save_library(library, roi_lib_path)
 
     _banner("Draw-first complete -- tracking will now run hands-off")

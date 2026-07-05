@@ -347,7 +347,7 @@ def stage_vial_rois(config, paths: RunPaths, raw_video: Path, video_context) -> 
         vials : vial id -> (x0, y0, x1, y1) bounding box.
         n_flies_dict : vial id -> fly count drawn this run (empty on ROI reuse).
     """
-    from src.roi import draw_and_save_vial_rois, load_vial_rois
+    from src.roi import draw_and_save_vial_rois, load_vial_rois, load_vial_colors
 
     print("\n=== Stage 2: Draw vial ROIs ===")
     video_key     = paths.stem
@@ -374,10 +374,15 @@ def stage_vial_rois(config, paths: RunPaths, raw_video: Path, video_context) -> 
         # Load n_flies from the JSON the GUI just wrote (per-run only).
         _, n_flies_dict = load_vial_rois(paths.roi_json)
 
-        # The library caches only the ROI geometry, so it can be reused across
-        # runs; n_flies is a per-run label and stays in this run's vial_rois.json.
+        # The library caches the ROI geometry AND the per-vial colour (both are
+        # persistent identity, reused across runs); n_flies is a per-run label and
+        # stays only in this run's vial_rois.json.
+        _colors = load_vial_colors(paths.roi_json)
         library.setdefault(video_key, {})
-        library[video_key]["vial_rois"] = {k: list(v) for k, v in vials.items()}
+        library[video_key]["vial_rois"] = {
+            k: ({"bbox": list(v), "color": _colors[k]} if k in _colors else list(v))
+            for k, v in vials.items()
+        }
         _save_roi_library(library)
 
     save_run_params(paths.output_dir, "roi", {k: list(v) for k, v in vials.items()})
@@ -598,7 +603,7 @@ def score_run_metrics(config, paths: RunPaths, tracker, df_wide, df_ordered,
         dir. Never raises on scoring / report failure.
     """
     from src.metrics import run_diagnostics
-    from src.roi import load_vial_rois, resolve_vial_expected_counts
+    from src.roi import load_vial_rois, load_vial_colors, resolve_vial_expected_counts
 
     _, n_flies_dict = load_vial_rois(paths.roi_json)
     n_expected = sum(resolve_vial_expected_counts(
@@ -631,6 +636,7 @@ def score_run_metrics(config, paths: RunPaths, tracker, df_wide, df_ordered,
         config=config,
         output_dir=paths.output_dir,
         show_plots=False,
+        vial_colors=load_vial_colors(paths.roi_json),
     )
     print(f"  Metrics report: {os.path.join(paths.output_dir, 'metrics_report.md')}")
 
@@ -663,6 +669,7 @@ def stage_overlays(config, paths: RunPaths, video_path: str, vials: dict) -> Non
         Writes overlay_raw_ocsort.mp4 and overlay_ordered.mp4 into the output dir.
     """
     from src.visualization import render_vial_overlay_video, render_raw_overlay_video
+    from src.roi import load_vial_colors
 
     print("\n=== Stage 5: Overlay videos ===")
     _overlay_mode = config.visualization.overlay_source
@@ -670,6 +677,8 @@ def stage_overlays(config, paths: RunPaths, video_path: str, vials: dict) -> Non
     print(f"  overlay_source={_overlay_mode} -> substrate: {overlay_video}")
 
     det_log_arg = paths.det_log_csv if os.path.exists(paths.det_log_csv) else None
+    # Per-vial colours picked in the setup window (empty when none were chosen).
+    vial_colors = load_vial_colors(paths.roi_json) if os.path.exists(paths.roi_json) else {}
 
     # 5a — raw OC-SORT overlay
     raw_overlay_mp4 = os.path.join(paths.output_dir, "overlay_raw_ocsort.mp4")
@@ -692,6 +701,7 @@ def stage_overlays(config, paths: RunPaths, video_path: str, vials: dict) -> Non
         vial_rois=vials,
         det_log_csv=det_log_arg,
         fps_out=config.visualization.fps_out,
+        vial_colors=vial_colors,
     )
     print(f"  Ordered tracks overlay: {ordered_overlay_mp4}")
 
@@ -735,6 +745,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip overlay MP4s (overrides config.visualization.enabled).",
     )
     p.set_defaults(overlay=None)
+    p.add_argument(
+        "--reuse-roi", action="store_true",
+        help="Reuse this video's saved crop + vial ROIs from roi_library.json "
+             "and run headless (no drawing GUI). Transient override of "
+             "config.roi.use_saved_roi for this run only; used by scripts/app.py "
+             "after it captures ROIs, and handy for scripted CLI submissions.",
+    )
     return p
 
 
@@ -758,6 +775,12 @@ def main():
     """
     config = load_config(CONFIG_PATH)
     args   = build_parser().parse_args()
+
+    # Transient, in-memory override (never written back to config.yaml): when the
+    # GUI has just captured ROIs (or a CLI user opts in), reuse saved geometry and
+    # skip every drawing GUI for this run.
+    if args.reuse_roi:
+        config.roi["use_saved_roi"] = True
 
     raw_video = resolve_raw_video(args, config)
     paths     = build_paths(config, raw_video)

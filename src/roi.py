@@ -23,7 +23,7 @@ import yaml
 from src.ui_context import VideoContext, build_context_chips, build_window_title
 
 from PyQt5.QtWidgets import (
-    QApplication, QDialog, QHBoxLayout, QLabel,
+    QApplication, QColorDialog, QDialog, QHBoxLayout, QLabel,
     QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
 from PyQt5.QtCore import Qt, QPoint, QRect, pyqtSignal
@@ -143,6 +143,8 @@ class _MultiROICanvas(QLabel):
         self._active_v_guide: Optional[int] = None  # v-guide x snapped at press time
         self._cursor_vid: Optional[QPoint] = None   # current mouse in video coords
         self._fly_counts: List[int] = []
+        self._vial_colors: List[str] = []   # per-vial colour override (hex);
+        #                                     empty -> fall back to _VIAL_COLOURS
 
     # ── public ────────────────────────────────────────────────────────────────
 
@@ -160,6 +162,22 @@ class _MultiROICanvas(QLabel):
     def set_fly_counts(self, counts: List[int]) -> None:
         self._fly_counts = list(counts)
         self._repaint()
+
+    def set_vial_colors(self, colors: List[str]) -> None:
+        """Override the per-vial box/label colour (hex strings, in draw order).
+
+        Optional: when unset (empty list) the canvas keeps the default
+        ``_VIAL_COLOURS`` cycle, so existing callers are unaffected. app.py's
+        vial page calls this so a user's colour picks show live on the boxes.
+        """
+        self._vial_colors = list(colors)
+        self._repaint()
+
+    def _colour_for(self, idx: int) -> str:
+        """Colour for vial ``idx``: the override when present, else the cycle."""
+        if idx < len(self._vial_colors) and self._vial_colors[idx]:
+            return self._vial_colors[idx]
+        return _VIAL_COLOURS[idx % len(_VIAL_COLOURS)]
 
     def toggle_snap(self) -> bool:
         self.snap_enabled = not self.snap_enabled
@@ -351,7 +369,7 @@ class _MultiROICanvas(QLabel):
 
         # ── confirmed ROIs ────────────────────────────────────────────────
         for idx, (x0, y0, x1, y1) in enumerate(self._rois):
-            colour = _VIAL_COLOURS[idx % len(_VIAL_COLOURS)]
+            colour = self._colour_for(idx)
             a = self._to_lbl(x0, y0)
             b = self._to_lbl(x1, y1)
             p.setPen(QPen(QColor(colour), 2))
@@ -419,6 +437,57 @@ class _MultiROICanvas(QLabel):
             self._repaint()
 
 
+# ─── Per-vial control row (fly count + colour swatch) ─────────────────────────
+
+class _VialControlRow(QWidget):
+    """One vial's controls: a fly-count spinbox and a colour swatch button.
+
+    Shared by the standalone vial dialog (below) and the setup window
+    (scripts/app.py) so both offer identical per-vial fly-count + colour picking.
+    """
+
+    changed = pyqtSignal()
+
+    def __init__(self, index: int, default_count: int, default_color: str, parent=None):
+        super().__init__(parent)
+        self.color = default_color
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+
+        lbl = QLabel(f"Vial {index + 1}:")
+        lbl.setObjectName("status")
+        row.addWidget(lbl)
+
+        self.spin = QSpinBox()
+        self.spin.setRange(1, 200)
+        self.spin.setValue(default_count)
+        self.spin.valueChanged.connect(lambda _v: self.changed.emit())
+        row.addWidget(self.spin)
+
+        self.swatch = QPushButton()
+        self.swatch.setFixedWidth(34)
+        self.swatch.setToolTip("Pick this vial's colour")
+        self.swatch.clicked.connect(self._pick_color)
+        row.addWidget(self.swatch)
+        self._restyle()
+
+    def _restyle(self) -> None:
+        self.swatch.setStyleSheet(
+            f"background:{self.color}; border:1px solid #45475a; border-radius:4px;"
+        )
+
+    def _pick_color(self) -> None:
+        chosen = QColorDialog.getColor(QColor(self.color), self, "Pick vial colour")
+        if chosen.isValid():
+            self.color = chosen.name()
+            self._restyle()
+            self.changed.emit()
+
+    def count(self) -> int:
+        return self.spin.value()
+
+
 # ─── Dialog ───────────────────────────────────────────────────────────────────
 
 class _VialROIDialog(QDialog):
@@ -432,7 +501,7 @@ class _VialROIDialog(QDialog):
         self._snap_enabled       = snap_enabled
         self._default_fly_count  = default_fly_count
         self.video_context       = video_context
-        self._fc_pairs: List[tuple] = []   # (QLabel, QSpinBox) per vial
+        self._fc_rows: List[_VialControlRow] = []   # one control row per vial
         self._build()
         self.canvas.set_frame(frame_bgr)
 
@@ -477,7 +546,7 @@ class _VialROIDialog(QDialog):
         self._fc_layout = QHBoxLayout(self._fc_container)
         self._fc_layout.setContentsMargins(0, 2, 0, 2)
         self._fc_layout.setSpacing(10)
-        _lbl = QLabel("Flies per vial:")
+        _lbl = QLabel("Per vial (flies + colour):")
         _lbl.setObjectName("status")
         self._fc_layout.addWidget(_lbl)
         self._fc_layout.addStretch()
@@ -511,33 +580,29 @@ class _VialROIDialog(QDialog):
         )
 
     def _sync_fly_spinboxes(self, n: int) -> None:
-        """Keep one (label, spinbox) pair per drawn ROI."""
+        """Keep one control row (fly count + colour swatch) per drawn ROI."""
         # Remove extras (from the end, inserted before the stretch)
-        while len(self._fc_pairs) > n:
-            lbl, sb = self._fc_pairs.pop()
-            lbl.deleteLater()
-            sb.deleteLater()
+        while len(self._fc_rows) > n:
+            row = self._fc_rows.pop()
+            row.deleteLater()
 
-        # Add new ones
-        while len(self._fc_pairs) < n:
-            idx = len(self._fc_pairs)
-            lbl = QLabel(f"Vial {idx + 1}:")
-            lbl.setObjectName("status")
-            sb = QSpinBox()
-            sb.setRange(1, 200)
-            sb.setValue(self._default_fly_count)
-            sb.valueChanged.connect(self._update_canvas_counts)
+        # Add new ones, seeding each with the default palette colour
+        while len(self._fc_rows) < n:
+            idx = len(self._fc_rows)
+            color = _VIAL_COLOURS[idx % len(_VIAL_COLOURS)]
+            row = _VialControlRow(idx, self._default_fly_count, color)
+            row.changed.connect(self._update_canvas_counts)
             # Insert before the trailing stretch (last item)
             pos = self._fc_layout.count() - 1
-            self._fc_layout.insertWidget(pos, lbl)
-            self._fc_layout.insertWidget(pos + 1, sb)
-            self._fc_pairs.append((lbl, sb))
+            self._fc_layout.insertWidget(pos, row)
+            self._fc_rows.append(row)
 
         self._fc_container.setVisible(n > 0)
         self._update_canvas_counts()
 
     def _update_canvas_counts(self) -> None:
-        self.canvas.set_fly_counts([sb.value() for _, sb in self._fc_pairs])
+        self.canvas.set_fly_counts([r.count() for r in self._fc_rows])
+        self.canvas.set_vial_colors([r.color for r in self._fc_rows])
 
     def _on_rois_changed(self, rois: list) -> None:
         n = len(rois)
@@ -569,7 +634,11 @@ class _VialROIDialog(QDialog):
 
     def get_fly_counts(self) -> List[int]:
         """Per-vial fly count in draw order (same order as get_rois())."""
-        return [sb.value() for _, sb in self._fc_pairs]
+        return [r.count() for r in self._fc_rows]
+
+    def get_fly_colors(self) -> List[str]:
+        """Per-vial colour hex in draw order (same order as get_rois())."""
+        return [r.color for r in self._fc_rows]
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────
@@ -651,8 +720,9 @@ def draw_and_save_vial_rois(
 
     rois       = dlg.get_rois()
     fly_counts = dlg.get_fly_counts()   # aligned with rois (draw order)
+    fly_colors = dlg.get_fly_colors()   # aligned with rois (draw order)
 
-    # Sort left-to-right by centre x, keeping fly counts aligned
+    # Sort left-to-right by centre x, keeping fly counts + colours aligned
     indexed_sorted = sorted(enumerate(rois), key=lambda t: (t[1][0] + t[1][2]) / 2.0)
 
     roi_dict  = {}
@@ -660,11 +730,28 @@ def draw_and_save_vial_rois(
     for i, (orig_idx, r) in enumerate(indexed_sorted, start=1):
         key = f"vial{i}"
         roi_dict[key]  = tuple(r)
-        save_data[key] = {"bbox": list(r), "n_flies": fly_counts[orig_idx]}
+        save_data[key] = {
+            "bbox": list(r),
+            "n_flies": fly_counts[orig_idx],
+            "color": fly_colors[orig_idx],
+        }
 
     os.makedirs(os.path.dirname(roi_json_path) or ".", exist_ok=True)
     with open(roi_json_path, "w") as f:
         json.dump(save_data, f, indent=2)
+
+    # Canonical genotype colours (best-effort) so classification / embedding
+    # follow the colours picked here, exactly like the setup window does.
+    try:
+        from src.plot_colors import parse_vial_genotypes, write_genotype_color_overrides
+        genos = parse_vial_genotypes(video_path)
+        if genos:
+            ordered_colors = [save_data[f"vial{i + 1}"]["color"] for i in range(len(save_data))]
+            mapping = {g: c for g, c in zip(genos, ordered_colors)}
+            if mapping:
+                write_genotype_color_overrides(mapping)
+    except Exception as _e:
+        print(f"[warn] genotype colour update skipped: {_e}")
 
     print("Saved ROIs to:", roi_json_path)
     return roi_dict
@@ -696,6 +783,23 @@ def load_vial_rois(
             bbox_dict[k]    = tuple(map(int, v))
             n_flies_dict[k] = 0
     return bbox_dict, n_flies_dict
+
+
+def load_vial_colors(path: str) -> Dict[str, str]:
+    """Return {vial_id: hex_colour} for vials that carry a stored colour.
+
+    Colours are written per vial by the setup window (scripts/app.py) into the
+    ``color`` field of the new-format ROI JSON. Old-format files (bare bbox
+    lists, or dicts without ``color``) yield an empty / partial map; callers
+    fall back to the default palette for any vial missing here.
+    """
+    with open(path) as f:
+        raw = json.load(f)
+    colors: Dict[str, str] = {}
+    for k, v in raw.items():
+        if isinstance(v, dict) and isinstance(v.get("color"), str):
+            colors[k] = v["color"]
+    return colors
 
 
 def resolve_vial_expected_counts(

@@ -23,6 +23,7 @@ kaleido>=0.2         # plotly static image export
 
 # Config
 pyyaml>=6.0
+ruamel.yaml>=0.18    # comment-preserving YAML writes (scripts/app.py edits config.yaml in place)
 
 # Notebook support (optional, only needed for .ipynb)
 ipython>=8.0

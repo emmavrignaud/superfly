@@ -270,26 +270,33 @@ def print_relink_comparison(stats):
 # Plots (Plotly)
 # ---------------------------------------------------------------------------
 
-def _add_vial_shapes(fig, vial_rois, row=None, col=None):
-    """Add grey ROI rectangles + labels behind trajectories."""
+def _add_vial_shapes(fig, vial_rois, row=None, col=None, vial_colors=None):
+    """Add ROI rectangles + labels behind trajectories.
+
+    ``vial_colors`` ({vial_id: "#rrggbb"}, from the setup window) colours each
+    vial's box outline + label with the chosen colour; vials without one keep the
+    neutral grey. The fill stays light so trajectories remain readable.
+    """
     if not vial_rois:
         return
+    vial_colors = vial_colors or {}
     for label, (x1, y1, x2, y2) in vial_rois.items():
+        c = vial_colors.get(label)
         fig.add_shape(
             type="rect", x0=x1, y0=y1, x1=x2, y1=y2,
-            line=dict(color="lightgrey", width=1),
+            line=dict(color=c or "lightgrey", width=1.5 if c else 1),
             fillcolor="whitesmoke", layer="below",
             row=row, col=col,
         )
         fig.add_annotation(
             x=(x1 + x2) / 2, y=y1 - 8, text=label,
-            showarrow=False, font=dict(size=9, color="grey"),
+            showarrow=False, font=dict(size=9, color=c or "grey"),
             xanchor="center", yanchor="bottom",
             row=row, col=col,
         )
 
 
-def plot_xy_trajectories(df_wide, vial_rois=None, fig=None, row=None, col=None):
+def plot_xy_trajectories(df_wide, vial_rois=None, fig=None, row=None, col=None, vial_colors=None):
     """
     XY trajectory plot: one coloured line per emitted track ID.
 
@@ -309,7 +316,7 @@ def plot_xy_trajectories(df_wide, vial_rois=None, fig=None, row=None, col=None):
     if fig is None:
         fig = go.Figure()
 
-    _add_vial_shapes(fig, vial_rois, row=row, col=col)
+    _add_vial_shapes(fig, vial_rois, row=row, col=col, vial_colors=vial_colors)
 
     id_cols = [c for c in df_wide.columns if c != "frame"]
     for i, tid in enumerate(id_cols):
@@ -361,7 +368,7 @@ def plot_xy_trajectories(df_wide, vial_rois=None, fig=None, row=None, col=None):
     return fig
 
 
-def plot_xy_trajectories_ordered(df_ordered, vial_rois=None, fig=None, row=None, col=None):
+def plot_xy_trajectories_ordered(df_ordered, vial_rois=None, fig=None, row=None, col=None, vial_colors=None):
     """
     XY trajectory plot using ordered IDs (after vial assignment).
 
@@ -370,7 +377,7 @@ def plot_xy_trajectories_ordered(df_ordered, vial_rois=None, fig=None, row=None,
     if fig is None:
         fig = go.Figure()
 
-    _add_vial_shapes(fig, vial_rois, row=row, col=col)
+    _add_vial_shapes(fig, vial_rois, row=row, col=col, vial_colors=vial_colors)
 
     ordered_ids = sorted(df_ordered["ordered_id"].unique())
     has_vial = "vial_id" in df_ordered.columns
@@ -426,7 +433,7 @@ def plot_xy_trajectories_ordered(df_ordered, vial_rois=None, fig=None, row=None,
     return fig
 
 
-def plot_xy_trajectories_relinked(df_relinked, vial_rois=None, fig=None, row=None, col=None):
+def plot_xy_trajectories_relinked(df_relinked, vial_rois=None, fig=None, row=None, col=None, vial_colors=None):
     """
     XY trajectory plot using relinked IDs from the second-round re-linking pass.
 
@@ -436,7 +443,7 @@ def plot_xy_trajectories_relinked(df_relinked, vial_rois=None, fig=None, row=Non
     if fig is None:
         fig = go.Figure()
 
-    _add_vial_shapes(fig, vial_rois, row=row, col=col)
+    _add_vial_shapes(fig, vial_rois, row=row, col=col, vial_colors=vial_colors)
 
     relinked_ids = sorted(df_relinked["relinked_id"].unique())
     for i, rid in enumerate(relinked_ids):
@@ -849,18 +856,18 @@ def print_stitching_objectives(objectives: dict) -> str:
 # Composite figure builders
 # ---------------------------------------------------------------------------
 
-def _build_xy_figure(df_wide, df_ordered, vial_rois, df_relinked=None):
+def _build_xy_figure(df_wide, df_ordered, vial_rois, df_relinked=None, vial_colors=None):
     """Build the XY trajectory composite figure (1×1, 1×2, or 1×3)."""
     panels = [("Raw OC-SORT IDs", lambda fig, r, c: plot_xy_trajectories(
-        df_wide, vial_rois=vial_rois, fig=fig, row=r, col=c))]
+        df_wide, vial_rois=vial_rois, fig=fig, row=r, col=c, vial_colors=vial_colors))]
 
     if df_relinked is not None:
         panels.append(("Relinked IDs", lambda fig, r, c: plot_xy_trajectories_relinked(
-            df_relinked, vial_rois=vial_rois, fig=fig, row=r, col=c)))
+            df_relinked, vial_rois=vial_rois, fig=fig, row=r, col=c, vial_colors=vial_colors)))
 
     if df_ordered is not None:
         panels.append(("Ordered track IDs", lambda fig, r, c: plot_xy_trajectories_ordered(
-            df_ordered, vial_rois=vial_rois, fig=fig, row=r, col=c)))
+            df_ordered, vial_rois=vial_rois, fig=fig, row=r, col=c, vial_colors=vial_colors)))
 
     n_cols = len(panels)
     fig = make_subplots(
@@ -926,7 +933,7 @@ def run_diagnostics(tracker, df_wide, df_ordered=None,
                     df_relinked=None,
                     n_expected=None, fps=30, vial_rois=None,
                     config=None, output_dir=None,
-                    show_plots=True):
+                    show_plots=True, vial_colors=None):
     """
     Run all diagnostics, display interactive Plotly figures, and optionally save a report.
 
@@ -959,7 +966,8 @@ def run_diagnostics(tracker, df_wide, df_ordered=None,
         relink_stats = compute_relink_stats(df_wide, df_relinked)
         relink_text  = print_relink_comparison(relink_stats)
 
-    fig_xy       = _build_xy_figure(df_wide, df_ordered, vial_rois, df_relinked=df_relinked)
+    fig_xy       = _build_xy_figure(df_wide, df_ordered, vial_rois, df_relinked=df_relinked,
+                                    vial_colors=vial_colors)
     fig_pipeline = _build_pipeline_figure(tracker, df_wide, fps)
 
     if output_dir is not None:

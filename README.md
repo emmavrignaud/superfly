@@ -81,41 +81,58 @@ execution order), and **Downstream analysis**:
 
 Every script reads `config.yaml`. Tracking output goes to
 `data/outputs/run_<N>_<short_name>/`. CLI flags affect the current run only; they
-do not edit config. 
+do not edit config.
 
-#### `scripts/run_tracking.py`
+There are four ways to run the tracking pipeline. They share the same engine, the
+same `config.yaml`, and the same outputs, so pick by how much GUI you want.
 
-One video, full pipeline.
+#### Option 1: `scripts/app.py` (setup window)
+
+One window that stays open for the whole setup: pick a video with Browse, draw
+the crop and frame trim, then draw each vial and set its fly count and colour. Two
+checkboxes control the run (write overlays, reuse a saved ROI). Clicking finish hands off the run to `run_tracking.py`
 
 ```bash
-python scripts/run_tracking.py                            # track config.video.raw_path
-python scripts/run_tracking.py --video data/raw/clip.mp4  # track a different file instead
-python scripts/run_tracking.py --overlay                  # also write Track Overlays this run
-python scripts/run_tracking.py --no-overlay               # skip overlays even if config enables them
+python scripts/app.py                            # pick the video inside the window
+python scripts/app.py --video data/raw/clip.mp4  # preselect a video, skip the first Browse
 ```
 
-With no overlay flag, overlays follow `visualization.enabled` in config.
 
-#### `notebooks/01_tracking_pipeline.ipynb`
 
-Same pipeline as `run_tracking.py`, one cell at a time. No CLI flags; overlays
-follow `visualization.enabled` in config.
+#### Option 2: `notebooks/01_tracking_pipeline.ipynb`
+
+You can use this notebook if you prefer seeing the pipeline stages one by one. 
 
 ```bash
 jupyter lab notebooks/01_tracking_pipeline.ipynb
 ```
 
-#### `scripts/run_all.py`
+#### Option 3: `scripts/run_tracking.py`
 
-Stage 1 tracks video(s); Stage 2 runs behavioural significance analysis on the
-tracked runs. Every run is fresh by default — each video is re-tracked. Set
-`pipeline.skip_tracked: true` in `config.yaml` to skip videos that already have
-`ordered_tracks.csv` (useful for resuming an interrupted batch).
+One video, full pipeline, driven from the command line.
 
 ```bash
-python scripts/run_all.py --data-root data/raw  # track every video in the folder, then analyse
-python scripts/run_all.py --data-root data/raw --draw-first # draw all crop + ROIs upfront, then track unattended
+python scripts/run_tracking.py                            # track config.video.raw_path
+python scripts/run_tracking.py --video data/raw/clip.mp4  # track a different file instead
+python scripts/run_tracking.py --reuse-roi                # reuse saved crop + ROIs, no drawing GUI
+python scripts/run_tracking.py --overlay                  # also write Track Overlays this run
+python scripts/run_tracking.py --no-overlay               # skip overlays even if config enables them
+```
 
+With no overlay flag, overlays follow `visualization.enabled` in config. The
+`--reuse-roi` flag is what `app.py` passes on handoff, and it is also handy for
+scripted runs off an already saved ROI.
+
+#### Option 4: `scripts/run_all.py`
+
+Stage 1 tracks video(s); Stage 2 runs behavioural significance analysis on the
+tracked runs. Every run is fresh by default, so each video is re-tracked. Set
+`pipeline.skip_tracked: true` in `config.yaml` to skip videos that already have
+`ordered_tracks.csv`, which is useful for resuming an interrupted batch.
+
+```bash
+python scripts/run_all.py --data-root data/raw              # track every video in the folder, then analyse
+python scripts/run_all.py --data-root data/raw --draw-first # draw all crop + ROIs upfront, then track unattended
 ```
 
 
@@ -166,12 +183,13 @@ superfly/
 ├── roi_library.json           # cached crop + vial ROIs keyed by video stem
 ├── RF-DETR_model/             # trained fly-detection model
 │   └── weights.pt
-├── external/                  # vendored TrackEval — HOTA / MOT scoring
+├── external/                  # vendored TrackEval for HOTA / MOT scoring
 ├── data/                      # raw/ input videos + outputs/ tracked runs
 ├── notebooks/
 │   ├── 01_tracking_pipeline.ipynb
 │   └── 02_classification_analysis.ipynb
 ├── scripts/
+│   ├── app.py                 # setup window: crop + vial ROIs + colours, hands off to run_tracking
 │   ├── run_tracking.py        # single video, full render
 │   ├── run_all.py             # batch tracking (+ --draw-first) then analysis
 │   ├── run_classification.py  # genotype classification on ordered_tracks

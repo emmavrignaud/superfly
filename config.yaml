@@ -7,7 +7,8 @@
 video:
   # The clip to track. This is the main thing a user changes per run.
   # Path is relative to the repo root (the folder that holds config.yaml).
-  raw_path: "data/raw/2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m/31 DPE/001/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_001-converted.mp4"
+  raw_path: "data/raw/2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m/31
+    DPE/001/2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_001-converted.mp4"
   fallback_fps: 30   # used only when cv2.CAP_PROP_FPS is missing/unreadable
 
 roboflow:
@@ -30,7 +31,7 @@ calibration:
   #   time_unit:   s   | frame
   # Defaults to cm + s: velocity in cm/s, acceleration in cm/s^2, area in cm^2.
   length_unit: cm
-  time_unit:   s
+  time_unit: s
 
 # ============================================================================
 # 2) PIPELINE  —  stages in execution order
@@ -47,13 +48,13 @@ preprocessing:
 
 roi:
   # Per-vial ROI; cached in roi_library/. Snapping aligns boxes vertically.
-  use_saved_roi: false         # false = always open GUI to redraw
+  use_saved_roi: true          # false = always open GUI to redraw
   snap_threshold_pct: 0.005   # snap zone as fraction of last box height
   snap_enabled: true          # press 'S' in GUI to toggle per-vial
 
 tracker:
   # RF-DETR detections + OC-SORT association into tracklets.
-  cached_detections: null            # repo-root-relative path to a prior detections_raw.csv to skip RF-DETR; null = run inference
+  cached_detections:                 # repo-root-relative path to a prior detections_raw.csv to skip RF-DETR; null = run inference
   detection_confidence_rfdetr: 0.10  # RF-DETR output threshold; detections in [detection_confidence_rfdetr, confidence) feed the jump-low pass only
   confidence: 0.55                   # primary association threshold; detections above this go into round-1 matching
   track_activation_threshold: 0.10   # min conf to open a new track
@@ -65,11 +66,11 @@ tracker:
   brownian_pos_noise: 15             # Kalman Q[cx,cy] scale; ↑ tolerates saccades
   aspect_weight: 0.05               # bonus for matching boxes of similar aspect ratio; 0 = disabled, try 0.05–0.2
   behavioral_weights:
-    speed:         0.2     # speed consistency bonus
-    scale:         0.0     # bbox scale consistency bonus
+    speed: 0.2             # speed consistency bonus
+    scale: 0.0             # bbox scale consistency bonus
     turning_angle: 0.2     # turning angle consistency
-    pause:         0.2     # pause behaviour consistency
-    acceleration:  0.2     # acceleration consistency
+    pause: 0.2             # pause behaviour consistency
+    acceleration: 0.2      # acceleration consistency
   overlap_weight_scale: 6.0  # multiply all behavioral weights when detections overlap (was behavioral_weight_overlap / behavioral_weight = 0.30 / 0.05)
   jump_factor: 2.0                  # round-2 velocity scale + bbox inflation (how far/wide to search)
   jump_iou_threshold: 0.05          # looser IoU threshold for jump round
@@ -78,7 +79,7 @@ tracker:
   delta_t: -1                       # frames lookback to compute tracker velocity direction for OCM; -1 = use full history (frame_idx)
   overlap_iou_scale: 0.1            # IoU is multiplied by this when detections overlap; suppresses positional signal so behavioral bonus dominates
   edge_fraction: 0.1                # detections within this fraction of vial wall excluded from overlap handling
-  expected_count: null              # total expected flies (e.g. 42); enables count-aware spawning when set; null = disabled
+  expected_count:                   # total expected flies (e.g. 42); enables count-aware spawning when set; null = disabled
   w_under: 5.0                      # spawning penalty per tracker below expected_count (heavy — missing a fly is bad)
   w_over: 2.0                       # spawning penalty per tracker above expected_count (light — ghost tracks are tolerable)
 
@@ -113,7 +114,7 @@ pipeline:
 
 visualization:
   # Overlay: diagonal crosshair on the fly + off-body ID chip with leader line.
-  enabled: false               # true = write detection + track overlay MP4s after tracking
+  enabled: true                # true = write detection + track overlay MP4s after tracking
   overlay_source: raw_cropped  # raw_cropped | processed — substrate for the overlay
   fps_out: 30              # output video fps
   show_ids: true           # false = crosshair only
@@ -201,7 +202,7 @@ classification:
     # above are ignored and the best combo is logged to stdout + report.
     grid_search:
       enabled: true
-      C:     [0.01,0.1, 1.0, 10.0, 100.0]
+      C: [0.01, 0.1, 1.0, 10.0, 100.0]
       gamma: [scale, auto, 0.01, 0.1, 1.0, 10.0]
   lda:
     solver: svd          # svd | lsqr | eigen
@@ -224,7 +225,7 @@ classification:
   # Add squares and pairwise products of features as extra columns (more flexible classifier, slower).
   polynomial:
     enabled: false
-    degree: [3,4,7]                # 1 = off, 2 = +squares & pairs, 3 = +triples; list -> grid-search
+    degree: [3, 4, 7]              # 1 = off, 2 = +squares & pairs, 3 = +triples; list -> grid-search
     interaction_only: false  # true = skip squares/cubes, keep cross-products only
     include_bias: false      # adds a constant "1" column; almost never useful
 

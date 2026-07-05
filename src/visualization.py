@@ -24,6 +24,18 @@ def _visualization_cfg() -> dict:
         return yaml.safe_load(f).get("visualization", {})
 
 
+def _hex_to_hue_sat(hexstr: str) -> tuple[int, int]:
+    """Return (hue, saturation) in OpenCV's 0-179 / 0-255 HSV scale for a #rrggbb.
+
+    Used to let a user's per-vial colour drive the overlay's per-vial hue while
+    the existing brightness-by-ordered_id shading is kept.
+    """
+    h = hexstr.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    hsv = cv2.cvtColor(np.uint8([[[b, g, r]]]), cv2.COLOR_BGR2HSV)[0, 0]
+    return int(hsv[0]), int(hsv[1])
+
+
 def _roi_library_path() -> Path:
     return Path(__file__).parent.parent / "roi_library.json"
 
@@ -197,6 +209,7 @@ def render_vial_overlay_video(
     leader_thick: int = 1,
     vial_rois: dict | None = None,
     det_log_csv: str | None = None,
+    vial_colors: dict | None = None,
 ):
     """
     Render an overlay video where flies are coloured by vial and shaded
@@ -206,6 +219,11 @@ def render_vial_overlay_video(
         vial1: blue    vial4: orange
         vial2: green   vial5: pink/magenta
         vial3: yellow  vial6: purple
+
+    ``vial_colors`` ({vial_id: "#rrggbb"}), when given, overrides the default hue
+    for that vial with the hue/saturation of the chosen colour (picked in the
+    setup window). Within-vial brightness shading by ordered_id is preserved, so
+    the colour a user picks becomes that vial's family across the overlay.
 
     Parameters
     ----------
@@ -269,11 +287,17 @@ def render_vial_overlay_video(
         unmatched, n_dets, n_missed = _compute_unmatched_by_frame(det_log_csv, centers, k)
         print(f"  unmatched detections: {n_missed} / {n_dets}")
 
+    _vial_colors = vial_colors or {}
+
     def color_for(vial_id: str, cid: int) -> tuple:
-        hue = int(VIAL_HUE.get(vial_id, 0))
+        override = _vial_colors.get(vial_id)
+        if override:
+            hue, sat = _hex_to_hue_sat(override)
+        else:
+            hue, sat = int(VIAL_HUE.get(vial_id, 0)), 240
         m = int(max_in_vial.get(vial_id, cid))
         v = 235 if m <= 1 else int(120 + (cid - 1) / (m - 1) * (255 - 120))
-        hsv = np.uint8([[[hue, 240, v]]])
+        hsv = np.uint8([[[hue, sat, v]]])
         bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0]
         return int(bgr[0]), int(bgr[1]), int(bgr[2])
 
