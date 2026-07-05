@@ -35,7 +35,7 @@ REQUIRED_KEYS = {
     "pipeline": ["expected_per_vial", "skip_tracked"],
     "preprocessing": ["bg_gain", "bg_white_level", "bg_percentile", "bg_sample_stride"],
     "visualization": ["enabled", "overlay_source", "fps_out", "show_ids"],
-    "roi": ["use_saved_roi"],
+    "roi": ["use_saved_roi", "n_vials", "gap_ratio"],
     "latent_space": ["representation_method", "seed", "embedding"],
     "classification": ["method", "svc", "lda", "logistic"],
 }
@@ -65,6 +65,18 @@ def test_video_fallback_fps_is_positive(config_yaml: dict) -> None:
 def test_pipeline_expected_per_vial_is_positive_int(config_yaml: dict) -> None:
     n = config_yaml["pipeline"]["expected_per_vial"]
     assert isinstance(n, int) and n > 0, "pipeline.expected_per_vial must be a positive integer"
+
+
+def test_roi_n_vials_is_positive_int(config_yaml: dict) -> None:
+    n = config_yaml["roi"]["n_vials"]
+    assert isinstance(n, int) and n > 0, "roi.n_vials must be a positive integer"
+
+
+def test_roi_gap_ratio_in_unit_range(config_yaml: dict) -> None:
+    r = config_yaml["roi"]["gap_ratio"]
+    assert isinstance(r, (int, float)) and 0.0 <= float(r) <= 1.0, (
+        "roi.gap_ratio must be a number in [0, 1]"
+    )
 
 
 def test_calibration_px_per_cm_is_positive(config_yaml: dict) -> None:

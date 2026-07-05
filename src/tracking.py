@@ -506,6 +506,9 @@ def collect_detections(
         n_frames = int(det_cache["frame"].max()) + 1 if len(det_cache) else 0
         cap.release()
     else:
+        from utils import patch_windows_ssl
+
+        patch_windows_ssl()
         from inference_sdk import InferenceHTTPClient
         from inference_sdk.http.entities import InferenceConfiguration
         client = InferenceHTTPClient(

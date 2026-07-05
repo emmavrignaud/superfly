@@ -19,6 +19,11 @@ dependencies:
   - matplotlib>=3.7
   - colorcet>=3.0
   - filterpy>=1.4         # Kalman primitives (src/kalmanfilter.py, src/ocsort.py)
+  - scikit-image>=0.21    # watershed bbox splitting (src/watershed_split.py; enabled in config.yaml)
+  - ffmpeg                # H.264/.m4v decode, *-converted.mp4 prep, notebook Video preview
+  - pytest>=7.0           # tests/ (README verification)
+  - jupyterlab>=4.0         # notebooks/ (README: jupyter lab …)
+  - lap>=0.5.12             # fast Jonker-Volgenant matching in OC-SORT (scipy fallback if missing)
   - pip:
     - opencv-python>=4.8
     - supervision>=0.18
@@ -27,3 +32,4 @@ dependencies:
     - PyQt5>=5.15
     - PySide6>=6.6
     - kaleido>=0.2
+    - -e external/TrackEval  # HOTA scoring in run_tracking (parameter_tuning/run_hota.py)

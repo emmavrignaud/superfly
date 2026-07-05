@@ -49,6 +49,41 @@ def load_config(path: str | Path) -> Config:
         return Config(yaml.safe_load(f) or {})
 
 
+def patch_windows_ssl() -> None:
+    """Work around a corrupted Windows cert store breaking HTTPS client imports.
+
+    On Windows, ``ssl.create_default_context()`` pulls certs from the system
+    store. A single bad entry raises ``ssl.SSLError: [ASN1: NOT_ENOUGH_DATA]``
+    when aiohttp (used by ``inference_sdk``) is imported.  When that happens,
+    fall back to certifi's CA bundle instead.
+    """
+    import ssl
+    import sys
+
+    if sys.platform != "win32" or getattr(patch_windows_ssl, "_done", False):
+        return
+    try:
+        ssl.create_default_context()
+        patch_windows_ssl._done = True  # type: ignore[attr-defined]
+        return
+    except ssl.SSLError:
+        pass
+
+    import certifi
+
+    _orig = ssl.create_default_context
+
+    def _patched(purpose=ssl.Purpose.SERVER_AUTH, *, cafile=None, capath=None, cadata=None):
+        if cafile or capath or cadata:
+            return _orig(purpose, cafile=cafile, capath=capath, cadata=cadata)
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.load_verify_locations(certifi.where())
+        return ctx
+
+    ssl.create_default_context = _patched
+    patch_windows_ssl._done = True  # type: ignore[attr-defined]
+
+
 def resolve_overlay_enabled(config, cli_value: bool | None) -> bool:
     """Return whether the pipeline should write overlay MP4s.
 
@@ -146,19 +181,51 @@ def make_run_output_dir(
     return str(out)
 
 
+def _video_raw_path_for_snapshot(raw_video: str | Path, repo_root: str | Path | None) -> str:
+    """Repo-relative path when possible; otherwise absolute (forward slashes)."""
+    raw = Path(raw_video).resolve()
+    if repo_root is not None:
+        root = Path(repo_root).resolve()
+        try:
+            return str(raw.relative_to(root)).replace("\\", "/")
+        except ValueError:
+            pass
+    return str(raw).replace("\\", "/")
+
+
+def config_for_run(cfg: Config, raw_video: str | Path, *, repo_root: str | Path | None = None) -> Config:
+    """Return a config copy whose ``video.raw_path`` matches the tracked file."""
+    import copy
+
+    run_cfg = copy.deepcopy(cfg)
+    run_cfg.video.raw_path = _video_raw_path_for_snapshot(raw_video, repo_root)
+    return run_cfg
+
+
 def save_config_snapshot(
     out_dir: str | Path,
     config_path: str | Path = "config.yaml",
+    *,
+    raw_video: str | Path | None = None,
+    repo_root: str | Path | None = None,
 ) -> None:
-    """Copy the active config.yaml verbatim into the run directory.
+    """Write config.yaml into the run directory.
 
-    Pairs with save_run_params: per-stage outputs go to run_params.json,
-    the full config snapshot goes to config.yaml beside it.
+    When ``raw_video`` is given, ``video.raw_path`` in the snapshot is set to
+    that file (repo-relative when under ``repo_root``) instead of whatever
+    config.yaml currently says.
     """
     src = Path(config_path)
     dst = Path(out_dir) / "config.yaml"
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    text = src.read_text(encoding="utf-8")
+    if raw_video is not None:
+        data = yaml.safe_load(text) or {}
+        data.setdefault("video", {})["raw_path"] = _video_raw_path_for_snapshot(
+            raw_video, repo_root
+        )
+        text = yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    dst.write_text(text, encoding="utf-8")
 
 
 def save_run_params(out_dir: str, stage: str, params: dict) -> None:

@@ -1,10 +1,17 @@
+# System binary (not pip-installable — must be on PATH before running the pipeline):
+#   ffmpeg  — H.264/.m4v camera files, *-converted.mp4 prep, IPython Video in notebooks
+#   Install: https://ffmpeg.org/download.html
+#            Windows: winget install Gyan.FFmpeg  (or choco install ffmpeg)
+
 # Core computer vision / tracking
 opencv-python>=4.8
+scikit-image>=0.21      # watershed bbox splitting (src/watershed_split.py; enabled in config.yaml)
 
 numpy>=1.24
 supervision>=0.18
 inference-sdk>=0.13   # lightweight HTTP client; full `inference` server not needed
 filterpy>=1.4         # Kalman filter primitives used by src/kalmanfilter.py + src/ocsort.py
+lap>=0.5.12             # fast Jonker-Volgenant matching in OC-SORT (scipy fallback if missing)
 
 # Data / ML
 pandas>=2.0
@@ -27,4 +34,10 @@ ruamel.yaml>=0.18    # comment-preserving YAML writes (scripts/app.py edits conf
 
 # Notebook support (optional, only needed for .ipynb)
 ipython>=8.0
-jupyter>=1.0
+jupyterlab>=4.0
+
+# Tests (README: pytest tests/ -v)
+pytest>=7.0
+
+# Vendored HOTA evaluator (run_tracking metrics / parameter_tuning)
+-e external/TrackEval

@@ -41,6 +41,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from utils import (
+    config_for_run,
     link_or_copy,
     load_config,
     load_creds,
@@ -225,7 +226,10 @@ def record_run_metadata(config, paths: RunPaths, raw_video: Path) -> float:
     import cv2
 
     link_or_copy(raw_video, os.path.join(paths.output_dir, raw_video.name))
-    save_config_snapshot(paths.output_dir, CONFIG_PATH)
+    save_config_snapshot(
+        paths.output_dir, CONFIG_PATH,
+        raw_video=raw_video, repo_root=REPO_ROOT,
+    )
 
     cap = cv2.VideoCapture(str(raw_video))
     fps = float(cap.get(cv2.CAP_PROP_FPS) or config.video.fallback_fps)
@@ -783,6 +787,7 @@ def main():
         config.roi["use_saved_roi"] = True
 
     raw_video = resolve_raw_video(args, config)
+    run_cfg   = config_for_run(config, raw_video, repo_root=REPO_ROOT)
     paths     = build_paths(config, raw_video)
     os.makedirs(paths.output_dir, exist_ok=True)
     print(f"Video:      {raw_video}")
@@ -802,7 +807,7 @@ def main():
     else:
         print("\n=== Overlays skipped (visualization.enabled=false; pass --overlay to force) ===")
     df_ordered = stage_assign(paths, df_wide, fps)
-    score_run_metrics(config, paths, tracker, df_wide, df_ordered, vials, fps)
+    score_run_metrics(run_cfg, paths, tracker, df_wide, df_ordered, vials, fps)
     if write_overlays:
         stage_overlays(config, paths, video_path, vials)
 

@@ -40,7 +40,7 @@ cd superfly
 conda env create -f environment.yml
 conda activate fly-tracking
 
-# Or pip:
+# Or pip (requires ffmpeg on PATH — see requirements.txt header):
 # pip install -r requirements.txt
 
 # Add a Roboflow API key for detection:
@@ -49,6 +49,11 @@ cp creds_config.example.yaml creds_config.yaml   # then paste the key into creds
 
 `creds_config.example.yaml` is the template; the real `creds_config.yaml` is
 gitignored.
+
+`environment.yml` also pulls in **ffmpeg**, **scikit-image** (watershed splitting),
+**trackeval** (editable install from `external/TrackEval`), **pytest**, and
+**jupyterlab** — all of which the pipeline or README use but were previously
+undocumented.
 
 
 ## Running the pipeline
@@ -125,14 +130,17 @@ scripted runs off an already saved ROI.
 
 #### Option 4: `scripts/run_all.py`
 
-Stage 1 tracks video(s); Stage 2 runs behavioural significance analysis on the
-tracked runs. Every run is fresh by default, so each video is re-tracked. Set
-`pipeline.skip_tracked: true` in `config.yaml` to skip videos that already have
-`ordered_tracks.csv`, which is useful for resuming an interrupted batch.
+Batch tracking over many videos. Stage 1 runs by default; Stage 2 (behavioural
+significance analysis on tracked runs) is opt-in via `--analysis`. Every run is
+fresh by default, so each video is re-tracked. Set `pipeline.skip_tracked: true`
+in `config.yaml` to skip videos that already have `ordered_tracks.csv`, which is
+useful for resuming an interrupted batch.
 
 ```bash
-python scripts/run_all.py --data-root data/raw              # track every video in the folder, then analyse
+python scripts/run_all.py --data-root data/raw              # track every video in the folder
+python scripts/run_all.py --data-root data/raw --analysis   # track, then run significance analysis
 python scripts/run_all.py --data-root data/raw --draw-first # draw all crop + ROIs upfront, then track unattended
+python scripts/run_all.py --skip-tracking --analysis      # analyse existing runs only (no tracking)
 ```
 
 
@@ -191,7 +199,7 @@ superfly/
 ├── scripts/
 │   ├── app.py                 # setup window: crop + vial ROIs + colours, hands off to run_tracking
 │   ├── run_tracking.py        # single video, full render
-│   ├── run_all.py             # batch tracking (+ --draw-first) then analysis
+│   ├── run_all.py             # batch tracking (+ --draw-first); analysis via --analysis
 │   ├── run_classification.py  # genotype classification on ordered_tracks
 │   ├── populate_roi_library.py
 │   └── export_to_roboflow.py  # dataset export for model training

@@ -51,7 +51,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from PyQt5.QtWidgets import (
     QApplication, QCheckBox, QFileDialog, QFrame, QHBoxLayout,
-    QLabel, QMainWindow, QPushButton, QStackedWidget,
+    QLabel, QMainWindow, QPushButton, QSlider, QSpinBox, QStackedWidget,
     QVBoxLayout, QWidget,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -296,29 +296,22 @@ class CropPage(QWidget):
                 "start": int(self.start), "end": int(self.end)}
 
     def cropped_reference_frame(self) -> Optional[np.ndarray]:
-        """Crop the video's frame 0 with the drawn box (for the vial page).
+        """Crop the trim-start frame with the drawn box (for the vial page).
 
-        Matches ``draw_and_save_vial_rois`` (frame_idx=0 of the source, then crop),
-        so the vial ROIs are drawn in the same cropped space the tracker uses.
+        Reads ``crop['start']`` (the trim-start), not frame 0, so the vial ROIs
+        are drawn on the same first frame the tracker will see, in the same
+        cropped space. Matches ``draw_and_save_vial_rois``.
         """
         crop = self.get_crop()
-        if crop is None:
+        if crop is None or self._cap is None:
             return None
-        frame = _read_first_frame_from_cap(self._cap)
-        if frame is None:
+        self._cap.set(cv2.CAP_PROP_POS_FRAMES, crop["start"])
+        ok, frame = self._cap.read()
+        if not ok:
             return None
         x, y, w, h = crop["x"], crop["y"], crop["w"], crop["h"]
         sub = frame[y:y + h, x:x + w]
         return sub if sub.size else None
-
-
-def _read_first_frame_from_cap(cap: Optional[cv2.VideoCapture]) -> Optional[np.ndarray]:
-    """Read frame 0 from an already-open capture without disturbing it long-term."""
-    if cap is None:
-        return None
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-    ok, frame = cap.read()
-    return frame if ok else None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -335,9 +328,12 @@ class VialPage(QWidget):
     rois_ready = pyqtSignal(bool)   # True when >= 1 ROI exists
 
     def __init__(self, snap_threshold_pct: float, snap_enabled: bool,
-                 default_count: int, parent=None):
+                 default_count: int, default_n_vials: int = 6,
+                 default_gap_ratio: float = 0.5, parent=None):
         super().__init__(parent)
-        self._default_count = default_count
+        self._default_count   = default_count
+        self._default_n_vials = max(1, int(default_n_vials))
+        self._default_gap     = min(1.0, max(0.0, float(default_gap_ratio)))
         self._rows: List[_VialControlRow] = []
         self._build(snap_threshold_pct, snap_enabled)
 
@@ -346,9 +342,11 @@ class VialPage(QWidget):
         root.setContentsMargins(20, 16, 20, 16)
         root.setSpacing(10)
 
-        hdr = QLabel("STEP 2  —  DRAW VIAL ROIs")
+        hdr = QLabel("STEP 2  —  VIAL ROIs")
         hdr.setObjectName("header")
         root.addWidget(hdr)
+
+        root.addLayout(self._build_suggest_row())
 
         self.canvas = _MultiROICanvas(snap_threshold_pct, snap_enabled)
         self.canvas.rois_changed.connect(self._on_rois_changed)
@@ -383,8 +381,53 @@ class VialPage(QWidget):
         root.addLayout(btn_row)
         self._refresh_status()
 
+    def _build_suggest_row(self) -> QHBoxLayout:
+        """Vial-count spinbox + gap slider that (re)generate the suggested boxes."""
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+
+        _nv = QLabel("Vials:")
+        _nv.setObjectName("status")
+        row.addWidget(_nv)
+        self.spin_nvials = QSpinBox()
+        self.spin_nvials.setRange(1, 60)
+        self.spin_nvials.setValue(self._default_n_vials)
+        self.spin_nvials.valueChanged.connect(self._resuggest)
+        row.addWidget(self.spin_nvials)
+
+        row.addSpacing(16)
+        _gp = QLabel("Gap:")
+        _gp.setObjectName("status")
+        row.addWidget(_gp)
+        self.slider_gap = QSlider(Qt.Horizontal)
+        self.slider_gap.setRange(0, 100)   # percent of a vial's width
+        self.slider_gap.setValue(int(round(self._default_gap * 100)))
+        self.slider_gap.setFixedWidth(160)
+        self.slider_gap.valueChanged.connect(lambda _v: self._resuggest())
+        row.addWidget(self.slider_gap)
+        self.gap_val_lbl = QLabel(f"{self._default_gap:.2f}")
+        self.gap_val_lbl.setObjectName("status")
+        row.addWidget(self.gap_val_lbl)
+
+        self.btn_suggest = QPushButton("Suggest")
+        self.btn_suggest.setToolTip(
+            "Replace the boxes with N evenly spaced vials across the frame"
+        )
+        self.btn_suggest.clicked.connect(self._resuggest)
+        row.addWidget(self.btn_suggest)
+        row.addStretch()
+        return row
+
+    def _resuggest(self) -> None:
+        """Regenerate the uniform suggestion from the current count + gap."""
+        r = self.slider_gap.value() / 100.0
+        self.gap_val_lbl.setText(f"{r:.2f}")
+        self.canvas.prefill_uniform_vials(self.spin_nvials.value(), r)
+
     def set_frame(self, frame_bgr: np.ndarray) -> None:
         self.canvas.set_frame(frame_bgr)
+        self._resuggest()   # show the auto-suggested boxes as soon as the crop lands
 
     # ── per-vial rows ────────────────────────────────────────────────────────
     def _sync_rows(self, n: int) -> None:
@@ -460,6 +503,8 @@ class AppWindow(QMainWindow):
         snap_pct = float(cfg.roi.snap_threshold_pct)
         snap_on  = bool(cfg.roi.snap_enabled)
         default_count = int(cfg.pipeline.expected_per_vial)
+        default_n_vials = int(getattr(cfg.roi, "n_vials", 6))
+        default_gap = float(getattr(cfg.roi, "gap_ratio", 0.5))
 
         self.setWindowTitle("SuperFly - Setup")
         self.setMinimumSize(1120, 860)
@@ -467,7 +512,8 @@ class AppWindow(QMainWindow):
         self.setStyleSheet(_PP_QSS + "\n" + _ROI_QSS)
 
         self.crop_page = CropPage()
-        self.vial_page = VialPage(snap_pct, snap_on, default_count)
+        self.vial_page = VialPage(snap_pct, snap_on, default_count,
+                                  default_n_vials, default_gap)
         self.crop_page.crop_ready.connect(self._update_nav)
         self.vial_page.rois_ready.connect(self._update_nav)
 

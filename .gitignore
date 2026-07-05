@@ -47,3 +47,4 @@ data/raw/
 all_runs_final/
 
 RF-DETR_model/
+data/generalisability_test

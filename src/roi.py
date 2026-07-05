@@ -24,7 +24,7 @@ from src.ui_context import VideoContext, build_context_chips, build_window_title
 
 from PyQt5.QtWidgets import (
     QApplication, QColorDialog, QDialog, QHBoxLayout, QLabel,
-    QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
+    QPushButton, QSizePolicy, QSlider, QSpinBox, QVBoxLayout, QWidget,
 )
 from PyQt5.QtCore import Qt, QPoint, QRect, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap
@@ -48,6 +48,25 @@ def _default_fly_count() -> int:
     with open(p) as f:
         cfg = yaml.safe_load(f)
     return int(cfg.get("pipeline", {}).get("expected_per_vial", 7))
+
+
+def _default_n_vials() -> int:
+    """Read roi.n_vials from config: how many boxes the auto-suggestion draws."""
+    try:
+        return max(1, int(_roi_cfg().get("n_vials", 6)))
+    except (TypeError, ValueError):
+        return 6
+
+
+def _default_gap_ratio() -> float:
+    """Read roi.gap_ratio from config: gap width as a fraction of a vial's width.
+
+    Clamped to [0, 1]. 0 = suggested boxes touch; 1 = each gap equals a vial.
+    """
+    try:
+        return min(1.0, max(0.0, float(_roi_cfg().get("gap_ratio", 0.5))))
+    except (TypeError, ValueError):
+        return 0.5
 
 
 # ─── Stylesheet (Catppuccin Mocha) ────────────────────────────────────────────
@@ -195,6 +214,39 @@ class _MultiROICanvas(QLabel):
 
     def reset(self) -> None:
         self._rois.clear()
+        self.rois_changed.emit(self._rois)
+        self._repaint()
+
+    def prefill_uniform_vials(self, n_vials: int, gap_ratio: float) -> None:
+        """Replace the ROIs with ``n_vials`` evenly spaced, full-height boxes.
+
+        Exploits the fact that a rig's vials are uniformly spaced. Given the
+        vial count ``N`` and the gap-to-vial width ratio ``r`` (clamped to
+        [0, 1]), the frame width ``W`` is tiled left→right as
+        ``vial, gap, vial, …, vial`` (N vials, N-1 gaps) with::
+
+            vial_width = W / (N + (N-1) * r)
+            pitch      = vial_width * (1 + r)
+            box i      = (round(i*pitch), 0, round(i*pitch)+vial_width, H-1)
+
+        which fills the width exactly (last box's right edge = W). Each box
+        spans the full frame height. This is a *suggestion*: it lands in
+        ``self._rois`` like hand-drawn boxes, so undo / reset / redraw and the
+        parent's per-vial rows all keep working, and the user can accept it as
+        is or adjust. No-op until a frame has been set.
+        """
+        if self._raw is None or n_vials < 1:
+            return
+        W, H = self._vw, self._vh
+        r = min(1.0, max(0.0, float(gap_ratio)))
+        vial_w = W / (n_vials + (n_vials - 1) * r)
+        pitch  = vial_w * (1.0 + r)
+        boxes: List[Tuple[int, int, int, int]] = []
+        for i in range(n_vials):
+            x0 = round(i * pitch)
+            x1 = min(round(i * pitch + vial_w), W)
+            boxes.append((x0, 0, x1, H - 1))
+        self._rois = boxes
         self.rois_changed.emit(self._rois)
         self._repaint()
 
@@ -494,16 +546,21 @@ class _VialROIDialog(QDialog):
     def __init__(self, frame_bgr: np.ndarray,
                  snap_threshold_pct: float, snap_enabled: bool,
                  default_fly_count: int = 7,
+                 default_n_vials: int = 6,
+                 default_gap_ratio: float = 0.5,
                  video_context: VideoContext | None = None,
                  parent=None):
         super().__init__(parent)
         self._snap_threshold_pct = snap_threshold_pct
         self._snap_enabled       = snap_enabled
         self._default_fly_count  = default_fly_count
+        self._default_n_vials    = max(1, int(default_n_vials))
+        self._default_gap_ratio  = min(1.0, max(0.0, float(default_gap_ratio)))
         self.video_context       = video_context
         self._fc_rows: List[_VialControlRow] = []   # one control row per vial
         self._build()
         self.canvas.set_frame(frame_bgr)
+        self._resuggest()   # open with the auto-suggested boxes already shown
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -529,6 +586,8 @@ class _VialROIDialog(QDialog):
 
         if self.video_context is not None:
             root.addWidget(build_context_chips(self.video_context))
+
+        root.addLayout(self._build_suggest_row())
 
         self.canvas = _MultiROICanvas(self._snap_threshold_pct,
                                       self._snap_enabled)
@@ -568,6 +627,53 @@ class _VialROIDialog(QDialog):
         self.btn_done.clicked.connect(self.accept)
         btn_row.addWidget(self.btn_done)
         root.addLayout(btn_row)
+
+    def _build_suggest_row(self) -> QHBoxLayout:
+        """Vial-count spinbox + gap slider that (re)generate the suggested boxes."""
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+
+        _nv = QLabel("Vials:")
+        _nv.setObjectName("status")
+        row.addWidget(_nv)
+        self.spin_nvials = QSpinBox()
+        self.spin_nvials.setRange(1, 60)
+        self.spin_nvials.setValue(self._default_n_vials)
+        self.spin_nvials.valueChanged.connect(self._resuggest)
+        row.addWidget(self.spin_nvials)
+
+        row.addSpacing(16)
+        _gp = QLabel("Gap:")
+        _gp.setObjectName("status")
+        row.addWidget(_gp)
+        self.slider_gap = QSlider(Qt.Horizontal)
+        self.slider_gap.setRange(0, 100)   # percent of a vial's width
+        self.slider_gap.setValue(int(round(self._default_gap_ratio * 100)))
+        self.slider_gap.setFixedWidth(160)
+        self.slider_gap.valueChanged.connect(self._on_gap_changed)
+        row.addWidget(self.slider_gap)
+        self.gap_val_lbl = QLabel()
+        self.gap_val_lbl.setObjectName("status")
+        row.addWidget(self.gap_val_lbl)
+
+        self.btn_suggest = QPushButton("Suggest")
+        self.btn_suggest.setToolTip(
+            "Replace the boxes with N evenly spaced vials across the frame"
+        )
+        self.btn_suggest.clicked.connect(self._resuggest)
+        row.addWidget(self.btn_suggest)
+        row.addStretch()
+        return row
+
+    def _on_gap_changed(self, _v: int) -> None:
+        self._resuggest()
+
+    def _resuggest(self) -> None:
+        """Regenerate the uniform suggestion from the current count + gap."""
+        r = self.slider_gap.value() / 100.0
+        self.gap_val_lbl.setText(f"{r:.2f}")
+        self.canvas.prefill_uniform_vials(self.spin_nvials.value(), r)
 
     def _snap_badge(self) -> str:
         return "[snap ON]" if self.canvas.snap_enabled else "[snap OFF]"
@@ -650,15 +756,19 @@ def draw_and_save_vial_rois(
     video_context: VideoContext | None = None,
 ) -> Dict[str, Tuple[int, int, int, int]]:
     """
-    Interactive PyQt5 GUI to manually draw rectangular ROIs for fly vials.
+    Interactive PyQt5 GUI to place rectangular ROIs for fly vials.
 
-    The user draws as many ROIs as the experiment has vials; the count is
-    determined entirely by what was drawn. Downstream steps read the saved
-    JSON to learn how many vials exist.
+    The window opens with an automatic suggestion: assuming the vials are
+    evenly spaced, it splits the cropped frame into ``roi.n_vials`` equal,
+    full-height boxes (gap between them set by ``roi.gap_ratio``). The user
+    normally just confirms; the count/gap controls re-suggest, and the boxes
+    can still be undone / reset / redrawn by hand. The saved vial count is
+    whatever boxes remain at confirm time.
 
     Controls
     --------
-    Drag mouse  : draw ROI
+    Vials / Gap : regenerate the evenly spaced suggestion
+    Drag mouse  : draw an extra ROI by hand
     U           : undo last ROI
     R           : reset all ROIs
     Enter       : finish (requires at least one ROI)
@@ -668,7 +778,10 @@ def draw_and_save_vial_rois(
     ----------
     video_path    : path to the experiment video
     roi_json_path : where the ROIs will be saved as JSON
-    frame_idx     : reference frame for drawing (default 0)
+    frame_idx     : reference frame override. Default 0 means "use the stored
+                    trim start" (crop['start']) when a crop is present, so the
+                    picture matches the trimmed clip the tracker sees; with no
+                    stored crop the clip's own first frame is already the start.
 
     Returns
     -------
@@ -684,9 +797,18 @@ def draw_and_save_vial_rois(
     raw_path = entry.get("video_path") if crop else None
     source_path = raw_path if raw_path and os.path.exists(raw_path) else video_path
 
+    # Draw on the trim-start frame so the picture matches the clip the tracker
+    # sees. When reading the raw video, seek to the stored trim start
+    # (crop['start']); an explicit frame_idx from a caller overrides it. When
+    # there is no stored crop we are reading an already-trimmed clip whose
+    # frame 0 *is* the trim start, so frame_idx (default 0) is already correct.
+    seek_frame = frame_idx
+    if crop and source_path == raw_path and frame_idx == 0:
+        seek_frame = int(crop.get("start", 0) or 0)
+
     cap = cv2.VideoCapture(source_path)
-    if frame_idx > 0:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+    if seek_frame > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, seek_frame)
     ok, frame = cap.read()
     cap.release()
 
@@ -711,6 +833,8 @@ def draw_and_save_vial_rois(
         snap_threshold_pct,
         snap_enabled,
         default_fly_count=fly_count_default,
+        default_n_vials=_default_n_vials(),
+        default_gap_ratio=_default_gap_ratio(),
         video_context=video_context,
     )
     accepted = dlg.exec_()

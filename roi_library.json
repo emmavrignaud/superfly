@@ -3076,5 +3076,129 @@
         374
       ]
     }
+  },
+  "GroupF-0714_M": {
+    "preprocessing": {
+      "x": 336,
+      "y": 130,
+      "w": 82,
+      "h": 482,
+      "start": 104,
+      "end": 926
+    },
+    "video_path": "B:\\Domain\\EPFL\\Coursework\\MA2\\Fly_Tracking\\superfly_code\\superfly\\data\\Greta\\GroupF-0714_M.m4v",
+    "vial_rois": {
+      "vial1": {
+        "bbox": [
+          15,
+          0,
+          81,
+          472
+        ],
+        "color": "#a6e3a1"
+      }
+    }
+  },
+  "GroupeK-0825_G": {
+    "preprocessing": {
+      "x": 363,
+      "y": 133,
+      "w": 86,
+      "h": 471,
+      "start": 123,
+      "end": 789
+    },
+    "video_path": "B:\\Domain\\EPFL\\Coursework\\MA2\\Fly_Tracking\\superfly_code\\superfly\\data\\Greta\\GroupeK-0825_G.m4v",
+    "vial_rois": {
+      "vial1": {
+        "bbox": [
+          3,
+          2,
+          83,
+          469
+        ],
+        "color": "#a6e3a1"
+      }
+    }
+  },
+  "GroupQ-1125_AB": {
+    "preprocessing": {
+      "x": 391,
+      "y": 98,
+      "w": 253,
+      "h": 576,
+      "start": 134,
+      "end": 628
+    },
+    "video_path": "B:\\Domain\\EPFL\\Coursework\\MA2\\Fly_Tracking\\superfly_code\\superfly\\data\\Greta\\GroupQ-1125_AB.m4v",
+    "vial_rois": {
+      "vial1": {
+        "bbox": [
+          0,
+          108,
+          82,
+          573
+        ],
+        "color": "#a6e3a1"
+      },
+      "vial2": {
+        "bbox": [
+          165,
+          0,
+          252,
+          465
+        ],
+        "color": "#89b4fa"
+      }
+    }
+  },
+  "VID_20260622_154607~2": {
+    "preprocessing": {
+      "x": 113,
+      "y": 353,
+      "w": 390,
+      "h": 316,
+      "start": 16,
+      "end": 738
+    },
+    "video_path": "B:\\Domain\\EPFL\\Coursework\\MA2\\Fly_Tracking\\superfly_code\\superfly\\data\\generalisability_test\\Greta\\VID_20260622_154607~2.mp4",
+    "vial_rois": {
+      "vial1": {
+        "bbox": [
+          0,
+          0,
+          73,
+          315
+        ],
+        "color": "#a6e3a1"
+      },
+      "vial2": {
+        "bbox": [
+          106,
+          0,
+          179,
+          315
+        ],
+        "color": "#89b4fa"
+      },
+      "vial3": {
+        "bbox": [
+          211,
+          0,
+          284,
+          315
+        ],
+        "color": "#f9e2af"
+      },
+      "vial4": {
+        "bbox": [
+          317,
+          0,
+          390,
+          315
+        ],
+        "color": "#f38ba8"
+      }
+    }
   }
 }

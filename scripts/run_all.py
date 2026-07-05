@@ -13,21 +13,23 @@ Two-stage pipeline:
              pipeline.skip_tracked: true in config.yaml to instead skip videos
              that already have ordered_tracks.csv.
 
-  Stage 2 -- Load all successfully tracked runs, extract behavioural features
-             (including new episode features), run Kruskal-Wallis significance
-             tests, and write a per-feature HTML report to
-             outputs/analysis/significance_report/.
+  Stage 2 (opt-in via --analysis) -- Load tracked runs, extract behavioural
+             features, run Kruskal-Wallis significance tests, and write a
+             per-feature HTML report to outputs/analysis/significance_report/.
 
 Usage
 -----
-    # Track everything + analyse
+    # Track everything (default; no analysis)
     python scripts/run_all.py
 
+    # Track then run significance / classification analysis
+    python scripts/run_all.py --analysis
+
     # Analyse only (all existing tracked runs, skip tracking)
-    python scripts/run_all.py --skip-tracking
+    python scripts/run_all.py --skip-tracking --analysis
 
     # Track specific videos then analyse
-    python scripts/run_all.py --video data/raw/13\ DPE/001/...mp4 --video data/raw/13\ DPE/003/...mp4
+    python scripts/run_all.py --video data/raw/13\ DPE/001/...mp4 --analysis
 
     # Skip already-tracked videos (opt in via config: pipeline.skip_tracked: true)
     python scripts/run_all.py
@@ -217,7 +219,10 @@ def record_run_metadata(video: Path, paths: RunPaths, cfg, model_id: str) -> tup
     output_dir.mkdir(parents=True, exist_ok=True)
 
     link_or_copy(video, output_dir / video.name)
-    save_config_snapshot(paths.output_dir, str(REPO_ROOT / "config.yaml"))
+    save_config_snapshot(
+        paths.output_dir, str(REPO_ROOT / "config.yaml"),
+        raw_video=video, repo_root=REPO_ROOT,
+    )
 
     cap = cv2.VideoCapture(str(video))
     fps_actual = float(cap.get(cv2.CAP_PROP_FPS) or cfg.video.fallback_fps)
@@ -728,7 +733,10 @@ def track_one(video: Path, output_dir: Path, api_key: str, model_id: str,
         True on success. Exceptions propagate to the caller, which records the
         failure and continues the batch.
     """
+    from utils import config_for_run
+
     paths = build_paths(output_dir, video)
+    run_cfg = config_for_run(cfg, video, repo_root=REPO_ROOT)
     fps, video_key = record_run_metadata(video, paths, cfg, model_id)
 
     video_path, raw_cropped_path = stage_preprocess(video, paths, cfg, library, video_key)
@@ -737,7 +745,7 @@ def track_one(video: Path, output_dir: Path, api_key: str, model_id: str,
     if write_overlays:
         render_detection_overlay(video, paths, cfg, video_path)
     df_ord = stage_assign(paths, df_wide, fps)
-    stage_diagnostics(paths, cfg, tracker, df_wide, df_ord, fps)
+    stage_diagnostics(paths, run_cfg, tracker, df_wide, df_ord, fps)
     if write_overlays:
         from src.roi import load_vial_rois
         vials, _ = load_vial_rois(paths.roi_json)
@@ -952,10 +960,10 @@ def build_parser() -> argparse.ArgumentParser:
     -------
     argparse.ArgumentParser
         Parser exposing --video, --data-root, --outputs-root, --analysis-root,
-        --analysis-out, --skip-tracking, --skip-analysis, and --draw-first.
+        --analysis-out, --analysis, --skip-tracking, and --draw-first.
     """
     p = argparse.ArgumentParser(
-        description="Track all videos + run behavioural significance analysis.",
+        description="Track all videos (analysis is opt-in via --analysis).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
@@ -981,12 +989,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Where the significance report is written.",
     )
     p.add_argument(
-        "--skip-tracking", action="store_true",
-        help="Skip tracking; run analysis on all existing tracked runs.",
+        "--analysis", action="store_true",
+        help="After tracking (or with --skip-tracking), run Stage 2 significance "
+             "analysis on tracked runs under --analysis-root.",
     )
     p.add_argument(
-        "--skip-analysis", action="store_true",
-        help="Track only, skip the analysis stage.",
+        "--skip-tracking", action="store_true",
+        help="Skip tracking; use with --analysis to analyse existing runs only.",
     )
     p.add_argument(
         "--draw-first", action="store_true",
@@ -1006,12 +1015,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    """Entry point: track all requested videos (Stage 1), then analyse (Stage 2).
+    """Entry point: track all requested videos (Stage 1); optionally analyse (Stage 2).
 
     Stage 1 tracks each discovered / explicit video (fresh every run by default;
     set pipeline.skip_tracked to skip finished ones), optionally writing overlay
     MP4s per visualization.enabled / --overlay.
-    Stage 2 loads the tracked runs and writes the behavioural significance report.
+    Stage 2 runs only when --analysis is passed; it loads tracked runs and writes
+    the behavioural significance report.
 
     Inputs
     ------
@@ -1100,7 +1110,7 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     # Stage 2 -- Analysis                                                  #
     # ------------------------------------------------------------------ #
-    if not args.skip_analysis:
+    if args.analysis:
         analysis_root = (REPO_ROOT / args.analysis_root).resolve()
         if not analysis_root.exists():
             print(f"Analysis root not found: {analysis_root} -- skipping analysis.")
