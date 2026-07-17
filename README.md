@@ -26,51 +26,65 @@ flowchart LR
 ```
 
 Every step except detection and classification runs locally with no GPU.
-By default, detection calls Roboflow's hosted RF-DETR over HTTP. You can
-instead run the model on your own machine — see **Local inference** below.
-Classification is pure scikit-learn.
+Detection runs either on Roboflow's hosted API or on your own machine; you choose
+in step 2. Classification is pure scikit-learn.
 
 
-## Quick start
+## 1. Install
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/emmavrignaud/superfly.git
 cd superfly
 
 # Conda (recommended):
 conda env create -f environment.yml
 conda activate fly-tracking
 
-# Or pip (requires ffmpeg on PATH — see requirements.txt header):
+# Or pip (requires ffmpeg on PATH; see requirements.txt header):
 # pip install -r requirements.txt
-
-# Add a Roboflow API key for detection:
-cp creds_config.example.yaml creds_config.yaml   # then paste the key into creds_config.yaml
 ```
 
-`creds_config.example.yaml` is the template; the real `creds_config.yaml` is
-gitignored.
-
-`environment.yml` also pulls in **ffmpeg**, **scikit-image** (watershed splitting),
-**trackeval** (editable install from `external/TrackEval`), **pytest**, and
-**jupyterlab** — all of which the pipeline or README use but were previously
-undocumented.
+`environment.yml` also installs ffmpeg, scikit-image (watershed splitting),
+trackeval (editable install from `external/TrackEval`), pytest, and jupyterlab.
 
 
-## Local inference (optional)
+## 2. Choose your detection backend: hosted or local
 
-Default is hosted (`inference.mode: hosted`). For local detection, follow `requirements-local_inference.txt`, then set `inference.mode: local` in `config.yaml`.
+RF-DETR detection (the tracking stage) runs one of two ways, set by
+`inference.mode` in `config.yaml`. Everything else in the pipeline is identical
+either way.
 
-## Running the pipeline
+### A. Hosted (default): `inference.mode: hosted`
 
-A run is defined entirely in **`config.yaml`**: the video to track, the tracker
-settings, and which stages run. Edit `config.yaml`, then launch it. The notebook
-and scripts only read config; you do not edit them to change a run.
+Detection runs on Roboflow's cloud API. No GPU and no model download, but it
+needs internet and a Roboflow API key.
 
-### Step 1: configure the run in `config.yaml`
+```bash
+cp creds_config.example.yaml creds_config.yaml   # then paste your key into creds_config.yaml
+```
 
-Sections are grouped **Meta** (inputs and environment), **Pipeline** (stages in
-execution order), and **Downstream analysis**:
+`creds_config.yaml` is gitignored; `creds_config.example.yaml` is the template.
+
+### B. Local: `inference.mode: local`
+
+Detection runs on your own machine from `RF-DETR_model/weights.pt`. No API key
+and no internet, and faster in bulk.
+
+```bash
+pip install -r requirements-local_inference.txt   # its header has the exact per-platform torch install order
+python tests/check_local_model.py                 # verify the install
+```
+
+Then set `inference.mode: local` in `config.yaml` (and
+`inference.local.optimize_for_gpu: true` on an NVIDIA GPU).
+
+## 3. Configure your run (`config.yaml`)
+
+A run is defined entirely in `config.yaml`: the video to track, the tracker
+settings, and which stages run. Edit `config.yaml`, then launch it (step 4). The
+notebook and scripts only read config; you do not edit them to change a run.
+
+Each section and what it controls:
 
 | Section | What it controls |
 |---|---|
@@ -88,29 +102,27 @@ execution order), and **Downstream analysis**:
 | `latent_space` | PCA / t-SNE / UMAP embedding settings |
 | `classification` | Active classifier (`method`) + per-backend hyperparameters |
 
-### Step 2: launch it
+## 4. Run the pipeline
 
-Every script reads `config.yaml`. Tracking output goes to
+Every entry point reads `config.yaml`. Tracking output goes to
 `data/outputs/run_<N>_<short_name>/`. CLI flags affect the current run only; they
 do not edit config.
 
-There are four ways to run the tracking pipeline. They share the same engine, the
-same `config.yaml`, and the same outputs, so pick by how much GUI you want.
+There are four ways to run tracking (A to D). They share the same engine, the same
+`config.yaml`, and the same outputs, so pick by how much GUI you want.
 
-#### Option 1: `scripts/app.py` (setup window)
+### A. `scripts/app.py` (setup window)
 
-One window that stays open for the whole setup: pick a video with Browse, draw
-the crop and frame trim, then draw each vial and set its fly count and colour. Two
-checkboxes control the run (write overlays, reuse a saved ROI). Clicking finish hands off the run to `run_tracking.py`
+A single setup window: pick a video, draw the crop and frame trim, then draw each
+vial and set its fly count and colour. Two checkboxes toggle overlays and reusing
+a saved ROI.
 
 ```bash
 python scripts/app.py                            # pick the video inside the window
 python scripts/app.py --video data/raw/clip.mp4  # preselect a video, skip the first Browse
 ```
 
-
-
-#### Option 2: `notebooks/01_tracking_pipeline.ipynb`
+### B. `notebooks/01_tracking_pipeline.ipynb`
 
 You can use this notebook if you prefer seeing the pipeline stages one by one. 
 
@@ -118,7 +130,7 @@ You can use this notebook if you prefer seeing the pipeline stages one by one.
 jupyter lab notebooks/01_tracking_pipeline.ipynb
 ```
 
-#### Option 3: `scripts/run_tracking.py`
+### C. `scripts/run_tracking.py`
 
 One video, full pipeline, driven from the command line.
 
@@ -130,11 +142,10 @@ python scripts/run_tracking.py --overlay                  # also write Track Ove
 python scripts/run_tracking.py --no-overlay               # skip overlays even if config enables them
 ```
 
-With no overlay flag, overlays follow `visualization.enabled` in config. The
-`--reuse-roi` flag is what `app.py` passes on handoff, and it is also handy for
-scripted runs off an already saved ROI.
+With no overlay flag, overlays follow `visualization.enabled` in config.
+`--reuse-roi` is handy for scripted runs off an already saved ROI.
 
-#### Option 4: `scripts/run_all.py`
+### D. `scripts/run_all.py`
 
 Batch tracking over many videos. Stage 1 runs by default; Stage 2 (behavioural
 significance analysis on tracked runs) is opt-in via `--analysis`. Every run is
@@ -150,7 +161,7 @@ python scripts/run_all.py --skip-tracking --analysis      # analyse existing run
 ```
 
 
-#### `scripts/run_classification.py`
+### Classify genotypes (optional): `scripts/run_classification.py`
 
 Classify genotypes from a finished run folder (`ordered_tracks.csv` and
 `run_params.json` required). Classifier settings come from config.
@@ -193,7 +204,7 @@ superfly/
 ├── creds_config.example.yaml  # Roboflow key template; copy to creds_config.yaml
 ├── environment.yml            # conda env spec
 ├── requirements.txt           # pip mirror
-├── requirements-local_inference.txt  # optional: local RF-DETR (see Local inference)
+├── requirements-local_inference.txt  # optional: local RF-DETR (see step 2)
 ├── utils.py                   # shared helpers (config loading, run outputs)
 ├── roi_library.json           # cached crop + vial ROIs keyed by video stem
 ├── RF-DETR_model/             # trained fly-detection model
@@ -203,14 +214,14 @@ superfly/
 ├── notebooks/
 │   ├── 01_tracking_pipeline.ipynb
 │   └── 02_classification_analysis.ipynb
-├── scripts/                   # entry points — start here
-│   ├── app.py                 # GUI setup → hands off to run_tracking
+├── scripts/                   # entry points, start here
+│   ├── app.py                 # GUI setup for a tracking run
 │   ├── run_tracking.py        # one video, full pipeline
 │   ├── run_all.py             # batch many videos
 │   ├── run_classification.py  # genotype classification on a finished run
 │   └── populate_roi_library.py  # batch ROI drawing for a whole experiment folder
 ├── src/
-│   │   # -- tracking pipeline --
+│   │   # tracking pipeline
 │   ├── inference_backends.py  # hosted vs local RF-DETR
 │   ├── preprocessing.py       # background subtraction + crop/trim GUI
 │   ├── roi.py                 # vial ROI drawing + assign_vials_and_ordered_ids
@@ -219,11 +230,11 @@ superfly/
 │   ├── wide_long.py           # wide -> long format conversion
 │   ├── visualization.py       # overlay video rendering
 │   ├── metrics.py             # run_diagnostics, per-vial counts, HOTA
-│   │   # -- vendored tracker (OC-SORT, lightly modified) --
+│   │   # vendored tracker (OC-SORT, lightly modified)
 │   ├── ocsort.py              # OC-SORT implementation
 │   ├── kalmanfilter.py        # Kalman filter used per track
 │   ├── association.py         # IoU variants + Hungarian matching
-│   │   # -- downstream behavioural analysis --
+│   │   # downstream behavioural analysis
 │   ├── features.py            # kinematics, area, tortuosity
 │   ├── statistics.py          # Kruskal-Wallis + Cliff's delta significance
 │   ├── classification.py      # LDA / Logistic / SVC + plots
@@ -236,7 +247,6 @@ superfly/
 ├── tests/                     # pytest + optional runnable checks
 │   ├── check_local_model.py   # verify local RF-DETR install
 │   └── benchmark_local_inference.py  # local vs hosted speed (optional)
-├── misc_software/legacy/      # old one-off scripts (not used by pipeline)
 ```
 
 
@@ -252,6 +262,10 @@ the environment is installed correctly.
 
 ## Acknowledgements
 
+This project was carried out at the Laboratory of Neurogenetics and Disease
+(McCabe Lab), EPFL, which provided the fly-climbing assay dataset and supported
+the work.
+
 - RF-DETR: [Roboflow](https://roboflow.com)
 - OC-SORT: [boxmot](https://github.com/mikel-brostrom/boxmot)
-- Dataset: EPFL fly-climbing assay (hTDP43 mutant line)
+- Dataset: fly-climbing assay, McCabe Lab (hTDP43 mutant line)
