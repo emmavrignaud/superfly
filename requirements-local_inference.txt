@@ -1,0 +1,40 @@
+# Local RF-DETR (config.yaml → inference.mode: local)
+#
+# Skip this file if you use hosted detection (default). Hosted needs creds_config.yaml only.
+#
+# Install order:
+#   1. PyTorch + torchvision (install BEFORE this file)
+#
+#        A. Pick your platform
+#           macOS (Apple Silicon M1/M2/M3 or Intel):
+#             https://pytorch.org/get-started/locally/ → Mac, pip, default
+#             pip install torch torchvision
+#             Verify MPS (Apple Silicon): python -c "import torch; print(torch.backends.mps.is_available())"
+#             optimize_for_gpu in config.yaml is CUDA-only; leave false on Mac.
+#           Windows / Linux — NVIDIA GPU:
+#             nvidia-smi
+#             Read "CUDA Version: X.Y" top-right. Map to wheel: 12.4→cu124, 12.1→cu121, 11.8→cu118.
+#           Linux cluster:
+#             module avail cuda
+#             module load cuda/X.Y
+#             nvcc --version
+#
+#        B. Install — one line for your machine:
+#             macOS:  pip install torch torchvision
+#             NVIDIA: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#                     (replace cu124 with cu121/cu118 from step A)
+#             CPU:    pip install torch torchvision
+#
+#        C. Verify:
+#             python -c "import torch; print(torch.__version__, 'cuda', torch.cuda.is_available(), 'mps', getattr(torch.backends,'mps',None) and torch.backends.mps.is_available())"
+#           pip only for torch — not conda pytorch in this env.
+#
+#   2. pip install -r requirements-local_inference.txt
+#   3. python tests/check_local_model.py
+#   4. config.yaml → inference.mode: local
+#        GPU: inference.local.optimize_for_gpu: true
+#        Weights: RF-DETR_model/weights.pt (or inference.local.weights_path)
+#
+# Run pipeline: scripts/run_tracking.py. Cloud again: inference.mode: hosted.
+
+rfdetr[plus]

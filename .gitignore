@@ -9,10 +9,10 @@ venv/
 
 # Notebooks
 .ipynb_checkpoints/
+notebooks/03_local_model_testing.ipynb   # exploratory only, not part of the pipeline
 
 # Logs
 *.log
-*.txt
 
 # Editor / tooling
 .vscode/settings.json
@@ -41,10 +41,9 @@ _test_ann.html
 roboflow_export*
 
 # Claude / agent scratch
-.claude/
 data/manual_labelling/
 data/raw/
 all_runs_final/
-
+misc_software
 RF-DETR_model/
 data/generalisability_test
