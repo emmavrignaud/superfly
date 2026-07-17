@@ -4,12 +4,14 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.egg-info/
 venv/
 .venv/
 
 # Notebooks
 .ipynb_checkpoints/
-notebooks/03_local_model_testing.ipynb   # exploratory only, not part of the pipeline
+# Exploratory only, not part of the pipeline
+notebooks/03_local_model_testing.ipynb
 
 # Logs
 *.log
