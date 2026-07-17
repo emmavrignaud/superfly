@@ -1,7 +1,6 @@
 # Drosophila Climbing Behaviour: Fly Tracking and Genotype Classification
 
-End-to-end pipeline for the EPFL fly-climbing assay: raw video in, per-fly
-trajectories and genotype predictions out.
+End-to-end pipeline for a *Drosophila* climbing assay. It detects and tracks individual flies across video frames to produce per-fly trajectories, the basis for quantifying climbing behaviour across genotypes in a TDP-43 model of neurodegeneration.
 
 ![fly-insect-hands](https://github.com/user-attachments/assets/7118b6f8-30ee-4a85-b593-62c744745e03)
 
@@ -10,24 +9,11 @@ trajectories and genotype predictions out.
 
 ```mermaid
 flowchart LR
-    A[Raw video<br/>*.mp4] --> B[Preprocessing<br/>crop + temporal trim<br/>background subtraction]
-    B --> C[Vial ROIs<br/>vial_rois.json]
-    A --> C
-    B --> D[RF-DETR detection<br/>+ OC-SORT tracking<br/>ocsort_tracks.csv]
-    C --> D
-    D --> E[Wide to long<br/>ocsort_tracks_long.csv]
-    E --> F[Vial assignment<br/>+ ordered IDs<br/>ordered_tracks.csv]
-    C --> F
-    D --> G[Diagnostics<br/>metrics_report.html]
-    F --> G
-    F --> H[Track Overlays<br/>overlay_ordered.mp4]
-    F --> I[Behavioural features<br/>kinematics, area, tortuosity]
-    I --> J[Genotype classification<br/>LDA / Logistic / SVC]
+    A[Raw video] --> B[Preprocessing<br/>background subtraction]
+    B --> C[Detection<br/>RF-DETR]
+    C --> D[Tracking<br/>OC-SORT]
+    D --> E[Behavioural features]
 ```
-
-Every step except detection and classification runs locally with no GPU.
-Detection runs either on Roboflow's hosted API or on your own machine; you choose
-in step 2. Classification is pure scikit-learn.
 
 
 ## 1. Install
@@ -70,9 +56,12 @@ cp creds_config.example.yaml creds_config.yaml   # then paste your key into cred
 Detection runs on your own machine from `RF-DETR_model/weights.pt`. No API key
 and no internet, and faster in bulk.
 
+Follow the instructions at the top of `requirements-local_inference.txt`: it
+walks through the exact PyTorch install for your platform, then the extras:
+
 ```bash
-pip install -r requirements-local_inference.txt   # its header has the exact per-platform torch install order
-python tests/check_local_model.py                 # verify the install
+pip install -r requirements-local_inference.txt
+python tests/check_local_model.py   # verify the install
 ```
 
 Then set `inference.mode: local` in `config.yaml` (and
@@ -80,9 +69,10 @@ Then set `inference.mode: local` in `config.yaml` (and
 
 ## 3. Configure your run (`config.yaml`)
 
-A run is defined entirely in `config.yaml`: the video to track, the tracker
-settings, and which stages run. Edit `config.yaml`, then launch it (step 4). The
-notebook and scripts only read config; you do not edit them to change a run.
+All the settings for a run live in `config.yaml`: which video to track, the
+tracker settings, and which stages run. Edit `config.yaml`, then launch it
+(step 4). The notebook and scripts only read these settings; you never edit them
+to change a run.
 
 Each section and what it controls:
 
@@ -142,8 +132,9 @@ python scripts/run_tracking.py --overlay                  # also write Track Ove
 python scripts/run_tracking.py --no-overlay               # skip overlays even if config enables them
 ```
 
-With no overlay flag, overlays follow `visualization.enabled` in config.
-`--reuse-roi` is handy for scripted runs off an already saved ROI.
+When you pass neither `--overlay` nor `--no-overlay`, overlays follow
+`visualization.enabled` in config. `--reuse-roi` is handy for scripted runs off
+an already saved ROI.
 
 ### D. `scripts/run_all.py`
 
@@ -262,10 +253,6 @@ the environment is installed correctly.
 
 ## Acknowledgements
 
-This project was carried out at the Laboratory of Neurogenetics and Disease
-(McCabe Lab), EPFL, which provided the fly-climbing assay dataset and supported
-the work.
-
+- This project was carried out at and supported by the [Laboratory of Neural Genetics and Disease (McCabe Lab)](https://www.epfl.ch/labs/mccabelab/), EPFL.
 - RF-DETR: [Roboflow](https://roboflow.com)
 - OC-SORT: [boxmot](https://github.com/mikel-brostrom/boxmot)
-- Dataset: fly-climbing assay, McCabe Lab (hTDP43 mutant line)
