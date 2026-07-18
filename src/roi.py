@@ -108,8 +108,9 @@ QPushButton#done:hover     { background: #94e2d5; }
 QPushButton#done:disabled  { background: #313244; color: #6c7086; }
 """
 
-# One distinct colour per vial (cycles if n_vials > 6)
-_VIAL_COLOURS = ["#a6e3a1", "#89b4fa", "#f9e2af", "#f38ba8", "#cba6f7", "#94e2d5"]
+# Default palette (cycles if n_vials > 6). Imported from plot_colors so roi.py
+# and the colour funnel share one definition and can't drift apart.
+from src.plot_colors import DEFAULT_VIAL_COLORS as _VIAL_COLOURS
 
 
 # ─── Multi-ROI canvas ─────────────────────────────────────────────────────────
@@ -864,19 +865,8 @@ def draw_and_save_vial_rois(
     with open(roi_json_path, "w") as f:
         json.dump(save_data, f, indent=2)
 
-    # Canonical genotype colours (best-effort) so classification / embedding
-    # follow the colours picked here, exactly like the setup window does.
-    try:
-        from src.plot_colors import parse_vial_genotypes, write_genotype_color_overrides
-        genos = parse_vial_genotypes(video_path)
-        if genos:
-            ordered_colors = [save_data[f"vial{i + 1}"]["color"] for i in range(len(save_data))]
-            mapping = {g: c for g, c in zip(genos, ordered_colors)}
-            if mapping:
-                write_genotype_color_overrides(mapping)
-    except Exception as _e:
-        print(f"[warn] genotype colour update skipped: {_e}")
-
+    # The picked colours are read back by the caller (via load_vial_colors) and
+    # written into the single fixed vial_colors block at the top of the library.
     print("Saved ROIs to:", roi_json_path)
     return roi_dict
 
@@ -912,10 +902,10 @@ def load_vial_rois(
 def load_vial_colors(path: str) -> Dict[str, str]:
     """Return {vial_id: hex_colour} for vials that carry a stored colour.
 
-    Colours are written per vial by the setup window (scripts/app.py) into the
-    ``color`` field of the new-format ROI JSON. Old-format files (bare bbox
-    lists, or dicts without ``color``) yield an empty / partial map; callers
-    fall back to the default palette for any vial missing here.
+    Reads the per-run ROI JSON written by the ROI GUI (``draw_and_save_vial_rois``),
+    whose new-format entries include a ``color`` field. Callers use this only to
+    forward a fresh GUI pick into the single ``vial_colors`` block at the top of
+    roi_library.json; old-format files (bare bbox lists) yield an empty map.
     """
     with open(path) as f:
         raw = json.load(f)
@@ -968,7 +958,8 @@ def assign_vials_and_ordered_ids(
     fps: Optional[float] = None,
 ):
     """
-    Assign vial IDs using rectangular ROIs, then ordered IDs within each vial.
+    Assign each trajectory to a vial (majority vote of its points over the
+    rectangular ROIs), then assign ordered IDs within each vial.
 
     Parameters
     ----------
@@ -985,21 +976,41 @@ def assign_vials_and_ordered_ids(
     """
     vial_rois, _ = load_vial_rois(roi_json)
 
-    def assign_vial(x, y):
+    def point_vial(x, y):
+        # Half-open bounds: a point on a shared/touching edge matches only the
+        # left/upper vial, never two vials at once.
         for vid, (x0, y0, x1, y1) in vial_rois.items():
-            if x0 <= x <= x1 and y0 <= y <= y1:
+            if x0 <= x < x1 and y0 <= y < y1:
                 return vid
         return None
 
     df = pd.read_csv(ocsort_csv)
     df["frame"] = df["frame"].astype(int)
 
+    # Drop rows without a real position. wide_to_long emits NaN x/y for frames a
+    # track was not detected; per-trajectory assignment keeps whole tracks, so
+    # these must be removed here or they reach ordered_tracks and the overlay.
+    df = df[df["x"].notna() & df["y"].notna()].copy()
+
     # Support both direct OC-SORT output (orig_id) and legacy stitched format (stitched_id)
     id_col = "stitched_id" if "stitched_id" in df.columns else "orig_id"
 
-    y_use        = (video_h - 1 - df["y"]) if invert_y else df["y"]
-    df["vial_id"] = [assign_vial(x, y) for x, y in zip(df["x"], y_use)]
-    df            = df[df["vial_id"].notna()].copy()
+    y_use = (video_h - 1 - df["y"]) if invert_y else df["y"]
+
+    # Decide the vial once per trajectory, not per frame. Each point casts a vote
+    # for the vial that contains it; the track is assigned the vial with the most
+    # votes (ties go to the lower-numbered vial). This keeps a fly in a single
+    # vial, and thus one overlay colour, for the whole clip instead of flickering
+    # when it strays near a boundary.
+    point_votes = pd.Series(
+        [point_vial(x, y) for x, y in zip(df["x"], y_use)],
+        index=df.index,
+    )
+    track_vial = point_votes.groupby(df[id_col]).agg(
+        lambda s: s.dropna().mode().iloc[0] if s.notna().any() else None
+    )
+    df["vial_id"] = df[id_col].map(track_vial)
+    df = df[df["vial_id"].notna()].copy()
 
     df["ordered_id"] = -1
     offset = 0

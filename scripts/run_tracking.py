@@ -382,15 +382,15 @@ def stage_vial_rois(config, paths: RunPaths, raw_video: Path, video_context) -> 
         # Load n_flies from the JSON the GUI just wrote (per-run only).
         _, n_flies_dict = load_vial_rois(paths.roi_json)
 
-        # The library caches the ROI geometry AND the per-vial colour (both are
-        # persistent identity, reused across runs); n_flies is a per-run label and
-        # stays only in this run's vial_rois.json.
+        # The library caches ROI geometry (persistent identity, reused across
+        # runs); n_flies is a per-run label kept only in this run's vial_rois.json.
+        # Colours live in one fixed top-level block (vial i -> colour); a pick in
+        # the ROI GUI updates that block for every video and both views.
         _colors = load_vial_colors(paths.roi_json)
         library.setdefault(video_key, {})
-        library[video_key]["vial_rois"] = {
-            k: ({"bbox": list(v), "color": _colors[k]} if k in _colors else list(v))
-            for k, v in vials.items()
-        }
+        library[video_key]["vial_rois"] = {k: list(v) for k, v in vials.items()}
+        if _colors:
+            library.setdefault("vial_colors", {}).update(_colors)
         _save_roi_library(library)
 
     save_run_params(paths.output_dir, "roi", {k: list(v) for k, v in vials.items()})
@@ -612,7 +612,8 @@ def score_run_metrics(config, paths: RunPaths, tracker, df_wide, df_ordered,
         dir. Never raises on scoring / report failure.
     """
     from src.metrics import run_diagnostics
-    from src.roi import load_vial_rois, load_vial_colors, resolve_vial_expected_counts
+    from src.roi import load_vial_rois, resolve_vial_expected_counts
+    from src.plot_colors import load_vial_palette
 
     _, n_flies_dict = load_vial_rois(paths.roi_json)
     n_expected = sum(resolve_vial_expected_counts(
@@ -645,7 +646,7 @@ def score_run_metrics(config, paths: RunPaths, tracker, df_wide, df_ordered,
         config=config,
         output_dir=paths.output_dir,
         show_plots=False,
-        vial_colors=load_vial_colors(paths.roi_json),
+        vial_colors=load_vial_palette(),
     )
     print(f"  Metrics report: {os.path.join(paths.output_dir, 'metrics_report.md')}")
 
@@ -678,7 +679,7 @@ def stage_overlays(config, paths: RunPaths, video_path: str, vials: dict) -> Non
         Writes overlay_raw_ocsort.mp4 and overlay_ordered.mp4 into the output dir.
     """
     from src.visualization import render_vial_overlay_video, render_raw_overlay_video
-    from src.roi import load_vial_colors
+    from src.plot_colors import load_vial_palette
 
     print("\n=== Stage 5: Overlay videos ===")
     _overlay_mode = config.visualization.overlay_source
@@ -686,8 +687,8 @@ def stage_overlays(config, paths: RunPaths, video_path: str, vials: dict) -> Non
     print(f"  overlay_source={_overlay_mode} -> substrate: {overlay_video}")
 
     det_log_arg = paths.det_log_csv if os.path.exists(paths.det_log_csv) else None
-    # Per-vial colours picked in the setup window (empty when none were chosen).
-    vial_colors = load_vial_colors(paths.roi_json) if os.path.exists(paths.roi_json) else {}
+    # Fixed vial palette (top-level vial_colors block in roi_library.json).
+    vial_colors = load_vial_palette()
 
     # 5a — raw OC-SORT overlay
     raw_overlay_mp4 = os.path.join(paths.output_dir, "overlay_raw_ocsort.mp4")

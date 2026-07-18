@@ -346,6 +346,8 @@ def render_vial_overlay_video(
         dets = by_frame.get(int(frame_idx + frame_offset))
         if dets is not None:
             for x, y, vial_id, cid in dets:
+                if not (np.isfinite(float(x)) and np.isfinite(float(y))):
+                    continue
                 xi = int(round(float(x)))
                 yi_raw = float(y)
                 yi = int(round((h - 1 - yi_raw) if invert_y else yi_raw))

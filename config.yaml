@@ -62,7 +62,7 @@ roi:
   # When the drawing window opens it starts from an automatic suggestion: it
   # assumes the vials are evenly spaced, takes the vial count below, and splits
   # the cropped frame into that many equal boxes, so you usually just confirm.
-  use_saved_roi: true          # false = always open GUI to redraw
+  use_saved_roi: true           # false = always open GUI to redraw
   n_vials: 6                   # how many vials the rig holds. The suggestion draws this many equal boxes.
   #                              Example: 6 here -> 6 boxes side by side across the frame.
   gap_ratio: 0.5               # empty space between vials, as a fraction of one vial's width.

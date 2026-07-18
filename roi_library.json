@@ -1,4 +1,12 @@
 {
+  "vial_colors": {
+    "vial1": "#E69F00",
+    "vial2": "#56B4E9",
+    "vial3": "#009E73",
+    "vial4": "#F0E442",
+    "vial5": "#0072B2",
+    "vial6": "#CC79A7"
+  },
   "2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_003-converted": {
     "preprocessing": {
       "x": 200,
@@ -455,7 +463,7 @@
       "start": 0,
       "end": 388
     },
-    "video_path": "..\\data\\raw\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m\\31 DPE\\005\\2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted.mp4",
+    "video_path": "B:\\Domain\\EPFL\\Coursework\\MA2\\Fly_Tracking\\superfly_code\\superfly\\data\\raw\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m\\31 DPE\\005\\2024-03-01_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_31d_005-converted.mp4",
     "vial_rois": {
       "vial1": [
         2,
@@ -2552,51 +2560,70 @@
   },
   "2024-03-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_35d_004-converted": {
     "preprocessing": {
-      "x": 241,
-      "y": 201,
-      "w": 698,
-      "h": 364,
+      "x": 237,
+      "y": 197,
+      "w": 703,
+      "h": 362,
       "start": 0,
       "end": 355
     },
     "vial_rois": {
-      "vial1": [
-        1,
-        0,
-        76,
-        355
-      ],
-      "vial2": [
-        125,
-        3,
-        196,
-        355
-      ],
-      "vial3": [
-        249,
-        5,
-        322,
-        352
-      ],
-      "vial4": [
-        375,
-        3,
-        454,
-        355
-      ],
-      "vial5": [
-        499,
-        3,
-        578,
-        358
-      ],
-      "vial6": [
-        623,
-        3,
-        698,
-        358
-      ]
-    }
+      "vial1": {
+        "bbox": [
+          0,
+          0,
+          78,
+          361
+        ],
+        "n_flies": 7
+      },
+      "vial2": {
+        "bbox": [
+          125,
+          0,
+          203,
+          361
+        ],
+        "n_flies": 7
+      },
+      "vial3": {
+        "bbox": [
+          250,
+          0,
+          328,
+          361
+        ],
+        "n_flies": 7
+      },
+      "vial4": {
+        "bbox": [
+          375,
+          0,
+          453,
+          361
+        ],
+        "n_flies": 7
+      },
+      "vial5": {
+        "bbox": [
+          500,
+          0,
+          578,
+          361
+        ],
+        "n_flies": 7
+      },
+      "vial6": {
+        "bbox": [
+          625,
+          0,
+          703,
+          361
+        ],
+        "n_flies": 7
+      }
+    },
+    "video_path": "B:\\Domain\\EPFL\\Coursework\\MA2\\Fly_Tracking\\superfly_code\\superfly\\data\\raw\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m\\35 DPE\\004\\2024-03-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_35d_004-converted.mp4"
   },
   "2024-03-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_35d_005-converted": {
     "preprocessing": {
@@ -2644,55 +2671,75 @@
         699,
         355
       ]
-    }
+    },
+    "video_path": "B:\\Domain\\EPFL\\Coursework\\MA2\\Fly_Tracking\\superfly_code\\superfly\\data\\raw\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m\\35 DPE\\005\\2024-03-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_35d_005-converted.mp4"
   },
   "2024-03-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_35d_006-converted": {
     "preprocessing": {
       "x": 212,
-      "y": 192,
-      "w": 707,
-      "h": 373,
+      "y": 196,
+      "w": 706,
+      "h": 369,
       "start": 0,
       "end": 552
     },
     "vial_rois": {
-      "vial1": [
-        3,
-        12,
-        82,
-        365
-      ],
-      "vial2": [
-        126,
-        11,
-        201,
-        365
-      ],
-      "vial3": [
-        252,
-        9,
-        329,
-        365
-      ],
-      "vial4": [
-        375,
-        10,
-        458,
-        365
-      ],
-      "vial5": [
-        504,
-        13,
-        582,
-        365
-      ],
-      "vial6": [
-        628,
-        13,
-        702,
-        365
-      ]
-    }
+      "vial1": {
+        "bbox": [
+          0,
+          0,
+          83,
+          368
+        ],
+        "n_flies": 7
+      },
+      "vial2": {
+        "bbox": [
+          125,
+          0,
+          208,
+          368
+        ],
+        "n_flies": 7
+      },
+      "vial3": {
+        "bbox": [
+          249,
+          0,
+          332,
+          368
+        ],
+        "n_flies": 7
+      },
+      "vial4": {
+        "bbox": [
+          374,
+          0,
+          457,
+          368
+        ],
+        "n_flies": 7
+      },
+      "vial5": {
+        "bbox": [
+          498,
+          0,
+          581,
+          368
+        ],
+        "n_flies": 7
+      },
+      "vial6": {
+        "bbox": [
+          623,
+          0,
+          706,
+          368
+        ],
+        "n_flies": 7
+      }
+    },
+    "video_path": "B:\\Domain\\EPFL\\Coursework\\MA2\\Fly_Tracking\\superfly_code\\superfly\\data\\raw\\2024-02-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m\\35 DPE\\006\\2024-03-05_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_35d_006-converted.mp4"
   },
   "2024-03-11_NEG-008_hTDP43_WT-A90V-G287S-G294A-A315T-M337V_m_41d_001-converted": {
     "preprocessing": {

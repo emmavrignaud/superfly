@@ -14,48 +14,38 @@ from pathlib import Path
 
 import pandas as pd
 
-# Canonical genotype -> colour overrides written by the setup window
-# (scripts/app.py). When a user picks a vial colour, it is recorded here against
-# that vial's genotype, and every genotype-coloured figure follows it. Last pick
-# wins. Absent file -> no overrides (default palette everywhere).
-_GENOTYPE_COLORS_PATH = Path(__file__).resolve().parent.parent / "genotype_colors.json"
+# Single source of truth for vial colours: a fixed ``vial_colors`` block at the
+# top of roi_library.json ({"vial1": "#rrggbb", ...}), edited via the setup GUI.
+# A vial always carries the same genotype (vial i -> genotype i), so this one
+# palette drives both the overlay (keyed by vial) and analysis figures (keyed by
+# genotype).
+DEFAULT_VIAL_COLORS: list[str] = [
+    "#E69F00",  # vial1 orange
+    "#56B4E9",  # vial2 sky blue
+    "#009E73",  # vial3 green
+    "#F0E442",  # vial4 yellow
+    "#0072B2",  # vial5 blue
+    "#CC79A7",  # vial6 reddish purple
+]
+_ROI_LIBRARY_PATH = Path(__file__).resolve().parent.parent / "roi_library.json"
 
 
-def load_genotype_color_overrides() -> dict[str, str]:
-    """Return the canonical {genotype: hex} overrides, or {} if none/unreadable."""
+def load_vial_palette() -> dict[str, str]:
+    """Return {vial_id: hex} from roi_library.json's top-level ``vial_colors``.
+
+    Missing or unreadable entries fall back to ``DEFAULT_VIAL_COLORS`` by index,
+    so vial1..vial6 always resolve to a colour.
+    """
+    palette = {f"vial{i + 1}": c for i, c in enumerate(DEFAULT_VIAL_COLORS)}
     try:
-        with open(_GENOTYPE_COLORS_PATH) as f:
-            raw = json.load(f)
+        with open(_ROI_LIBRARY_PATH) as f:
+            stored = json.load(f).get("vial_colors", {})
     except (FileNotFoundError, ValueError, OSError):
-        return {}
-    return {str(k): str(v) for k, v in raw.items() if isinstance(v, str)}
-
-
-def write_genotype_color_overrides(genotype_to_color: dict[str, str]) -> None:
-    """Merge {genotype: hex} into the canonical file (last pick wins).
-
-    Called whenever a user picks vial colours in any GUI (the setup window or the
-    vial-ROI dialog), so classification / embedding figures follow the newest
-    choice. Genotypes not passed keep their previous colour.
-    """
-    data = load_genotype_color_overrides()
-    for g, c in genotype_to_color.items():
-        if c:
-            data[str(g)] = str(c)
-    _GENOTYPE_COLORS_PATH.write_text(json.dumps(data, indent=2))
-
-
-def parse_vial_genotypes(video_path) -> list[str] | None:
-    """Genotype per vial (left->right) from the video filename, or None.
-
-    Mirrors ``classification.map_vial_to_genotype`` parsing without a run dir:
-    ``<date>_<..>_hTDP43_<GT1>-<GT2>-...>_<rest>``. None when the filename is not
-    this convention, so genotype colours are only written when the mapping is known.
-    """
-    parts = Path(video_path).name.split("_")
-    if len(parts) > 3 and parts[2] == "hTDP43":
-        return parts[3].split("-")
-    return None
+        stored = {}
+    for k, v in stored.items():
+        if isinstance(v, str):
+            palette[k] = v
+    return palette
 
 
 # Plotly default qualitative sequence (stable identifiers)
@@ -77,17 +67,16 @@ MUTANT_POOL_COLOR: str = "#9E9E9E"
 
 
 def genotype_color_discrete_map(ordered_genotypes: list[str]) -> dict[str, str]:
-    """Map each genotype string to a color by its index in ``ordered_genotypes``.
+    """Map genotypes to colours by vial position (genotype ``i`` -> vial ``i+1``).
 
-    A genotype present in the canonical overrides (genotype_colors.json, written
-    by the setup window) takes that colour; the rest fall back to the palette by
-    index. This is the single funnel both ``genotype_color_map_for_dataframe``
-    and the classification/embedding plots use, so a GUI colour pick flows to all
-    genotype-coloured figures from here.
+    ``ordered_genotypes`` is assumed to be in vial order (vial1 first). This is
+    the single funnel every genotype-coloured figure uses, so the overlay and the
+    analysis plots share the one ``vial_colors`` palette. Past the palette length
+    it cycles the defaults.
     """
-    overrides = load_genotype_color_overrides()
+    palette = load_vial_palette()
     return {
-        g: overrides.get(g, QUALITATIVE_PALETTE[i % len(QUALITATIVE_PALETTE)])
+        g: palette.get(f"vial{i + 1}", DEFAULT_VIAL_COLORS[i % len(DEFAULT_VIAL_COLORS)])
         for i, g in enumerate(ordered_genotypes)
     }
 
@@ -115,6 +104,18 @@ def genotype_color_map_for_dataframe(
             seen.add(g)
     for g in sorted(present - seen):
         ordered.append(g)
+
+    # When the frame carries each genotype's vial, colour it by that vial (robust
+    # to ordering). Otherwise fall back to positional vial order.
+    if "vial_id" in df.columns:
+        palette = load_vial_palette()
+        pairs = (df[[genotype_col, "vial_id"]].dropna().astype(str)
+                 .drop_duplicates(subset=[genotype_col]))
+        by_vial = {g: palette[v]
+                   for g, v in zip(pairs[genotype_col], pairs["vial_id"])
+                   if v in palette}
+        positional = genotype_color_discrete_map(ordered)
+        return {g: by_vial.get(g, positional[g]) for g in ordered}
     return genotype_color_discrete_map(ordered)
 
 

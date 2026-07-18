@@ -65,7 +65,7 @@ from src.preprocessing import (
     _QSS as _PP_QSS,
 )
 from src.roi import _MultiROICanvas, _VIAL_COLOURS, _VialControlRow, _QSS as _ROI_QSS
-from src.plot_colors import parse_vial_genotypes, write_genotype_color_overrides
+from src.plot_colors import load_vial_palette
 from utils import load_config
 
 CONFIG_PATH         = REPO_ROOT / "config.yaml"
@@ -335,6 +335,7 @@ class VialPage(QWidget):
         self._default_n_vials = max(1, int(default_n_vials))
         self._default_gap     = min(1.0, max(0.0, float(default_gap_ratio)))
         self._rows: List[_VialControlRow] = []
+        self._palette = load_vial_palette()   # fixed vial->hex from roi_library.json
         self._build(snap_threshold_pct, snap_enabled)
 
     def _build(self, snap_threshold_pct: float, snap_enabled: bool) -> None:
@@ -436,7 +437,7 @@ class VialPage(QWidget):
             row.deleteLater()
         while len(self._rows) < n:
             idx = len(self._rows)
-            color = _VIAL_COLOURS[idx % len(_VIAL_COLOURS)]
+            color = self._palette.get(f"vial{idx + 1}") or _VIAL_COLOURS[idx % len(_VIAL_COLOURS)]
             row = _VialControlRow(idx, self._default_count, color)
             row.changed.connect(self._push_to_canvas)
             pos = self._rows_layout.count() - 1   # before the trailing stretch
@@ -481,7 +482,8 @@ class VialPage(QWidget):
         out = []
         for i, bbox in enumerate(rois):
             count = self._rows[i].count() if i < len(self._rows) else self._default_count
-            color = self._rows[i].color if i < len(self._rows) else _VIAL_COLOURS[i % len(_VIAL_COLOURS)]
+            color = (self._rows[i].color if i < len(self._rows)
+                     else self._palette.get(f"vial{i + 1}") or _VIAL_COLOURS[i % len(_VIAL_COLOURS)])
             out.append((tuple(bbox), count, color))
         return out
 
@@ -675,27 +677,22 @@ class AppWindow(QMainWindow):
             # Sort left -> right by box centre-x, keeping counts + colours aligned.
             vials_sorted = sorted(vials, key=lambda t: (t[0][0] + t[0][2]) / 2.0)
             vial_rois = {}
+            palette_edits = {}
             for i, (bbox, count, color) in enumerate(vials_sorted, start=1):
                 vial_rois[f"vial{i}"] = {
                     "bbox": [int(c) for c in bbox],
                     "n_flies": int(count),
-                    "color": color,
                 }
+                palette_edits[f"vial{i}"] = color
             entry = library.setdefault(stem, {})
             entry["preprocessing"] = crop
             entry["video_path"] = str(self.video_path)
             entry["vial_rois"] = vial_rois
+            # Colours live in one fixed top-level block (vial i -> colour), the
+            # single source for the overlay and analysis. Editing a colour here
+            # updates that block for every video and both views.
+            library.setdefault("vial_colors", {}).update(palette_edits)
             _save_library(library)
-
-            # Canonical genotype colours (best-effort): map each vial's colour to
-            # its genotype from the filename so pooled analysis follows the GUI.
-            try:
-                genos = parse_vial_genotypes(self.video_path)
-                sorted_colors = [c for (_b, _n, c) in vials_sorted]
-                if genos:
-                    write_genotype_color_overrides(dict(zip(genos, sorted_colors)))
-            except Exception as exc:   # never block finishing on colour bookkeeping
-                print(f"[warn] genotype colour update skipped: {exc}")
 
         # Persist the user's actual toggle choices (honest config edit). The
         # handoff reuses the just-captured ROIs via a transient --reuse-roi flag,
