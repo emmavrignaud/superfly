@@ -8,4 +8,4 @@
 #            form "<workspace>/<version>". Leave blank to use config.yaml.
 
 API_KEY: ""
-MODEL_ID: ""
+MODEL_ID: "flies-123/5"
