@@ -4,8 +4,8 @@ What this module does
 ---------------------
 Runs RF-DETR on each video frame and returns bounding boxes. Two backends:
 
-  hosted — sends each frame to Roboflow's cloud API (default; no GPU needed).
-  local  — loads weights.pt on this machine (needs GPU for reasonable speed).
+  local  — default; loads weights.pt on this machine (GPU recommended for speed).
+  hosted — optional; sends each frame to Roboflow's cloud API (no GPU needed).
 
 Why it exists
 -------------
@@ -117,7 +117,7 @@ class LocalBackend(DetectionBackend):
 
 
 def create_detection_backend(
-    mode: str,
+    mode: str = "local",
     *,
     repo_root: Path,
     api_url: str,
@@ -130,7 +130,7 @@ def create_detection_backend(
     local_optimize_for_gpu: bool,
 ) -> DetectionBackend:
     """Build the backend named by inference.mode in config.yaml."""
-    mode = (mode or "hosted").strip().lower()
+    mode = (mode or "local").strip().lower()
     if mode == "hosted":
         if not api_key:
             raise ValueError(

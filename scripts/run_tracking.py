@@ -786,7 +786,7 @@ def main():
     config = load_config(CONFIG_PATH)
     args   = build_parser().parse_args()
 
-    if getattr(getattr(config, "inference", None), "mode", "hosted").strip().lower() == "local":
+    if not inference_requires_api_key(config):
         import torch  # load before cv2/Qt — avoids fbgemm.dll conflicts on Windows
 
     # Transient, in-memory override (never written back to config.yaml): when the

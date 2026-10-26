@@ -3,13 +3,21 @@
 #   Install: https://ffmpeg.org/download.html
 #            Windows: winget install Gyan.FFmpeg  (or choco install ffmpeg)
 
+# For a specific CPU/CUDA build, install PyTorch + torchvision BEFORE this file
+# using the official selector: https://pytorch.org/get-started/locally/
+# Then run: python -m pip install -r requirements.txt
+# Verify the model: python tests/check_local_model.py
+
 # Core computer vision / tracking
+torch>=2.4
+torchvision
+rfdetr[plus]
 opencv-python>=4.8
 scikit-image>=0.21      # watershed bbox splitting (src/watershed_split.py; enabled in config.yaml)
 
 numpy>=1.24
 supervision>=0.18
-inference-sdk>=0.13   # lightweight HTTP client; full `inference` server not needed
+inference-sdk>=0.13   # client for the optional hosted inference backend
 filterpy>=1.4         # Kalman filter primitives used by src/kalmanfilter.py + src/ocsort.py
 lap>=0.5.12             # fast Jonker-Volgenant matching in OC-SORT (scipy fallback if missing)
 

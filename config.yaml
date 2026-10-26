@@ -23,9 +23,9 @@ roboflow:
 
 inference:
   # Where RF-DETR runs during tracking (stage 3):
-  #   hosted — send each frame to Roboflow's cloud (default; needs creds_config.yaml + internet).
-  #   local  — weights.pt on this machine; see requirements-local_inference.txt
-  mode: hosted
+  #   local  — default; weights.pt on this machine; installed by requirements.txt / environment.yml.
+  #   hosted — optional; send each frame to Roboflow's cloud (needs creds_config.yaml + internet).
+  mode: local
   local:
     weights_path: RF-DETR_model/weights.pt   # path relative to repo root, or absolute
     resolution: 640                          # must match the exported checkpoint

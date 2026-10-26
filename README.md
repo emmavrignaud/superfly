@@ -1,258 +1,435 @@
-# Drosophila Climbing Behaviour: Fly Tracking and Genotype Classification
+# Drosophila Climbing Behavior: Fly Tracking and Genotype Classification
 
-End-to-end pipeline for a *Drosophila* climbing assay. It detects and tracks individual flies across video frames to produce per-fly trajectories, the basis for quantifying climbing behaviour across genotypes in a TDP-43 model of neurodegeneration.
+This project measures climbing behavior in *Drosophila* flies.
+It supports research on genotype differences in a TDP-43 model of neurodegeneration.
 
-![fly-insect-hands](https://github.com/user-attachments/assets/7118b6f8-30ee-4a85-b593-62c744745e03)
+RF-DETR detects individual flies in video frames.
+OC-SORT connects those detections across frames to form a trajectory for each fly.
+The program uses these trajectories to calculate movement measurements and classify genotypes.
 
+![Drosophila climbing assay](https://github.com/user-attachments/assets/7118b6f8-30ee-4a85-b593-62c744745e03)
 
-## Pipeline at a glance
+## Analysis stages
+
+A pipeline is a sequence of processing stages.
+This pipeline prepares the video, detects flies, tracks their identities, and calculates movement measurements.
+Genotype classification is an optional final stage.
 
 ```mermaid
 flowchart LR
-    A[Raw video] --> B[Preprocessing<br/>background subtraction]
-    B --> C[Detection<br/>RF-DETR]
-    C --> D[Tracking<br/>OC-SORT]
-    D --> E[Behavioural features]
+    A[Input video] --> B[Video preparation<br/>Background subtraction]
+    B --> C[Fly detection<br/>RF-DETR]
+    C --> D[Identity tracking<br/>OC-SORT]
+    D --> E[Movement measurements]
+    E --> F[Genotype classification<br/>Optional]
 ```
 
+Movement measurements include velocity, area covered, and path tortuosity.
+Path tortuosity describes how much a trajectory departs from a straight line.
 
-## 1. Install
+## Technical terms
+
+| Term | Meaning |
+|---|---|
+| Inference | The use of a trained model to produce detections. |
+| Model weights | Values that a model learns during training. |
+| Checkpoint | A file that contains model weights and model settings. |
+| Region of interest (ROI) | An image area that you select for analysis. |
+| Track overlay | An image or video with fly positions and identity labels over the original images. |
+| Central processing unit (CPU) | The main processor in a computer. |
+| Graphics processing unit (GPU) | A processor that can reduce the time for model calculations. |
+| Application programming interface (API) | A software interface through which this program can request detections from an online service. |
+| FP16 | A number format that uses 16-bit floating-point values. |
+
+## 1. Install the software
+
+Use Python 3.11 for this project.
+Run the commands in a terminal.
+After the download, run all other commands from the `superfly` project directory.
+
+If the project is already on your computer, skip these download commands.
 
 ```bash
 git clone https://github.com/emmavrignaud/superfly.git
 cd superfly
-
-# Conda (recommended):
-conda env create -f environment.yml
-conda activate fly-tracking
-
-# Or pip (requires ffmpeg on PATH; see requirements.txt header):
-# pip install -r requirements.txt
 ```
 
-`environment.yml` also installs ffmpeg, scikit-image (watershed splitting),
-trackeval (editable install from `external/TrackEval`), pytest, and jupyterlab.
+Choose one installation method below.
+A Python environment contains the Python version and packages for this project.
 
+### A. Install with Conda
 
-## 2. Choose your detection backend: hosted or local
+Conda creates a separate environment for the project.
+The `environment.yml` file defines its packages.
 
-RF-DETR detection (the tracking stage) runs one of two ways, set by
-`inference.mode` in `config.yaml`. Everything else in the pipeline is identical
-either way.
+1. Create the environment.
 
-### A. Hosted (default): `inference.mode: hosted`
+   ```bash
+   conda env create -f environment.yml
+   ```
 
-Detection runs on Roboflow's cloud API. No GPU and no model download, but it
-needs internet and a Roboflow API key.
+2. Activate the environment.
 
-```bash
-cp creds_config.example.yaml creds_config.yaml   # then paste your key into creds_config.yaml
-```
+   ```bash
+   conda activate fly-tracking
+   ```
 
-`creds_config.yaml` is gitignored; `creds_config.example.yaml` is the template.
+### B. Install with pip
 
-### B. Local: `inference.mode: local`
+The `requirements.txt` file lists the packages for pip.
+FFmpeg reads and writes video files.
+The pip installation does not install the FFmpeg program.
 
-Detection runs on your own machine from `RF-DETR_model/weights.pt`. No API key
-and no internet, and faster in bulk.
+1. Activate a Python 3.11 environment.
+2. Install [FFmpeg](https://ffmpeg.org/download.html).
+3. Make FFmpeg available on the system `PATH`.
+4. If you need a specific PyTorch build, install PyTorch and torchvision first.
+5. Install the project packages.
 
-Follow the instructions at the top of `requirements-local_inference.txt`: it
-walks through the exact PyTorch install for your platform, then the extras:
+   ```bash
+   python -m pip install -r requirements.txt
+   ```
 
-```bash
-pip install -r requirements-local_inference.txt
-python tests/check_local_model.py   # verify the install
-```
+`PATH` tells the terminal where to find programs.
+Use the [official PyTorch installer](https://pytorch.org/get-started/locally/) to select a build for your operating system and hardware.
 
-Then set `inference.mode: local` in `config.yaml` (and
-`inference.local.optimize_for_gpu: true` on an NVIDIA GPU).
+Both installation methods include local RF-DETR (`rfdetr[plus]`), PyTorch, and torchvision.
+The Conda environment also includes FFmpeg, scikit-image, TrackEval, pytest, and JupyterLab.
+TrackEval uses the source code in `external/TrackEval`.
+Changes to that source code affect the installed TrackEval package.
 
-## 3. Configure your run (`config.yaml`)
+### Select CPU or GPU support
 
-All the settings for a run live in `config.yaml`: which video to track, the
-tracker settings, and which stages run. Edit `config.yaml`, then launch it
-(step 4). The notebook and scripts only read these settings; you never edit them
-to change a run.
+The local model can use a CPU or a compatible GPU.
+A GPU can reduce processing time.
+For an NVIDIA GPU, select a PyTorch build with CUDA support.
+CUDA provides NVIDIA GPU support in PyTorch.
 
-Each section and what it controls:
+For the Conda method, install that build after you activate the environment.
+For the pip method, install that build before you install `requirements.txt`.
+On supported macOS devices, PyTorch can use Metal Performance Shaders (MPS).
 
-| Section | What it controls |
+## 2. Set up inference
+
+The `inference.mode` setting in `config.yaml` selects local or hosted inference.
+Local inference is the default.
+Both modes supply detections to the same tracking stages.
+
+### A. Local inference
+
+Local inference runs the model on your computer.
+It does not need a Roboflow API key.
+The main installation includes its Python packages.
+
+1. Obtain the trained checkpoint for the fly detector.
+2. Set `inference.local.weights_path` to the checkpoint location.
+3. Set `inference.local.resolution` to match the checkpoint.
+4. Set `inference.local.num_classes` to match the checkpoint.
+5. Set `inference.mode` to `local`.
+6. If you use an NVIDIA CUDA GPU, set `inference.local.optimize_for_gpu` to `true` for FP16 optimization.
+7. If you use a CPU or macOS/MPS, keep `inference.local.optimize_for_gpu` set to `false`.
+8. Check the local model.
+
+   ```bash
+   python tests/check_local_model.py
+   ```
+
+The default checkpoint location is `RF-DETR_model/weights.pt`.
+The repository excludes this directory, so you must supply the checkpoint separately.
+The check script loads the model and makes one prediction on an artificial image.
+
+Make all model files and supporting assets available locally before an offline run.
+Local inference can then run without internet access.
+
+### B. Hosted inference
+
+Hosted inference sends video frames to Roboflow's online service.
+The service returns detections to your computer.
+This mode needs internet access and a Roboflow API key.
+It does not need a local GPU or checkpoint.
+The main installation includes the hosted client package.
+
+1. Copy the credentials template.
+
+   ```bash
+   cp creds_config.example.yaml creds_config.yaml
+   ```
+
+2. Open `creds_config.yaml`.
+3. Enter your Roboflow API key.
+4. Check the model identifier and service address in the `roboflow` section of `config.yaml`.
+5. Set `inference.mode` to `hosted`.
+
+The repository excludes `creds_config.yaml`.
+The `creds_config.example.yaml` file is the template for that file.
+
+## 3. Set up an analysis run
+
+The `config.yaml` file contains the settings for an analysis run.
+These settings select the input video, analysis stages, tracking behavior, and output files.
+
+1. Open `config.yaml`.
+2. Set the input video path.
+3. Check the inference and calibration settings.
+4. Set the other options for your experiment.
+5. Start the program with one method from section 4.
+
+You do not need to edit the scripts or notebook code to change these settings.
+The setup window can update settings from your selections.
+
+| Section | Purpose |
 |---|---|
-| `video` | `raw_path` (the clip to track) + `fallback_fps` when metadata is missing |
-| `roboflow` | `model_id` and `inference_api_url` for hosted RF-DETR detection |
-| `inference` | `mode`: `hosted` (cloud API) or `local` (weights on your machine) |
-| `calibration` | `px_per_cm` + output units (cm/px, s/frame) for behavioural features |
-| `preprocessing` | `enabled` + background subtraction (percentile, gain, white level, codec) |
-| `roi` | Whether to reuse saved vial/crop ROIs or always reopen the GUI |
-| `tracker` | RF-DETR confidence, every OC-SORT knob (jump round, behavioral weights), `cached_detections`, and `ghost_detection` |
-| `watershed` | Splitting detection boxes that contain two touching flies |
-| `pipeline` | `expected_per_vial`: flies per vial, for diagnostics and ghost gating |
-| `visualization` | Track Overlays (`enabled`, default false) + `overlay_source`, fps, style |
-| `features` | Optional kinematic feature families |
-| `latent_space` | PCA / t-SNE / UMAP embedding settings |
-| `classification` | Active classifier (`method`) + per-backend hyperparameters |
+| `video` | Select the input video with `raw_path`. Use `fallback_fps` if the file has no frame rate. |
+| `roboflow` | `model_id` selects the hosted model. `inference_api_url` gives the service address. |
+| `inference` | Select `local` or `hosted` with `mode`. Set the local checkpoint, resolution, class count, and optimization option. |
+| `calibration` | Set pixels per centimeter with `px_per_cm`. Select centimeters or pixels, and seconds or frames, for the measurements. |
+| `preprocessing` | Control background subtraction, brightness, video format, and the use of this stage. |
+| `roi` | Select saved ROIs or open the ROI window. Set the vial count and spacing. |
+| `tracker` | Set RF-DETR confidence and OC-SORT parameters. Control saved detections with `cached_detections` and recovery options with `ghost_detection`. |
+| `watershed` | Separate detection boxes that contain two flies in contact. |
+| `pipeline` | Set `expected_per_vial` to the expected number of flies in each vial. Control repeat processing with `skip_tracked`. |
+| `visualization` | Control track overlays with `enabled`. Select their source images with `overlay_source`. Set the frame rate and display style. |
+| `features` | Select movement measurements, such as velocity, area covered, and path tortuosity. |
+| `latent_space` | Select PCA, t-SNE, or UMAP settings to compare patterns in movement measurements. |
+| `classification` | Select the classification method with `method`. Set its model parameters. |
 
-## 4. Run the pipeline
+Frame rate is the number of video frames per second.
 
-Every entry point reads `config.yaml`. Tracking output goes to
-`data/outputs/run_<N>_<short_name>/`. CLI flags affect the current run only; they
-do not edit config.
+PCA means principal component analysis.
+t-SNE means t-distributed stochastic neighbor embedding.
+UMAP means uniform manifold approximation and projection.
+These methods represent multiple measurements in fewer dimensions for analysis or display.
 
-There are four ways to run tracking (A to D). They share the same engine, the same
-`config.yaml`, and the same outputs, so pick by how much GUI you want.
+## 4. Run the analysis
 
-### A. `scripts/app.py` (setup window)
+Choose one of the four methods below.
+All four methods use the same tracking code and configuration file.
+The program saves results in `data/outputs/run_<N>_<short_name>/`.
+The `<N>` value is the run number.
+The `<short_name>` value identifies the video.
 
-A single setup window: pick a video, draw the crop and frame trim, then draw each
-vial and set its fly count and colour. Two checkboxes toggle overlays and reusing
-a saved ROI.
+A command-line option changes the current run.
+It does not change `config.yaml`.
+Replace example video paths with paths to your own files.
+
+### A. Use the setup window
+
+The setup window lets you select a video, crop area, and frame range.
+You can draw vial ROIs and set the fly count and color for each vial.
+The window also has options for track overlays and saved ROIs.
+
+Open the setup window.
 
 ```bash
-python scripts/app.py                            # pick the video inside the window
-python scripts/app.py --video data/raw/clip.mp4  # preselect a video, skip the first Browse
+python scripts/app.py
 ```
 
-### B. `notebooks/01_tracking_pipeline.ipynb`
+To select a video before the window opens, use this command.
 
-You can use this notebook if you prefer seeing the pipeline stages one by one. 
+```bash
+python scripts/app.py --video data/raw/clip.mp4
+```
+
+### B. Use the tracking notebook
+
+The notebook shows the analysis stages separately.
+JupyterLab opens the notebook in your browser.
 
 ```bash
 jupyter lab notebooks/01_tracking_pipeline.ipynb
 ```
 
-### C. `scripts/run_tracking.py`
+### C. Process one video from the command line
 
-One video, full pipeline, driven from the command line.
-
-```bash
-python scripts/run_tracking.py                            # track config.video.raw_path
-python scripts/run_tracking.py --video data/raw/clip.mp4  # track a different file instead
-python scripts/run_tracking.py --reuse-roi                # reuse saved crop + ROIs, no drawing GUI
-python scripts/run_tracking.py --overlay                  # also write Track Overlays this run
-python scripts/run_tracking.py --no-overlay               # skip overlays even if config enables them
-```
-
-When you pass neither `--overlay` nor `--no-overlay`, overlays follow
-`visualization.enabled` in config. `--reuse-roi` is handy for scripted runs off
-an already saved ROI.
-
-### D. `scripts/run_all.py`
-
-Batch tracking over many videos. Stage 1 runs by default; Stage 2 (behavioural
-significance analysis on tracked runs) is opt-in via `--analysis`. Every run is
-fresh by default, so each video is re-tracked. Set `pipeline.skip_tracked: true`
-in `config.yaml` to skip videos that already have `ordered_tracks.csv`, which is
-useful for resuming an interrupted batch.
+Use the video path from `config.yaml`.
 
 ```bash
-python scripts/run_all.py --data-root data/raw              # track every video in the folder
-python scripts/run_all.py --data-root data/raw --analysis   # track, then run significance analysis
-python scripts/run_all.py --data-root data/raw --draw-first # draw all crop + ROIs upfront, then track unattended
-python scripts/run_all.py --skip-tracking --analysis      # analyse existing runs only (no tracking)
+python scripts/run_tracking.py
 ```
 
-
-### Classify genotypes (optional): `scripts/run_classification.py`
-
-Classify genotypes from a finished run folder (`ordered_tracks.csv` and
-`run_params.json` required). Classifier settings come from config.
+To select another video, use this command.
 
 ```bash
-python scripts/run_classification.py --run-dir data/outputs/run_5_13DPE_n001  # required: the run folder
-python scripts/run_classification.py --run-dir <run> --report-site            # also write an HTML report
+python scripts/run_tracking.py --video data/raw/clip.mp4
 ```
 
+You can select these additional options.
 
-## Outputs
-
-Each tracking run produces:
-
-```
-data/outputs/run_<N>_<short_name>/
-├── <video_name>.mp4                          # hardlink/copy of the raw input
-├── crop_roi.json                             # crop window + temporal trim (if preprocessed)
-├── vial_rois.json                            # per-vial bounding boxes
-├── detections_raw.csv                        # raw RF-DETR detections (detection cache)
-├── ocsort_tracks.csv                         # tracker output (wide format)
-├── ocsort_tracks_long.csv                    # long format, one row per (frame, id)
-├── ordered_tracks.csv                        # vial-assigned, left-to-right ordered_id
-├── tracker_log.json                          # detection, suppression + ghost/exit log
-├── run_params.json                           # full param snapshot per stage
-├── metrics_report.{md,html}                  # diagnostics report
-├── <video_stem>_detections_RF-DETR.mp4       # Track Overlays (when enabled or --overlay)
-├── overlay_raw_ocsort.mp4
-└── overlay_ordered.mp4
+```bash
+python scripts/run_tracking.py --reuse-roi
+python scripts/run_tracking.py --overlay
+python scripts/run_tracking.py --no-overlay
 ```
 
-`data/outputs/` and `data/annotations/` are gitignored. Only `.gitkeep` stubs are tracked.
+| Option | Effect |
+|---|---|
+| `--reuse-roi` | Use saved crop and vial ROIs without the ROI window. |
+| `--overlay` | Write track overlay videos for this run. |
+| `--no-overlay` | Do not write track overlay videos for this run. |
 
+If you omit both overlay options, `visualization.enabled` controls the output.
+If the video has saved ROIs, use `--reuse-roi` to select them.
 
-## Repository layout
+### D. Process multiple videos
 
-```
-superfly/
-├── config.yaml                # the one file you edit to define a run
-├── creds_config.example.yaml  # Roboflow key template; copy to creds_config.yaml
-├── environment.yml            # conda env spec
-├── requirements.txt           # pip mirror
-├── requirements-local_inference.txt  # optional: local RF-DETR (see step 2)
-├── utils.py                   # shared helpers (config loading, run outputs)
-├── roi_library.json           # cached crop + vial ROIs keyed by video stem
-├── RF-DETR_model/             # trained fly-detection model
-│   └── weights.pt
-├── external/                  # vendored TrackEval for HOTA / MOT scoring
-├── data/                      # raw/ input videos + outputs/ tracked runs
-├── notebooks/
-│   ├── 01_tracking_pipeline.ipynb
-│   └── 02_classification_analysis.ipynb
-├── scripts/                   # entry points, start here
-│   ├── app.py                 # GUI setup for a tracking run
-│   ├── run_tracking.py        # one video, full pipeline
-│   ├── run_all.py             # batch many videos
-│   ├── run_classification.py  # genotype classification on a finished run
-│   └── populate_roi_library.py  # batch ROI drawing for a whole experiment folder
-├── src/
-│   │   # tracking pipeline
-│   ├── inference_backends.py  # hosted vs local RF-DETR
-│   ├── preprocessing.py       # background subtraction + crop/trim GUI
-│   ├── roi.py                 # vial ROI drawing + assign_vials_and_ordered_ids
-│   ├── tracking.py            # RF-DETR + OC-SORT orchestration
-│   ├── watershed_split.py     # split boxes holding two touching flies
-│   ├── wide_long.py           # wide -> long format conversion
-│   ├── visualization.py       # overlay video rendering
-│   ├── metrics.py             # run_diagnostics, per-vial counts, HOTA
-│   │   # vendored tracker (OC-SORT, lightly modified)
-│   ├── ocsort.py              # OC-SORT implementation
-│   ├── kalmanfilter.py        # Kalman filter used per track
-│   ├── association.py         # IoU variants + Hungarian matching
-│   │   # downstream behavioural analysis
-│   ├── features.py            # kinematics, area, tortuosity
-│   ├── statistics.py          # Kruskal-Wallis + Cliff's delta significance
-│   ├── classification.py      # LDA / Logistic / SVC + plots
-│   ├── latent_space.py        # PCA / t-SNE / UMAP embeddings
-│   ├── forecasting.py         # next-step movement MLP (genotype-conditioned)
-│   ├── plot_colors.py         # stable per-genotype Plotly colours
-│   └── ui_context.py          # PyQt GUI helpers
-├── parameter_tuning/          # ground-truth, grid search + HOTA scoring
-├── labeler/                   # standalone detection-labelling GUI
-├── tests/                     # pytest + optional runnable checks
-│   ├── check_local_model.py   # verify local RF-DETR install
-│   └── benchmark_local_inference.py  # local vs hosted speed (optional)
+The `scripts/run_all.py` program processes videos from a directory.
+Stage 1 performs tracking.
+Stage 2 performs statistical analysis of the tracking results.
+Stage 2 runs only when you add `--analysis`.
+
+Process every video in a directory.
+
+```bash
+python scripts/run_all.py --data-root data/raw
 ```
 
+To add statistical analysis, use this command.
 
-## Verifying the setup
+```bash
+python scripts/run_all.py --data-root data/raw --analysis
+```
+
+To draw all crop and vial ROIs before processing, use this command.
+
+```bash
+python scripts/run_all.py --data-root data/raw --draw-first
+```
+
+To analyze existing results without more tracking, use this command.
+
+```bash
+python scripts/run_all.py --skip-tracking --analysis
+```
+
+By default, the program repeats tracking for each video.
+To skip existing results, set `pipeline.skip_tracked` to `true` in `config.yaml`.
+The program then skips videos with an existing `ordered_tracks.csv` file.
+
+## 5. Classify genotypes
+
+Genotype classification is optional.
+It uses movement measurements from a completed tracking run.
+The classification settings are in `config.yaml`.
+The program supports linear discriminant analysis (LDA), logistic regression, and a support vector classifier (SVC).
+
+1. Select a run directory that contains `ordered_tracks.csv` and `run_params.json`.
+2. Set the classification method and parameters in `config.yaml`.
+3. Run the classification program.
+
+   ```bash
+   python scripts/run_classification.py --run-dir data/outputs/run_5_13DPE_n001
+   ```
+
+Replace the example directory with your run directory.
+To also create an HTML report, add `--report-site`.
+HTML means Hypertext Markup Language.
+Web browsers display HTML reports.
+
+```bash
+python scripts/run_classification.py --run-dir <run> --report-site
+```
+
+Replace `<run>` with your run directory before you run this command.
+
+## Output files
+
+Each run has a directory in `data/outputs/`.
+The selected stages and options determine which files the program creates.
+
+| File | Contents |
+|---|---|
+| `<video_name>.mp4` | A copy or file link to the input video. |
+| `crop_roi.json` | The crop area and frame range from video preparation. |
+| `vial_rois.json` | The position and size of each vial ROI. |
+| `detections_raw.csv` | RF-DETR detections before tracking. The program can reuse these detections. |
+| `ocsort_tracks.csv` | Tracking results with one row for each frame. |
+| `ocsort_tracks_long.csv` | Tracking results with one row for each frame and fly identity. |
+| `ordered_tracks.csv` | Tracks with vial assignments and an `ordered_id` from left to right. |
+| `tracker_log.json` | A record of tracking decisions, missed detections, and track suppression. |
+| `run_params.json` | Settings and metadata for each stage. |
+| `metrics_report.md` and `metrics_report.html` | Reports that help you assess tracking results. |
+| `<video_stem>_detections_RF-DETR.mp4` | A video with detection and track overlays, when enabled. |
+| `overlay_raw_ocsort.mp4` | A video with the original OC-SORT track labels. |
+| `overlay_ordered.mp4` | A video with the ordered track labels. |
+
+`<video_stem>` means the video filename without its extension.
+CSV means comma-separated values.
+CSV files contain data tables.
+JSON means JavaScript Object Notation.
+JSON files contain settings or structured records.
+
+The repository excludes generated files in `data/outputs/` and `data/annotations/`.
+The `.gitkeep` files preserve the directory locations in the repository.
+
+## Project files
+
+| Path | Purpose |
+|---|---|
+| `config.yaml` | Settings for an analysis run. |
+| `creds_config.example.yaml` | A credentials template for optional hosted inference. |
+| `environment.yml` | The Conda environment definition. |
+| `requirements.txt` | The pip package list for this project and local RF-DETR. |
+| `utils.py` | Shared functions for configuration, metadata, and output files. |
+| `roi_library.json` | Saved crop and vial ROIs for each video name. |
+| `RF-DETR_model/weights.pt` | The trained checkpoint for local inference. |
+| `external/TrackEval/` | TrackEval source code for tracking metrics. |
+| `data/` | Input videos and analysis results. |
+| `notebooks/01_tracking_pipeline.ipynb` | Tracking analysis in a Jupyter notebook. |
+| `notebooks/02_classification_analysis.ipynb` | Classification analysis in a Jupyter notebook. |
+| `scripts/app.py` | The setup window for an analysis run. |
+| `scripts/run_tracking.py` | Tracking for one video. |
+| `scripts/run_all.py` | Tracking and optional statistical analysis for multiple videos. |
+| `scripts/run_classification.py` | Genotype classification from a completed run. |
+| `scripts/populate_roi_library.py` | ROI selection for videos in an experiment directory. |
+| `parameter_tuning/` | Parameter comparisons against labeled reference data and HOTA scores. |
+| `labeler/` | A separate window for detection labels. |
+| `tests/` | Automated checks and the local model check. |
+
+### Analysis source files
+
+| File in `src/` | Purpose |
+|---|---|
+| `inference_backends.py` | Local and hosted RF-DETR inference. |
+| `preprocessing.py` | Background subtraction, image crop, and frame selection. |
+| `roi.py` | Vial ROI selection and fly identity order within each vial. |
+| `tracking.py` | The connection between RF-DETR detections and OC-SORT tracking. |
+| `watershed_split.py` | Separation of detection boxes that contain flies in contact. |
+| `wide_long.py` | Conversion from one row per frame to one row per frame and fly identity. |
+| `visualization.py` | Videos with detection and track overlays. |
+| `metrics.py` | Tracking reports, counts per vial, and HOTA scores. |
+| `ocsort.py` | The OC-SORT tracker. |
+| `kalmanfilter.py` | Position and motion estimates for each track. |
+| `association.py` | Detection-to-track links from IoU measures and Hungarian matching. |
+| `features.py` | Velocity, area covered, path tortuosity, and other movement measurements. |
+| `statistics.py` | Group comparisons with Kruskal-Wallis tests and Cliff's delta. |
+| `classification.py` | Genotype classification with LDA, logistic regression, or SVC. |
+| `latent_space.py` | PCA, t-SNE, and UMAP representations of movement measurements. |
+| `forecasting.py` | Movement prediction with a multilayer perceptron (MLP) and genotype information. |
+| `plot_colors.py` | Consistent Plotly colors for genotype groups. |
+| `ui_context.py` | Shared functions for PyQt windows. |
+
+HOTA means Higher Order Tracking Accuracy.
+It combines detection accuracy and identity association accuracy.
+IoU means intersection over union.
+It measures the overlap between two detection boxes.
+Hungarian matching selects detection-to-track pairs from a cost matrix.
+An MLP is a type of neural network.
+
+## Check the installation
+
+Run the automated tests.
 
 ```bash
 pytest tests/ -v
 ```
 
-The tests need no Roboflow key, no videos, and no GPU, so a green run confirms
-the environment is installed correctly.
+These tests do not need a Roboflow key, video files, or a GPU.
+Check that all tests pass.
+Use the local model check in section 2 to check model loading and prediction.
 
+## Acknowledgments
 
-## Acknowledgements
+The [Laboratory of Neural Genetics and Disease (McCabe Lab)](https://www.epfl.ch/labs/mccabelab/) at EPFL supported this project.
 
-- This project was carried out at and supported by the [Laboratory of Neural Genetics and Disease (McCabe Lab)](https://www.epfl.ch/labs/mccabelab/), EPFL.
 - RF-DETR: [Roboflow](https://roboflow.com)
 - OC-SORT: [boxmot](https://github.com/mikel-brostrom/boxmot)

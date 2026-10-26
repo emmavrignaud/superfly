@@ -271,8 +271,8 @@ def save_run_params(out_dir: str, stage: str, params: dict) -> None:
 
 def inference_requires_api_key(config) -> bool:
     """True when detection uses Roboflow hosted API (needs creds_config.yaml)."""
-    mode = getattr(getattr(config, "inference", None), "mode", "hosted")
-    return str(mode).strip().lower() != "local"
+    mode = getattr(getattr(config, "inference", None), "mode", "local")
+    return str(mode or "local").strip().lower() != "local"
 
 
 def inference_tracking_kwargs(config, repo_root: str | Path) -> dict:
@@ -280,7 +280,7 @@ def inference_tracking_kwargs(config, repo_root: str | Path) -> dict:
     inf = config.inference
     loc = inf.local
     return {
-        "inference_mode": inf.mode,
+        "inference_mode": getattr(inf, "mode", "local") or "local",
         "local_weights_path": loc.weights_path,
         "local_resolution": int(loc.resolution),
         "local_num_classes": int(loc.num_classes),

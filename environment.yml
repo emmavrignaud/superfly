@@ -25,9 +25,12 @@ dependencies:
   - jupyterlab>=4.0         # notebooks/ (README: jupyter lab …)
   - lap>=0.5.12             # fast Jonker-Volgenant matching in OC-SORT (scipy fallback if missing)
   - pip:
+    - torch>=2.4
+    - torchvision
+    - rfdetr[plus]
     - opencv-python>=4.8
     - supervision>=0.18
-    - inference-sdk>=0.13   # lightweight HTTP client; full `inference` server not needed
+    - inference-sdk>=0.13   # client for the optional hosted inference backend
     - plotly>=5.18
     - PyQt5>=5.15
     - PySide6>=6.6
